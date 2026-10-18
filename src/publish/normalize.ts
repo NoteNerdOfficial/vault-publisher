@@ -97,3 +97,35 @@ export function countInvalidNesting(html: string): number {
   return Array.from(doc.body.querySelectorAll(".internal-embed, .markdown-embed"))
     .filter((el) => !el.children.length && !el.textContent?.trim()).length;
 }
+
+/**
+ * Counts blocks that serialized while still showing a "working on it"
+ * placeholder.
+ *
+ * This is the standing assertion for a failure that reached a live site:
+ * three Dataview queries published as `Loading...` because every in-DOM
+ * check considered a populated block finished. Checking the serialized
+ * output as well means the next version of that mistake cannot ship quietly,
+ * whatever the live DOM claimed at the time.
+ */
+export function countLoadingPlaceholders(html: string): number {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+
+  const selector =
+    ".block-language-dataview, .block-language-dataviewjs, " +
+    ".block-language-datacore, .block-language-datacorejs, " +
+    ".bases-view, .osp-base, pre.dataview";
+
+  const stillLoading = (el: Element) =>
+    /^\s*(loading|rendering|evaluating)\b[.\u2026\s]*$/i.test(
+      (el.textContent ?? "").trim(),
+    );
+
+  return Array.from(doc.body.querySelectorAll(selector))
+    .filter(stillLoading)
+    // One placeholder, not two: Dataview's `<pre class="dataview">` sits
+    // inside `.block-language-dataview`, so both match the same failure.
+    // Counting only the outermost keeps the number equal to the number of
+    // blocks a reader would actually see stuck.
+    .filter((el) => !el.parentElement?.closest(selector)).length;
+}

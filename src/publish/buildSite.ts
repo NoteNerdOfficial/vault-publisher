@@ -18,7 +18,7 @@ import {
   isControlNote,
   summarizeDrift,
 } from "./drift";
-import { countInvalidNesting } from "./normalize";
+import { countInvalidNesting, countLoadingPlaceholders } from "./normalize";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
 
@@ -119,6 +119,11 @@ export interface BuildResult {
   totalMs: number;
   /** Serialized output a browser would rearrange. Must be zero. */
   invalidNesting: number;
+  /**
+   * Blocks that serialized still showing a plugin's loading placeholder.
+   * Must be zero: three of these reached a live site as "Loading...".
+   */
+  loadingPlaceholders: number;
   /** Pages that serialized with unfilled content. Must be zero. */
   incompletePages: number;
   /**
@@ -279,9 +284,15 @@ export async function buildSite(
   // Obsidian attachment folders are commonly named `_attachments`.
   files.push({ path: ".nojekyll", content: "" });
 
-  const invalidNesting = files
-    .filter((f) => f.path.endsWith(".html"))
-    .reduce((sum, f) => sum + countInvalidNesting(f.content as string), 0);
+  const htmlFiles = files.filter((f) => f.path.endsWith(".html"));
+  const invalidNesting = htmlFiles.reduce(
+    (sum, f) => sum + countInvalidNesting(f.content as string),
+    0,
+  );
+  const loadingPlaceholders = htmlFiles.reduce(
+    (sum, f) => sum + countLoadingPlaceholders(f.content as string),
+    0,
+  );
 
   return {
     files,
@@ -289,6 +300,7 @@ export async function buildSite(
     skipped,
     totalMs: performance.now() - started,
     invalidNesting,
+    loadingPlaceholders,
     incompletePages: pages.filter((p) => p.incomplete).length,
     basesTruncated: pages.flatMap((p) =>
       p.bases.truncated.map((t) => `${p.sourcePath} ${t}`),

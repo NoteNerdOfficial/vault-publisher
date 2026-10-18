@@ -393,10 +393,11 @@ export default class SitePublisherSpike extends Plugin {
       if (
         result.invalidNesting > 0 ||
         result.incompletePages > 0 ||
+        result.loadingPlaceholders > 0 ||
         result.basesTruncated.length > 0
       ) {
         say(
-          `ABORTED: ${result.invalidNesting} blocks would break on reparse, ${result.incompletePages} pages serialized incomplete, ${result.basesTruncated.length} bases views truncated`,
+          `ABORTED: ${result.invalidNesting} blocks would break on reparse, ${result.incompletePages} pages serialized incomplete, ${result.loadingPlaceholders} blocks still loading, ${result.basesTruncated.length} bases views truncated`,
         );
         for (const view of result.basesTruncated) say(`  truncated: ${view}`);
         await this.writePublishLog(log);
@@ -449,6 +450,7 @@ export default class SitePublisherSpike extends Plugin {
     lines.push(`Total: ${Math.round(result.totalMs)}ms`);
     lines.push(`Blocks that would break on reparse: ${result.invalidNesting}`);
     lines.push(`Pages serialized incomplete: ${result.incompletePages}`);
+    lines.push(`Blocks still showing a loading placeholder: ${result.loadingPlaceholders}`);
     lines.push("");
 
     lines.push(

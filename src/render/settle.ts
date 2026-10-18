@@ -43,12 +43,44 @@ export const DEFAULT_SETTLE: SettleOptions = {
  * Obsidian's embeds announce the same thing through a missing `is-loaded`,
  * and a Mermaid wrapper with no <svg> has not been handed to Mermaid yet.
  */
+/**
+ * Text a plugin shows while it is still working.
+ *
+ * Dataview renders `<pre class="dataview dataview-error">Loading...</pre>`
+ * before a query resolves, and that placeholder published to a live site as
+ * though it were the answer. Every check passed it: the block had a child
+ * element, it had non-empty text, and it contained no empty spans, so the
+ * completion test called it finished and serialized it immediately.
+ *
+ * The content-complete rewrite made this *more* likely, not less. The old
+ * quiet-period wait happened to give Dataview time to replace the
+ * placeholder; exiting the moment the content looks terminal removed that
+ * accident. A faster wait is only correct if "terminal" is right, and
+ * "has some text in it" was not.
+ *
+ * The signal was in the build report the whole time. A note with one
+ * deliberately broken query reported three `dataview-error` blocks, because
+ * Dataview uses that same class for the loading state, and three was read as
+ * expected rather than as two blocks that never finished.
+ */
+const LOADING_TEXT = /^\s*(loading|rendering|evaluating)\b[.\u2026\s]*$/i;
+
+/** True when a block is showing a "still working" placeholder. */
+export function isLoadingPlaceholder(block: Element): boolean {
+  const text = (block.textContent ?? "").trim();
+  if (!text) return false;
+  return LOADING_TEXT.test(text);
+}
+
 export function countPendingPlaceholders(el: HTMLElement): number {
   let pending = 0;
 
   for (const block of Array.from(
     el.querySelectorAll(".block-language-dataview, .block-language-dataviewjs, .bases-embed, .bases-view"),
   )) {
+    // A block still showing "Loading..." is the clearest kind of unfinished.
+    if (isLoadingPlaceholder(block)) pending++;
+
     for (const span of Array.from(block.querySelectorAll("span"))) {
       if (!span.children.length && !(span.textContent ?? "").trim()) pending++;
     }
@@ -146,6 +178,8 @@ export function isContentComplete(el: HTMLElement): boolean {
     if (!block.childElementCount && !(block.textContent ?? "").trim()) {
       return false;
     }
+    // Present, populated, and still not done: the placeholder case.
+    if (isLoadingPlaceholder(block)) return false;
   }
 
   return countPendingPlaceholders(el) === 0;
@@ -179,6 +213,9 @@ export function incompleteReason(el: HTMLElement): string | null {
   for (const block of Array.from(el.querySelectorAll(RESULT_BLOCK_SELECTOR))) {
     if (!block.childElementCount && !(block.textContent ?? "").trim()) {
       return `empty block ${block.className}`;
+    }
+    if (isLoadingPlaceholder(block)) {
+      return `still loading: ${block.className}`;
     }
   }
 
