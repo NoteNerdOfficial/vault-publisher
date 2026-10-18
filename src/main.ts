@@ -7,6 +7,10 @@ import { waitForDataviewIndex } from "./render/settle";
 import { countInvalidNesting } from "./publish/normalize";
 import { buildSite, BuildResult, SiteConfig } from "./publish/buildSite";
 import { formatBytes } from "./publish/drift";
+import {
+  probeBackgroundThrottling,
+  suspendBackgroundThrottling,
+} from "./platform/backgroundThrottling";
 import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
 
 /**
@@ -24,7 +28,7 @@ const OUTPUT_FOLDER = "_spike-output";
 const PREVIEW_FOLDER = "_site-preview";
 
 interface Settings {
-  autoRun: "none" | "spike" | "build" | "publish" | "diagnose";
+  autoRun: "none" | "spike" | "build" | "publish" | "diagnose" | "electron";
   /** Note the diagnose run samples, as a vault path. */
   diagnosePath?: string;
   site: SiteConfig;
@@ -111,6 +115,7 @@ export default class SitePublisherSpike extends Plugin {
       if (mode === "build") await this.buildToPreview();
       if (mode === "publish") await this.publish();
       if (mode === "diagnose") await this.diagnose();
+      if (mode === "electron") await this.probeElectron();
       await this.appendRunLog(
         `done ${mode} in ${Math.round(performance.now() - started)}ms`,
       );
@@ -156,11 +161,25 @@ export default class SitePublisherSpike extends Plugin {
   // -- build ---------------------------------------------------------------
 
   private async build(): Promise<BuildResult> {
-    const result = await buildSite(this.app, this.settings.site, (done, total, path) => {
-      if (done % 10 === 0) new Notice(`Rendering ${done + 1}/${total}: ${path}`, 1000);
-    });
-    await this.writeBuildReport(result);
-    return result;
+    // Chromium defers work in a window nobody is looking at, and publishing
+    // is exactly when someone goes to do something else. Measured
+    // backgrounded: a 50ms wait took 3,485ms. It is not only our waits that
+    // suffer -- Dataview fills its cells from its own timers, so its work
+    // lands late too, and no amount of care in our completion detection can
+    // make another plugin's scheduler run sooner.
+    //
+    // So the window stops being throttled for the length of the build, and
+    // is restored afterwards even if it throws.
+    const restoreThrottling = suspendBackgroundThrottling();
+    try {
+      const result = await buildSite(this.app, this.settings.site, (done, total, path) => {
+        if (done % 10 === 0) new Notice(`Rendering ${done + 1}/${total}: ${path}`, 1000);
+      });
+      await this.writeBuildReport(result);
+      return result;
+    } finally {
+      restoreThrottling();
+    }
   }
 
   private async buildToPreview(): Promise<void> {
@@ -184,6 +203,32 @@ export default class SitePublisherSpike extends Plugin {
     );
   }
 
+  /** Reports which Electron paths exist. Reads only; changes nothing. */
+  private async probeElectron(): Promise<void> {
+    const probe = probeBackgroundThrottling();
+    const lines = [
+      "# Background throttling probe",
+      "",
+      `Run: ${new Date().toISOString()}`,
+      `Obsidian ${apiVersion}, Electron ${probe.electronVersion ?? "unknown"}`,
+      "",
+      `**setBackgroundThrottling reachable: ${probe.reachable ? "YES" : "NO"}**`,
+      "",
+      "| path | available | detail |",
+      "|---|---|---|",
+      ...probe.findings.map(
+        (f) => `| \`${f.path}\` | ${f.available ? "yes" : "no"} | ${f.detail.replace(/\|/g, "\\|")} |`,
+      ),
+    ];
+    const adapter = this.app.vault.adapter;
+    if (!(await adapter.exists(OUTPUT_FOLDER))) await adapter.mkdir(OUTPUT_FOLDER);
+    await adapter.write(
+      normalizePath(`${OUTPUT_FOLDER}/electron-probe.md`),
+      lines.join("\n"),
+    );
+    new Notice(`Electron probe: throttling API ${probe.reachable ? "reachable" : "not reachable"}`);
+  }
+
   // -- diagnose ------------------------------------------------------------
 
   private async diagnose(): Promise<void> {
@@ -203,13 +248,32 @@ export default class SitePublisherSpike extends Plugin {
       "",
       `Note: ${result.path}`,
       `Run: ${new Date().toISOString()}`,
+      `Attempts: ${result.runs.length}`,
       "",
-      "| at ms | empty spans | text length | mutations |",
+      "## Summary",
+      "",
+      "| attempt | render ms | complete at | never completed |",
       "|---|---|---|---|",
-      ...result.samples.map(
-        (s) => `| ${s.atMs} | ${s.emptySpans} | ${s.textLength} | ${s.mutationsSoFar} |`,
+      ...result.runs.map(
+        (r) =>
+          `| ${r.attempt} | ${Math.round(r.renderMs)} | ${r.completeAtMs === null ? "-" : r.completeAtMs + "ms"} | ${r.completeAtMs === null ? "**yes**" : "no"} |`,
       ),
+      "",
     ];
+
+    for (const run of result.runs) {
+      lines.push(`## Attempt ${run.attempt}`, "");
+      lines.push(
+        "| at ms | complete | blocked by | pending | empty spans | text | mutations |",
+      );
+      lines.push("|---|---|---|---|---|---|---|");
+      for (const s of run.samples) {
+        lines.push(
+          `| ${s.atMs} | ${s.complete ? "yes" : "no"} | ${s.reason ?? "-"} | ${s.pending} | ${s.emptySpans} | ${s.textLength} | ${s.mutationsSoFar} |`,
+        );
+      }
+      lines.push("");
+    }
 
     const adapter = this.app.vault.adapter;
     if (!(await adapter.exists(OUTPUT_FOLDER))) await adapter.mkdir(OUTPUT_FOLDER);

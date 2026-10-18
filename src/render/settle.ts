@@ -1,5 +1,3 @@
-import { sharedScheduler } from "./scheduler";
-
 /**
  * Waiting for asynchronous plugin output to finish.
  *
@@ -153,6 +151,43 @@ export function isContentComplete(el: HTMLElement): boolean {
   return countPendingPlaceholders(el) === 0;
 }
 
+/**
+ * Why `isContentComplete` said no, as a short phrase, or null when it said
+ * yes.
+ *
+ * The same note sometimes completes from content and sometimes falls through
+ * to the quiet timer, at a cost of about five seconds each time it does. The
+ * count of notes that fell through varied from 2 to 12 across three runs of
+ * the same vault, so the question is which check is failing and when, and
+ * that is not answerable from a boolean.
+ */
+export function incompleteReason(el: HTMLElement): string | null {
+  const unprocessed = el.querySelector(UNPROCESSED_SELECTOR);
+  if (unprocessed) {
+    return `unprocessed ${unprocessed.className || unprocessed.tagName}`;
+  }
+
+  for (const wrapper of Array.from(el.querySelectorAll(".mermaid-wrapper"))) {
+    if (wrapper.classList.contains("is-guarded")) continue;
+    if (!wrapper.querySelector("svg")) return "mermaid without svg";
+  }
+
+  if (el.querySelector(".internal-embed:not(.is-loaded):not(.bases-embed)")) {
+    return "embed not loaded";
+  }
+
+  for (const block of Array.from(el.querySelectorAll(RESULT_BLOCK_SELECTOR))) {
+    if (!block.childElementCount && !(block.textContent ?? "").trim()) {
+      return `empty block ${block.className}`;
+    }
+  }
+
+  const pending = countPendingPlaceholders(el);
+  if (pending > 0) return `${pending} unfilled placeholders`;
+
+  return null;
+}
+
 export interface SettleResult {
   /** False means we hit timeoutMs with the subtree still changing. */
   settled: boolean;
@@ -204,9 +239,14 @@ export function isAlreadyComplete(el: HTMLElement): boolean {
  * `timeoutMs`, whichever comes first.
  *
  * Both bounds are wall-clock, and wall-clock is not the same as work done.
- * The timers run in a worker (see scheduler.ts) because a hidden window
- * clamps the page's own timers to roughly one wake-up a minute, which turned
- * a 20s cap into 60s and made a 300-note build spend 99% of its time waiting.
+ * A backgrounded window used to clamp these to roughly one wake-up a minute,
+ * turning a 20s cap into 60s; the build now turns background throttling off
+ * for its duration (see platform/backgroundThrottling.ts), which fixes the
+ * timers here and, more importantly, the timers inside Dataview.
+ *
+ * Moving these waits into a worker was tried first and measured as useless:
+ * the delays persisted through it, because results still have to be delivered
+ * to a main thread that is itself throttled.
  *
  * The timers are the fallback, not the mechanism. `isContentComplete` ends
  * most waits the moment the content is actually ready, and `reason` on the
@@ -251,8 +291,6 @@ export async function waitForSettle(
     };
   }
 
-  const timers = sharedScheduler();
-
   const result = await new Promise<SettleResult>((resolve) => {
     let mutations = 0;
     let lastMutationAtMs: number | null = null;
@@ -263,8 +301,8 @@ export async function waitForSettle(
     const finish = (settled: boolean, reason: SettleResult["reason"]) => {
       if (done) return;
       done = true;
-      if (quietTimer !== null) timers.clearTimeout(quietTimer);
-      if (hardTimer !== null) timers.clearTimeout(hardTimer);
+      if (quietTimer !== null) window.clearTimeout(quietTimer);
+      if (hardTimer !== null) window.clearTimeout(hardTimer);
       observer.disconnect();
       resolve({
         settled,
@@ -293,8 +331,8 @@ export async function waitForSettle(
     let sawPlaceholders = countPendingPlaceholders(el) > 0;
 
     const armQuietTimer = () => {
-      if (quietTimer !== null) timers.clearTimeout(quietTimer);
-      quietTimer = timers.setTimeout(() => {
+      if (quietTimer !== null) window.clearTimeout(quietTimer);
+      quietTimer = window.setTimeout(() => {
         const pending = countPendingPlaceholders(el);
 
         if (pending > 0 && pending !== lastPendingCount) {
@@ -345,7 +383,7 @@ export async function waitForSettle(
       characterData: true,
     });
 
-    hardTimer = timers.setTimeout(() => finish(false, "timeout"), timeoutMs);
+    hardTimer = window.setTimeout(() => finish(false, "timeout"), timeoutMs);
     armQuietTimer();
   });
 
