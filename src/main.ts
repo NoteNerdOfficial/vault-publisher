@@ -390,6 +390,21 @@ export default class SitePublisherSpike extends Plugin {
       // shows, which is the one promise this plugin exists to keep. A
       // truncated Bases view is the quietest of them: the table looks
       // perfectly well-formed and is simply missing rows.
+      const privacyNotes = new Set(
+        result.privacyLeaks.map((leak) => leak.sourcePath),
+      );
+      if (privacyNotes.size) {
+        say(
+          `WARNING: ${privacyNotes.size} unpublished note(s) appear on published pages, see the build report`,
+        );
+      }
+
+      if (this.settings.site.failOnPrivacyLeak && privacyNotes.size) {
+        say(`ABORTED: refusing to publish with ${privacyNotes.size} unpublished note(s) exposed`);
+        await this.writePublishLog(log);
+        return;
+      }
+
       if (
         result.invalidNesting > 0 ||
         result.incompletePages > 0 ||
@@ -509,6 +524,31 @@ export default class SitePublisherSpike extends Plugin {
       for (const s of drift.samples) {
         lines.push(
           `| ${s.index} | ${s.path.split("/").pop()} | ${Math.round(s.renderMs)} | ${s.heapBytes === null ? "-" : formatBytes(s.heapBytes)} |`,
+        );
+      }
+    }
+
+    if (result.privacyLeaks.length) {
+      const byNote = new Map<string, { kinds: Set<string>; pages: Set<string> }>();
+      for (const leak of result.privacyLeaks) {
+        const row = byNote.get(leak.sourcePath) ?? { kinds: new Set(), pages: new Set() };
+        row.kinds.add(leak.kind);
+        row.pages.add(leak.page);
+        byNote.set(leak.sourcePath, row);
+      }
+      lines.push("", "## Privacy", "");
+      lines.push(
+        `**${byNote.size} unpublished note(s) appear on published pages.**`,
+        "",
+        "A query inside a published note reaches the whole vault, so it can print",
+        "the name or fields of a note that is not itself published.",
+        "",
+        "| unpublished note | appears as | on pages |",
+        "|---|---|---|",
+      );
+      for (const [note, row] of byNote) {
+        lines.push(
+          `| ${note} | ${Array.from(row.kinds).join(", ")} | ${Array.from(row.pages).slice(0, 4).join(", ")}${row.pages.size > 4 ? ` +${row.pages.size - 4}` : ""} |`,
         );
       }
     }

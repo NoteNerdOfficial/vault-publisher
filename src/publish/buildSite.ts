@@ -19,6 +19,7 @@ import {
   summarizeDrift,
 } from "./drift";
 import { countInvalidNesting, countLoadingPlaceholders } from "./normalize";
+import { Leak, PrivacyReport, emptyPrivacyReport, scanForLeaks } from "./privacy";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
 
@@ -40,6 +41,17 @@ export interface SiteConfig {
   requireFrontmatterFlag: string | null;
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
+  /**
+   * Refuse to publish when a page contains content from an unpublished note.
+   *
+   * Off by default, and that default is a judgement call rather than an
+   * obvious one. A query that reaches across the whole vault is a normal and
+   * wanted thing -- an index page is exactly that -- so refusing by default
+   * would block the first publish of many ordinary vaults with an error the
+   * user cannot act on. Instead the leak is always reported, by note, and a
+   * vault that holds anything genuinely private can turn this on.
+   */
+  failOnPrivacyLeak?: boolean;
   /**
    * Suspend Dataview's periodic refresh while rendering.
    *
@@ -107,6 +119,8 @@ export interface PageResult {
   incomplete: boolean;
   /** What re-emitting the note's Bases views did. */
   bases: BasesStats;
+  /** Content from unpublished notes found on this page. */
+  privacy: PrivacyReport;
   /** How the settle wait ended. "timeout" and "quiet" are the slow paths. */
   settleReason: string;
 }
@@ -137,6 +151,8 @@ export interface BuildResult {
   basesTruncated: string[];
   /** Bases view types we do not re-emit, so they published as raw app DOM. */
   basesUnhandled: string[];
+  /** Every unpublished note whose content reached a page, with where. */
+  privacyLeaks: (Leak & { page: string })[];
   /**
    * Whether the build got slower as it ran, measured from control notes.
    *
@@ -174,6 +190,16 @@ export async function buildSite(
   }));
   const resolver = new LinkResolver(targets);
 
+  // Everything in the vault that is *not* being published, by name, so a
+  // query result can be recognised as belonging to a note the reader was
+  // never meant to see.
+  const published = new Set(selected.map((file) => file.path));
+  const unpublished = new Map<string, string>();
+  for (const file of app.vault.getMarkdownFiles()) {
+    if (published.has(file.path)) continue;
+    unpublished.set(file.basename.toLowerCase(), file.path);
+  }
+
   const files: PublishFile[] = [];
   const pages: PageResult[] = [];
   const skipped: { path: string; reason: string }[] = [];
@@ -199,6 +225,7 @@ export async function buildSite(
 
         const title = titleFor(app, file);
         let bases = emptyBasesStats();
+        let privacy = emptyPrivacyReport();
         const rendered = await renderFile(app, file, host, {
           transform: (container) => {
             dropRedundantTitleHeading(container, title);
@@ -212,6 +239,8 @@ export async function buildSite(
               resolver,
               url,
             ).unresolvedTargets;
+            // After rewriting, so downgraded links are visible as such.
+            privacy = scanForLeaks(container, unpublished);
           },
         });
 
@@ -245,6 +274,7 @@ export async function buildSite(
           incomplete:
             !rendered.settle.settled && rendered.settle.pendingAtEnd > 0,
           bases,
+          privacy,
           settleReason: rendered.settle.reason,
         });
 
@@ -307,6 +337,9 @@ export async function buildSite(
     ),
     basesUnhandled: Array.from(
       new Set(pages.flatMap((p) => p.bases.unhandled)),
+    ),
+    privacyLeaks: pages.flatMap((p) =>
+      p.privacy.leaks.map((leak) => ({ ...leak, page: p.url })),
     ),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
   };

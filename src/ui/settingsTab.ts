@@ -30,6 +30,7 @@ export interface SettingsHost {
       folder: string;
       requireFrontmatterFlag: string | null;
       theme?: string;
+      failOnPrivacyLeak?: boolean;
     };
     github: {
       apiBase: string;
@@ -217,6 +218,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setValue(site.requireFrontmatterFlag ?? "")
           .onChange(async (value) => {
             site.requireFrontmatterFlag = value.trim() || null;
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Refuse to publish if private notes are exposed")
+      .setDesc(
+        "A query inside a published note reads the whole vault, so it can print " +
+          "the name or fields of a note you are not publishing. This is always " +
+          "reported; turn it on to make it stop the publish.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(site.failOnPrivacyLeak ?? false)
+          .onChange(async (value) => {
+            site.failOnPrivacyLeak = value;
             await this.host.saveSettings();
           }),
       );
