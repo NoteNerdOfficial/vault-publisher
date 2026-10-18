@@ -339,6 +339,30 @@ export default class SitePublisherSpike extends Plugin {
       );
     }
 
+    const reasons = new Map<string, { n: number; ms: number }>();
+    for (const page of result.pages) {
+      const row = reasons.get(page.settleReason) ?? { n: 0, ms: 0 };
+      row.n++;
+      row.ms += page.totalMs;
+      reasons.set(page.settleReason, row);
+    }
+    if (reasons.size) {
+      lines.push("", "## How notes finished", "");
+      lines.push("| reason | notes | total s | mean ms |");
+      lines.push("|---|---|---|---|");
+      for (const [reason, row] of [...reasons].sort((a, b) => b[1].ms - a[1].ms)) {
+        lines.push(
+          `| ${reason} | ${row.n} | ${(row.ms / 1000).toFixed(1)} | ${Math.round(row.ms / row.n)} |`,
+        );
+      }
+      lines.push(
+        "",
+        "`fast-path` and `content-complete` finish from the content. `quiet` and",
+        "`timeout` finish from a clock, and a hidden window clamps clocks to one",
+        "wake-up a minute, so those two are where a backgrounded build loses time.",
+      );
+    }
+
     const drift = result.drift;
     if (drift && drift.ratio !== null) {
       lines.push("", "## Drift", "");

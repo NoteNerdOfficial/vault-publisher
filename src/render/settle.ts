@@ -1,3 +1,5 @@
+import { sharedScheduler } from "./scheduler";
+
 /**
  * Waiting for asynchronous plugin output to finish.
  *
@@ -68,6 +70,89 @@ export function countPendingPlaceholders(el: HTMLElement): number {
   return pending;
 }
 
+/**
+ * Markup that says a block has not been processed yet.
+ *
+ * Obsidian hands a fenced block to its post-processor and the original
+ * `<pre><code>` is replaced. While it is still there, the plugin has not run,
+ * so a completeness check that only looked at rendered output would call the
+ * note finished before anything had started.
+ */
+const UNPROCESSED_SELECTOR = [
+  "pre > code.language-mermaid",
+  "pre > code.language-dataview",
+  "pre > code.language-dataviewjs",
+  "pre > code.language-datacore",
+  "pre > code.language-datacorejs",
+  "pre > code.language-base",
+]
+  // `is-loaded` is Obsidian saying it has finished with the block. A fenced
+  // mermaid block can legitimately stay a code block -- shown as source
+  // rather than drawn -- and the first version of this selector matched those
+  // forever, so the note could never complete from content and waited out the
+  // full timer. The exact bug this function exists to remove.
+  .map((selector) => `${selector}:not(.is-loaded)`)
+  .join(",");
+
+/** Blocks whose content arrives asynchronously and whose state we can read. */
+const RESULT_BLOCK_SELECTOR = [
+  ".block-language-dataview",
+  ".block-language-dataviewjs",
+  ".block-language-datacore",
+  ".block-language-datacorejs",
+  ".block-language-base",
+  ".bases-embed",
+  ".bases-view",
+].join(",");
+
+/**
+ * True when every asynchronous block in the subtree has reached a state it
+ * will not leave.
+ *
+ * This is the difference between finishing because the content is ready and
+ * finishing because a clock ran out, and it is the whole fix for a
+ * backgrounded publish. `waitForSettle` previously had only one content-aware
+ * exit: "we saw placeholders, and now there are none." That cannot fire for a
+ * block which never produces a placeholder at all.
+ *
+ * A guarded Mermaid diagram is exactly that case, and the worst one. It is
+ * *terminal* -- consent was refused, the wrapper will never gain an `<svg>` --
+ * yet `countPendingPlaceholders` rightly does not count it as pending, so the
+ * early exit stayed dead and the note waited out the full timer. The block
+ * that most deserved an instant answer was the slowest in the build.
+ *
+ * Embeds had a quieter version of the same problem: one already loaded when
+ * the wait began registered no placeholder either, so a note that was finished
+ * on arrival still paid the quiet period.
+ */
+export function isContentComplete(el: HTMLElement): boolean {
+  // Anything still in its source form means the post-processor has not run.
+  if (el.querySelector(UNPROCESSED_SELECTOR)) return false;
+
+  for (const wrapper of Array.from(el.querySelectorAll(".mermaid-wrapper"))) {
+    // Guarded is a finished state, not a pending one: waiting cannot change
+    // it, and the probe reports it separately.
+    if (wrapper.classList.contains("is-guarded")) continue;
+    if (!wrapper.querySelector("svg")) return false;
+  }
+
+  if (el.querySelector(".internal-embed:not(.is-loaded):not(.bases-embed)")) {
+    return false;
+  }
+
+  for (const block of Array.from(el.querySelectorAll(RESULT_BLOCK_SELECTOR))) {
+    // A block with nothing in it yet has been created but not filled, which
+    // looks identical to a finished empty result from the outside. Treating
+    // it as unfinished costs a wait; treating it as finished would publish a
+    // blank table, which is the failure this whole module exists to prevent.
+    if (!block.childElementCount && !(block.textContent ?? "").trim()) {
+      return false;
+    }
+  }
+
+  return countPendingPlaceholders(el) === 0;
+}
+
 export interface SettleResult {
   /** False means we hit timeoutMs with the subtree still changing. */
   settled: boolean;
@@ -81,6 +166,8 @@ export interface SettleResult {
   lastMutationAtMs: number | null;
   /** True when the wait was skipped because nothing renders asynchronously. */
   skipped: boolean;
+  /** How the wait ended. Tells a fast publish from a lucky one. */
+  reason: "fast-path" | "content-complete" | "quiet" | "timeout";
   /** Placeholders still unfilled when the wait ended. Above zero means the
    * page serialized with visibly incomplete content. */
   pendingAtEnd: number;
@@ -116,13 +203,15 @@ export function isAlreadyComplete(el: HTMLElement): boolean {
  * Resolves once `el`'s subtree has stopped changing for `quietMs`, or at
  * `timeoutMs`, whichever comes first.
  *
- * Both bounds are wall-clock, and wall-clock is not the same as work done:
- * these timers only fire when the event loop is free, so a busy vault can
- * stretch a 250ms quiet period into seconds and push a 10s cap well past 10s.
- * Measured 59s on a note whose own rendering was finished in 886ms, purely
- * from contention with other plugins. The caller therefore gets `settled`
- * *and* the elapsed time, and should treat a long elapsed with few mutations
- * as a busy app rather than a slow note.
+ * Both bounds are wall-clock, and wall-clock is not the same as work done.
+ * The timers run in a worker (see scheduler.ts) because a hidden window
+ * clamps the page's own timers to roughly one wake-up a minute, which turned
+ * a 20s cap into 60s and made a 300-note build spend 99% of its time waiting.
+ *
+ * The timers are the fallback, not the mechanism. `isContentComplete` ends
+ * most waits the moment the content is actually ready, and `reason` on the
+ * result says which path a note took, so a fast publish can be told apart
+ * from a lucky one.
  */
 export async function waitForSettle(
   el: HTMLElement,
@@ -142,8 +231,27 @@ export async function waitForSettle(
       lastMutationAtMs: null,
       skipped: true,
       pendingAtEnd: 0,
+      reason: "fast-path",
     };
   }
+
+  // Already finished before the first observer callback: an embed that was
+  // cached, or a diagram the vault refuses to render. Waiting on these was
+  // pure latency, paid once per note across the whole vault.
+  if (isContentComplete(el)) {
+    return {
+      settled: true,
+      mutations: 0,
+      elapsedMs: performance.now() - started,
+      assetMs: 0,
+      lastMutationAtMs: null,
+      skipped: false,
+      pendingAtEnd: 0,
+      reason: "content-complete",
+    };
+  }
+
+  const timers = sharedScheduler();
 
   const result = await new Promise<SettleResult>((resolve) => {
     let mutations = 0;
@@ -152,11 +260,11 @@ export async function waitForSettle(
     let hardTimer: number | null = null;
     let done = false;
 
-    const finish = (settled: boolean) => {
+    const finish = (settled: boolean, reason: SettleResult["reason"]) => {
       if (done) return;
       done = true;
-      if (quietTimer !== null) window.clearTimeout(quietTimer);
-      if (hardTimer !== null) window.clearTimeout(hardTimer);
+      if (quietTimer !== null) timers.clearTimeout(quietTimer);
+      if (hardTimer !== null) timers.clearTimeout(hardTimer);
       observer.disconnect();
       resolve({
         settled,
@@ -166,6 +274,7 @@ export async function waitForSettle(
         lastMutationAtMs,
         skipped: false,
         pendingAtEnd: countPendingPlaceholders(el),
+        reason,
       });
     };
 
@@ -184,8 +293,8 @@ export async function waitForSettle(
     let sawPlaceholders = countPendingPlaceholders(el) > 0;
 
     const armQuietTimer = () => {
-      if (quietTimer !== null) window.clearTimeout(quietTimer);
-      quietTimer = window.setTimeout(() => {
+      if (quietTimer !== null) timers.clearTimeout(quietTimer);
+      quietTimer = timers.setTimeout(() => {
         const pending = countPendingPlaceholders(el);
 
         if (pending > 0 && pending !== lastPendingCount) {
@@ -194,7 +303,7 @@ export async function waitForSettle(
           return;
         }
 
-        finish(true);
+        finish(true, "quiet");
       }, quietMs);
     };
 
@@ -211,7 +320,15 @@ export async function waitForSettle(
       if (pendingNow > 0) {
         sawPlaceholders = true;
       } else if (sawPlaceholders) {
-        finish(true);
+        finish(true, "content-complete");
+        return;
+      }
+
+      // The broader test: every async block has reached a state it will not
+      // leave. This catches the blocks that never register as pending at all,
+      // which is what left guarded diagrams waiting out the full timer.
+      if (isContentComplete(el)) {
+        finish(true, "content-complete");
         return;
       }
 
@@ -228,7 +345,7 @@ export async function waitForSettle(
       characterData: true,
     });
 
-    hardTimer = window.setTimeout(() => finish(false), timeoutMs);
+    hardTimer = timers.setTimeout(() => finish(false, "timeout"), timeoutMs);
     armQuietTimer();
   });
 

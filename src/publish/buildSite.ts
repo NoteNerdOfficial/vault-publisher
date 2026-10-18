@@ -41,9 +41,19 @@ export interface SiteConfig {
   /**
    * Suspend Dataview's periodic refresh while rendering.
    *
-   * Off by default until it is shown to help. It made DQL tables faster and
-   * appeared to make dataviewjs worse, but both changes went in together so
-   * neither result is attributable yet.
+   * Measured on 300 notes and the result is: no detectable effect. The run
+   * with it on fell between two runs with it off (125s, against 58s and
+   * 135s with identical configuration), and every per-type number did the
+   * same. An earlier reading of this as "a clear loss" was wrong: it came
+   * from one sample each side, and run-to-run variance here is larger than
+   * the effect being measured. Bases alone moved 20x between two runs that
+   * changed nothing.
+   *
+   * Left off. Two attempts to make Dataview more convenient to photograph by
+   * reaching into its scheduling have now produced one clear loss (a 300ms
+   * inter-note delay, 49.7s to 283s) and one result indistinguishable from
+   * noise. What actually worked was leaving other plugins alone and getting
+   * better at recognising when their output is finished.
    */
   suspendDataviewRefresh?: boolean;
   /**
@@ -95,6 +105,8 @@ export interface PageResult {
   incomplete: boolean;
   /** What re-emitting the note's Bases views did. */
   bases: BasesStats;
+  /** How the settle wait ended. "timeout" and "quiet" are the slow paths. */
+  settleReason: string;
 }
 
 export interface BuildResult {
@@ -226,6 +238,7 @@ export async function buildSite(
           incomplete:
             !rendered.settle.settled && rendered.settle.pendingAtEnd > 0,
           bases,
+          settleReason: rendered.settle.reason,
         });
 
         // Control notes are identical and contain nothing asynchronous, so

@@ -124,6 +124,7 @@ export async function renderMarkdownToHtml(
     lastMutationAtMs: null,
     skipped: false,
     pendingAtEnd: 0,
+    reason: "fast-path",
   };
   let html = "";
   let normalize: NormalizeStats = { paragraphsRewritten: 0, remaining: 0 };
