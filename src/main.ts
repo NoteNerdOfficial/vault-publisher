@@ -9,6 +9,13 @@ import { buildSite, BuildResult, SiteConfig } from "./publish/buildSite";
 import { formatBytes } from "./publish/drift";
 import { DEFAULT_THEME } from "./publish/themes";
 import {
+  describeStorage,
+  protectToken,
+  revealToken,
+  storageMode,
+} from "./platform/secrets";
+import { VaultPublisherSettingsTab } from "./ui/settingsTab";
+import {
   probeBackgroundThrottling,
   suspendBackgroundThrottling,
 } from "./platform/backgroundThrottling";
@@ -92,6 +99,8 @@ export default class SitePublisherSpike extends Plugin {
     // Rendering before the workspace is ready gives Dataview no index to
     // query and Bases no file list, which looks like a rendering failure but
     // is really a timing one.
+    this.addSettingTab(new VaultPublisherSettingsTab(this.app, this));
+
     this.app.workspace.onLayoutReady(() => {
       void this.runAuto();
     });
@@ -158,6 +167,39 @@ export default class SitePublisherSpike extends Plugin {
       site: { ...DEFAULT_SETTINGS.site, ...stored?.site },
       github: { ...DEFAULT_SETTINGS.github, ...stored?.github },
     };
+    // The token lives encrypted on disk and in the clear only in memory, so
+    // everything downstream can use it without knowing about any of this.
+    this.settings.github.token = revealToken(this.settings.github.token);
+  }
+
+  /**
+   * Persists settings with the token encrypted.
+   *
+   * The in-memory settings keep the plain token, because the publish path
+   * needs it on every request; only what reaches disk is protected.
+   */
+  async saveSettings(): Promise<void> {
+    await this.saveData({
+      ...this.settings,
+      github: {
+        ...this.settings.github,
+        token: protectToken(this.settings.github.token),
+      },
+    });
+  }
+
+  /** Confirms the token works and says which account it belongs to. */
+  async verifyToken(): Promise<string> {
+    const { github } = this.settings;
+    if (!github.token) throw new Error("No token set.");
+    const client = new GitHubClient({
+      apiBase: github.apiBase,
+      token: github.token,
+      owner: github.owner,
+      repo: github.repo,
+    });
+    const viewer = await client.getViewer();
+    return viewer.login;
   }
 
   // -- build ---------------------------------------------------------------
@@ -184,7 +226,7 @@ export default class SitePublisherSpike extends Plugin {
     }
   }
 
-  private async buildToPreview(): Promise<void> {
+  async buildToPreview(): Promise<void> {
     new Notice("Building site...");
     const result = await this.build();
 
@@ -215,7 +257,21 @@ export default class SitePublisherSpike extends Plugin {
       `Obsidian ${apiVersion}, Electron ${probe.electronVersion ?? "unknown"}`,
       "",
       `**setBackgroundThrottling reachable: ${probe.reachable ? "YES" : "NO"}**`,
+      `**token storage: ${storageMode()}** -- ${describeStorage()}`,
       "",
+      ...(() => {
+        // Round-trip a throwaway value: "the API exists" and "the API works
+        // on this machine" are different claims, and only the second one
+        // justifies telling a user their token is encrypted.
+        const sample = "vault-publisher-probe-" + Date.now();
+        const sealed = protectToken(sample);
+        const opened = revealToken(sealed);
+        return [
+          `Round trip: ${opened === sample ? "OK" : "FAILED"}`,
+          `Stored form: \`${sealed.slice(0, 24)}${sealed.length > 24 ? "…" : ""}\``,
+          "",
+        ];
+      })(),
       "| path | available | detail |",
       "|---|---|---|",
       ...probe.findings.map(
@@ -292,7 +348,7 @@ export default class SitePublisherSpike extends Plugin {
 
   // -- publish -------------------------------------------------------------
 
-  private async publish(): Promise<void> {
+  async publish(): Promise<void> {
     const { github } = this.settings;
     if (!github.token || !github.owner || !github.repo) {
       new Notice("Site Publisher: set github.owner, github.repo and github.token first");
