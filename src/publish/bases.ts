@@ -260,12 +260,15 @@ function buildCards(
     for (const property of properties) {
       const line = property.querySelector(".bases-cards-line") ?? property;
 
-      // The title property is the card's heading, not one of its fields.
+      // The title property leads the card, but it is not a document
+      // heading: it was an <h3> at first, and every card title then showed
+      // up in the page's table of contents as though a row of a table were
+      // a section of the page. A card is data, not structure.
       if (property.classList.contains("mod-title")) {
-        const heading = doc.createElement("h3");
-        heading.className = "osp-base-card-title";
-        moveValue(line, heading, stats);
-        card.append(heading);
+        const title = doc.createElement("div");
+        title.className = "osp-base-card-title";
+        moveValue(line, title, stats);
+        card.append(title);
         continue;
       }
 

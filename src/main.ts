@@ -7,6 +7,7 @@ import { waitForDataviewIndex } from "./render/settle";
 import { countInvalidNesting } from "./publish/normalize";
 import { buildSite, BuildResult, SiteConfig } from "./publish/buildSite";
 import { formatBytes } from "./publish/drift";
+import { DEFAULT_THEME } from "./publish/themes";
 import {
   probeBackgroundThrottling,
   suspendBackgroundThrottling,
@@ -49,6 +50,7 @@ const DEFAULT_SETTINGS: Settings = {
     siteName: "Spike Site",
     folder: "spike-notes",
     requireFrontmatterFlag: null,
+    theme: DEFAULT_THEME,
   },
   github: {
     apiBase: GITHUB_COM_API,

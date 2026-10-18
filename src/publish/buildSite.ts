@@ -19,7 +19,7 @@ import {
   summarizeDrift,
 } from "./drift";
 import { countInvalidNesting } from "./normalize";
-import { SITE_CSS } from "./theme";
+import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
 
 /**
@@ -38,6 +38,8 @@ export interface SiteConfig {
   folder: string;
   /** When set, a note must also have this frontmatter key set to true. */
   requireFrontmatterFlag: string | null;
+  /** Theme name from themes.ts. Falls back to the default when unknown. */
+  theme?: string;
   /**
    * Suspend Dataview's periodic refresh while rendering.
    *
@@ -270,7 +272,7 @@ export async function buildSite(
     path: "assets/obsidian.css",
     content: harvestToStylesheet(harvestCss()),
   });
-  files.push({ path: "assets/site.css", content: SITE_CSS });
+  files.push({ path: "assets/site.css", content: siteCss(config.theme) });
   files.push({ path: "index.html", content: buildIndex(config, pages) });
   // Pages would otherwise run the committed HTML through Jekyll, which
   // ignores files and folders whose names begin with an underscore -- and
