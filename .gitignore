@@ -8,10 +8,8 @@ main.js.map
 docs/
 research/
 
-# Test vaults: Obsidian config, plugin copies and build output.
-spike-vault/.obsidian/
-spike-vault/_spike-output/
-spike-vault/_site-preview/
+# Test vaults live outside the repo, so the plugin source is never confused
+# with the content used to exercise it. See docs/PLAN.md for the path.
 **/_spike-output/
 **/_site-preview/
 

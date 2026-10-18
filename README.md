@@ -38,7 +38,7 @@ src/publish/    turning rendered HTML into a site
 src/github/
   client.ts       Git Data API: blobs, tree, commit, ref, Pages
 research/       findings, including the competitive scan and spike results
-spike-vault/    test notes chosen to break things
+docs/           the working plan
 ```
 
 ## Development
@@ -46,8 +46,11 @@ spike-vault/    test notes chosen to break things
 ```sh
 npm install
 npm run build
+node scripts/deploy.mjs            # deploys to the test vault
 node scripts/deploy.mjs /path/to/vault
 ```
+
+The test vault lives outside this repo, at `~/Documents/Obsidian/spike-vault`, so plugin source is never mixed up with the notes used to exercise it. Override with `VAULT_PUBLISHER_VAULT` or a path argument.
 
 The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking, which is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and bump the manifest version to trigger a reload.
 

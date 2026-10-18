@@ -15,10 +15,21 @@ const { id, version } = JSON.parse(
   readFileSync(join(root, "manifest.json"), "utf8"),
 );
 
-// Defaults to the vault in this repo; pass a vault path to deploy elsewhere,
-// which is how the spike runs in a vault that already trusts plugins (a fresh
-// vault opens in Restricted Mode and needs a click-through we cannot script).
-const vault = process.argv[2] ?? join(root, "spike-vault");
+// The test vault lives outside the repo so that plugin source is never mixed
+// up with the content used to exercise it. Override with VAULT_PUBLISHER_VAULT
+// or a path argument; the argument wins.
+const DEFAULT_VAULT = join(homedir(), "Documents/Obsidian/spike-vault");
+const vault =
+  process.argv[2] ?? process.env.VAULT_PUBLISHER_VAULT ?? DEFAULT_VAULT;
+
+if (!existsSync(vault)) {
+  console.error(`No vault at ${vault}`);
+  console.error(
+    "Pass a vault path, or set VAULT_PUBLISHER_VAULT to where yours lives.",
+  );
+  process.exit(1);
+}
+
 const target = join(vault, ".obsidian", "plugins", id);
 
 if (!existsSync(target)) mkdirSync(target, { recursive: true });
