@@ -2,7 +2,9 @@
 
 Publishes an Obsidian vault as a static website, rendered by Obsidian itself.
 
-Status: **spike**. The render and build pipeline works; the GitHub publish path is written but not yet exercised against a real repository.
+Status: **spike complete**, product work beginning. The render, build and GitHub publish path all work and have been verified end to end against a real repository. The theme and the setup UI are not built yet.
+
+The working plan lives in `docs/PLAN.md` (local only, not tracked).
 
 ## Why it renders in Obsidian
 
@@ -31,6 +33,7 @@ src/publish/    turning rendered HTML into a site
   page.ts         document shell, heading ids, table of contents
   theme.ts        the site's own stylesheet (placeholder; design work pending)
   harvestCss.ts   lifts layout-critical rules from the running app
+  bases.ts        re-emits Bases views as semantic tables and cards
   buildSite.ts    selection, render, assemble
 src/github/
   client.ts       Git Data API: blobs, tree, commit, ref, Pages
@@ -50,9 +53,10 @@ The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `dia
 
 ## Known issues
 
-- **Bases layout.** Data renders correctly, but Bases builds its view with absolute positioning and CSS variables meant for an app pane. Harvesting its rules gets close; re-emitting the data as a semantic table is probably the better answer.
+- **Bases interactivity.** Views are re-emitted as our own tables and cards, which fixed the layout and recovered numeric values that were publishing blank. Sorting and view switching are gone, as with all interactivity.
+- **Bases virtualization.** The grid renders only visible rows, so a long base could publish truncated. A guard compares emitted rows against the count Bases reports and aborts the publish; it is written but not yet exercised against a large base.
 - **Mermaid is light-themed.** Diagrams serialize with resolved colours from Mermaid's default light theme, so a dark site needs a re-render or a colour rewrite.
 - **Mermaid needs vault consent.** Obsidian 1.14 gates diagrams per vault; the plugin detects this rather than bypassing it.
 - **dataviewjs is off by default** in Dataview's settings, and its errors would publish verbatim.
 - **Interactivity is lost.** Bases sorting, dataviewjs buttons and collapsed callouts are static once published.
-- **Scale is unmeasured.** Timings so far come from a vault with other plugins competing for the event loop.
+- **Scale is unproven.** A clean vault builds 7 notes in 1,690ms, but 7 notes is not 500, and a long publish session may degrade its own environment. This is the next thing to test.
