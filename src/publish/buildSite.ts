@@ -11,6 +11,13 @@ import {
 } from "./page";
 import { harvestCss, harvestToStylesheet } from "./harvestCss";
 import { BasesStats, emptyBasesStats, reemitBases } from "./bases";
+import {
+  DriftReport,
+  DriftSample,
+  heapBytes,
+  isControlNote,
+  summarizeDrift,
+} from "./drift";
 import { countInvalidNesting } from "./normalize";
 import { SITE_CSS } from "./theme";
 import { PublishFile } from "../github/client";
@@ -111,6 +118,13 @@ export interface BuildResult {
   basesTruncated: string[];
   /** Bases view types we do not re-emit, so they published as raw app DOM. */
   basesUnhandled: string[];
+  /**
+   * Whether the build got slower as it ran, measured from control notes.
+   *
+   * Null when the vault has none. A build without controls is not proof that
+   * nothing degraded, only that nothing was watching.
+   */
+  drift: DriftReport | null;
 }
 
 /** Vault path to published URL. Keeps folder structure, swaps the extension. */
@@ -144,6 +158,7 @@ export async function buildSite(
   const files: PublishFile[] = [];
   const pages: PageResult[] = [];
   const skipped: { path: string; reason: string }[] = [];
+  const driftSamples: DriftSample[] = [];
 
   const host = createRenderHost();
   try {
@@ -212,6 +227,17 @@ export async function buildSite(
             !rendered.settle.settled && rendered.settle.pendingAtEnd > 0,
           bases,
         });
+
+        // Control notes are identical and contain nothing asynchronous, so
+        // their render time tracks the environment rather than the content.
+        if (isControlNote(file.path)) {
+          driftSamples.push({
+            path: file.path,
+            index,
+            renderMs: rendered.renderMs,
+            heapBytes: heapBytes(),
+          });
+        }
       }
     };
 
@@ -255,6 +281,7 @@ export async function buildSite(
     basesUnhandled: Array.from(
       new Set(pages.flatMap((p) => p.bases.unhandled)),
     ),
+    drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
   };
 }
 

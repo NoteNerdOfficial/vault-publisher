@@ -6,6 +6,7 @@ import { probeStylesheets } from "./render/cssProbe";
 import { waitForDataviewIndex } from "./render/settle";
 import { countInvalidNesting } from "./publish/normalize";
 import { buildSite, BuildResult, SiteConfig } from "./publish/buildSite";
+import { formatBytes } from "./publish/drift";
 import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
 
 /**
@@ -336,6 +337,32 @@ export default class SitePublisherSpike extends Plugin {
       lines.push(
         `| ${p.title} | ${p.url} | ${Math.round(p.renderMs)} | ${Math.round(p.totalMs)} | ${p.pending} | ${p.incomplete} | ${p.guarded} | ${p.errored} | ${p.unresolvedTargets.join(", ")} |`,
       );
+    }
+
+    const drift = result.drift;
+    if (drift && drift.ratio !== null) {
+      lines.push("", "## Drift", "");
+      lines.push(
+        `Control notes: ${drift.samples.length} (identical, no async content)`,
+      );
+      lines.push(`First third: ${Math.round(drift.firstMs ?? 0)}ms mean render`);
+      lines.push(`Last third:  ${Math.round(drift.lastMs ?? 0)}ms mean render`);
+      lines.push(`Ratio: ${drift.ratio.toFixed(2)}x`);
+      if (drift.heapGrowthBytes !== null) {
+        lines.push(`Heap growth: ${formatBytes(drift.heapGrowthBytes)}`);
+      }
+      lines.push(
+        drift.degraded
+          ? "\n**DEGRADED.** The build slowed as it ran, so every other timing here is suspect."
+          : "\nStable. Render time did not drift materially across the build.",
+      );
+      lines.push("", "| # | control | render ms | heap |");
+      lines.push("|---|---|---|---|");
+      for (const s of drift.samples) {
+        lines.push(
+          `| ${s.index} | ${s.path.split("/").pop()} | ${Math.round(s.renderMs)} | ${s.heapBytes === null ? "-" : formatBytes(s.heapBytes)} |`,
+        );
+      }
     }
 
     const basesPages = result.pages.filter((p) => p.bases.views > 0);
