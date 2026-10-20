@@ -1,7 +1,7 @@
 {
   "id": "vault-publisher",
   "name": "Vault Publisher",
-  "version": "0.0.72",
+  "version": "0.0.80",
   "minAppVersion": "1.7.2",
   "description": "Publishes your vault as a static website, rendered by Obsidian itself, so Dataview, Bases and Mermaid output survives.",
   "author": "NoteNerd",

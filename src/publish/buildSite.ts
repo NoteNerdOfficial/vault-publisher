@@ -21,7 +21,7 @@ import {
 import { countInvalidNesting, countLoadingPlaceholders } from "./normalize";
 import { Leak, PrivacyReport, emptyPrivacyReport, scanForLeaks } from "./privacy";
 import { AssetStats, assetUrl, collectAssets, emptyAssetStats } from "./assets";
-import { stabilizeIds } from "./stableIds";
+import { stabilizeIds, stripDebugAttributes } from "./stableIds";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
 
@@ -271,6 +271,7 @@ export async function buildSite(
             // Last, so nothing downstream is holding a reference to an id
             // that is about to change.
             stabilizeIds(container);
+            stripDebugAttributes(container);
           },
         });
 

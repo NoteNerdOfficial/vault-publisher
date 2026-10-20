@@ -66,11 +66,20 @@ export const DEFAULT_SETTLE: SettleOptions = {
  */
 const LOADING_TEXT = /^\s*(loading|rendering|evaluating)\b[.\u2026\s]*$/i;
 
+/**
+ * Datacore's placeholder, which is a sentence rather than a word.
+ *
+ * It renders `<View is rendering>` while a block is still being built, and
+ * published exactly that. Nothing matched it: the text is not "Loading", and
+ * the block is not empty.
+ */
+const RENDERING_PLACEHOLDER = /^<[^<>]*\bis rendering\b[^<>]*>$/i;
+
 /** True when a block is showing a "still working" placeholder. */
 export function isLoadingPlaceholder(block: Element): boolean {
   const text = (block.textContent ?? "").trim();
   if (!text) return false;
-  return LOADING_TEXT.test(text);
+  return LOADING_TEXT.test(text) || RENDERING_PLACEHOLDER.test(text);
 }
 
 export function countPendingPlaceholders(el: HTMLElement): number {
@@ -82,7 +91,14 @@ export function countPendingPlaceholders(el: HTMLElement): number {
   }
 
   for (const block of Array.from(
-    el.querySelectorAll(".block-language-dataview, .block-language-dataviewjs, .bases-embed, .bases-view"),
+    el.querySelectorAll(
+      ".block-language-dataview, .block-language-dataviewjs, " +
+        // Datacore fills its cells the same way Dataview does: the element
+        // exists first and the value arrives after. Leaving it out of this
+        // list meant a datacore list published as a column of empty bullets.
+        "[class*='block-language-datacore'], " +
+        ".bases-embed, .bases-view",
+    ),
   )) {
     // A block still showing "Loading..." is the clearest kind of unfinished.
     if (isLoadingPlaceholder(block)) pending++;
@@ -118,8 +134,11 @@ const UNPROCESSED_SELECTOR = [
   "pre > code.language-mermaid",
   "pre > code.language-dataview",
   "pre > code.language-dataviewjs",
-  "pre > code.language-datacore",
-  "pre > code.language-datacorejs",
+  // Datacore ships four block languages -- datacore, datacorejs, datacorejsx,
+  // datacorets, datacoretsx -- and enumerating them is how the jsx one got
+  // missed, which let a page publish Datacore's own placeholder text. Match
+  // the prefix instead, so a fifth costs nothing.
+  "pre > code[class*='language-datacore']",
   "pre > code.language-base",
 ]
   // `is-loaded` is Obsidian saying it has finished with the block. A fenced
@@ -134,8 +153,7 @@ const UNPROCESSED_SELECTOR = [
 const RESULT_BLOCK_SELECTOR = [
   ".block-language-dataview",
   ".block-language-dataviewjs",
-  ".block-language-datacore",
-  ".block-language-datacorejs",
+  "[class*='block-language-datacore']",
   ".block-language-base",
   ".bases-embed",
   ".bases-view",
@@ -322,8 +340,7 @@ export interface SettleResult {
 const ASYNC_BLOCK_SELECTOR = [
   ".block-language-dataview",
   ".block-language-dataviewjs",
-  ".block-language-datacore",
-  ".block-language-datacorejs",
+  "[class*='block-language-datacore']",
   ".block-language-base",
   ".bases-embed",
   ".bases-view",

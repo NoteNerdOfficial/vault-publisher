@@ -38,6 +38,30 @@ const VOLATILE_PATTERNS: { test: RegExp; prefix: string }[] = [
   { test: /^(classId-.+)-\d+$/i, prefix: "class" },
 ];
 
+/**
+ * Attributes a framework leaves behind that mean nothing on a published page.
+ *
+ * Datacore builds its views with JSX, and the transform it ships adds
+ * `__self` and `__source` to every element for debugging. They serialize as
+ * `__self="[object Object]"`, which is noise in the output and a small
+ * amount of information about the author's file paths.
+ */
+const DEBUG_ATTRIBUTES = ["__self", "__source"];
+
+/** Removes framework debug attributes from the whole subtree. */
+export function stripDebugAttributes(root: HTMLElement): number {
+  let removed = 0;
+  for (const el of Array.from(root.querySelectorAll("*"))) {
+    for (const name of DEBUG_ATTRIBUTES) {
+      if (el.hasAttribute(name)) {
+        el.removeAttribute(name);
+        removed++;
+      }
+    }
+  }
+  return removed;
+}
+
 export interface StableIdStats {
   renamed: number;
   referencesUpdated: number;

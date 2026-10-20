@@ -113,13 +113,17 @@ export function countLoadingPlaceholders(html: string): number {
 
   const selector =
     ".block-language-dataview, .block-language-dataviewjs, " +
-    ".block-language-datacore, .block-language-datacorejs, " +
+    "[class*='block-language-datacore'], " +
     ".bases-view, .osp-base, pre.dataview";
 
-  const stillLoading = (el: Element) =>
-    /^\s*(loading|rendering|evaluating)\b[.\u2026\s]*$/i.test(
-      (el.textContent ?? "").trim(),
+  const stillLoading = (el: Element) => {
+    const text = (el.textContent ?? "").trim();
+    return (
+      /^\s*(loading|rendering|evaluating)\b[.\u2026\s]*$/i.test(text) ||
+      // Datacore's placeholder is a sentence: "<View is rendering>".
+      /^<[^<>]*\bis rendering\b[^<>]*>$/i.test(text)
     );
+  };
 
   return Array.from(doc.body.querySelectorAll(selector))
     .filter(stillLoading)
