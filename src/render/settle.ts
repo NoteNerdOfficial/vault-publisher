@@ -1,3 +1,4 @@
+import { hasUnbuiltBasesEmbed, isBasesViewUnfinished } from "../publish/bases";
 /**
  * Waiting for asynchronous plugin output to finish.
  *
@@ -74,6 +75,11 @@ export function isLoadingPlaceholder(block: Element): boolean {
 
 export function countPendingPlaceholders(el: HTMLElement): number {
   let pending = 0;
+
+  if (hasUnbuiltBasesEmbed(el)) pending++;
+  for (const view of Array.from(el.querySelectorAll(".bases-view"))) {
+    if (isBasesViewUnfinished(view)) pending++;
+  }
 
   for (const block of Array.from(
     el.querySelectorAll(".block-language-dataview, .block-language-dataviewjs, .bases-embed, .bases-view"),
@@ -156,6 +162,7 @@ const RESULT_BLOCK_SELECTOR = [
  * on arrival still paid the quiet period.
  */
 export function isContentComplete(el: HTMLElement): boolean {
+  if (structuralIncompleteReason(el)) return false;
   // Anything still in its source form means the post-processor has not run.
   if (el.querySelector(UNPROCESSED_SELECTOR)) return false;
 
@@ -182,6 +189,14 @@ export function isContentComplete(el: HTMLElement): boolean {
     if (isLoadingPlaceholder(block)) return false;
   }
 
+  // A Bases view draws its header and toolbar before it has rows, so it
+  // passes every "is this populated" test while holding no data at all --
+  // and before that, the embed exists with no view inside it at all.
+  if (hasUnbuiltBasesEmbed(el)) return false;
+  for (const view of Array.from(el.querySelectorAll(".bases-view"))) {
+    if (isBasesViewUnfinished(view)) return false;
+  }
+
   return countPendingPlaceholders(el) === 0;
 }
 
@@ -195,6 +210,53 @@ export function isContentComplete(el: HTMLElement): boolean {
  * the same vault, so the question is which check is failing and when, and
  * that is not answerable from a boolean.
  */
+/**
+ * Why the subtree is structurally unfinished, or null when it is not.
+ *
+ * "Structurally" is the distinction that matters. An empty property cell is
+ * a finished value that happens to be blank, and waiting for it is waiting
+ * forever. A Bases embed with no view in it, or a block still saying
+ * "Loading", is an unfinished *shape*, and publishing it loses content.
+ *
+ * The quiet-period timer may stop on the first kind. It must never stop on
+ * the second, which is how a note published a toolbar with no table under
+ * it: the placeholder count stopped changing, so the wait concluded that
+ * what it was looking at would never fill.
+ */
+export function structuralIncompleteReason(el: HTMLElement): string | null {
+  const unprocessed = el.querySelector(UNPROCESSED_SELECTOR);
+  if (unprocessed) {
+    return `unprocessed ${unprocessed.className || unprocessed.tagName}`;
+  }
+
+  for (const wrapper of Array.from(el.querySelectorAll(".mermaid-wrapper"))) {
+    if (wrapper.classList.contains("is-guarded")) continue;
+    if (!wrapper.querySelector("svg")) return "mermaid without svg";
+  }
+
+  if (el.querySelector(".internal-embed:not(.is-loaded):not(.bases-embed)")) {
+    return "embed not loaded";
+  }
+
+  for (const block of Array.from(el.querySelectorAll(RESULT_BLOCK_SELECTOR))) {
+    if (!block.childElementCount && !(block.textContent ?? "").trim()) {
+      return `empty block ${block.className}`;
+    }
+    if (isLoadingPlaceholder(block)) {
+      return `still loading: ${block.className}`;
+    }
+  }
+
+  if (hasUnbuiltBasesEmbed(el)) return "bases embed has no view yet";
+  for (const view of Array.from(el.querySelectorAll(".bases-view"))) {
+    if (isBasesViewUnfinished(view)) {
+      return `bases view has no rows yet: ${view.getAttribute("data-view-name") ?? "?"}`;
+    }
+  }
+
+  return null;
+}
+
 export function incompleteReason(el: HTMLElement): string | null {
   const unprocessed = el.querySelector(UNPROCESSED_SELECTOR);
   if (unprocessed) {
@@ -216,6 +278,13 @@ export function incompleteReason(el: HTMLElement): string | null {
     }
     if (isLoadingPlaceholder(block)) {
       return `still loading: ${block.className}`;
+    }
+  }
+
+  if (hasUnbuiltBasesEmbed(el)) return "bases embed has no view yet";
+  for (const view of Array.from(el.querySelectorAll(".bases-view"))) {
+    if (isBasesViewUnfinished(view)) {
+      return `bases view has no rows yet: ${view.getAttribute("data-view-name") ?? "?"}`;
     }
   }
 
@@ -370,6 +439,14 @@ export async function waitForSettle(
     const armQuietTimer = () => {
       if (quietTimer !== null) window.clearTimeout(quietTimer);
       quietTimer = window.setTimeout(() => {
+        // Never conclude on an unfinished shape, however still it has gone.
+        // A Bases embed waiting for its view produces no mutations at all
+        // while it waits, so quiet is exactly what it looks like.
+        if (structuralIncompleteReason(el)) {
+          armQuietTimer();
+          return;
+        }
+
         const pending = countPendingPlaceholders(el);
 
         if (pending > 0 && pending !== lastPendingCount) {
@@ -385,6 +462,7 @@ export async function waitForSettle(
     const observer = new MutationObserver((records) => {
       mutations += records.length;
       lastMutationAtMs = performance.now() - started;
+
 
       // Dataview re-runs its queries on a timer -- `refreshInterval`, 2500ms
       // by default -- so a note containing one is never finished and its

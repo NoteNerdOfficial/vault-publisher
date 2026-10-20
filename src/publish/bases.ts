@@ -146,6 +146,79 @@ function replaceView(view: Element, figure: HTMLElement): void {
   }
 }
 
+/**
+ * Bases virtualizes its rows, and we do not try to defeat that.
+ *
+ * A 200-row base renders 18 rows into the DOM; the rest do not exist to be
+ * read. Two attempts to force them: sizing the scroll container from the
+ * toolbar's result count (never fired, because that count is not readable
+ * during the window where it would help), and giving every container a
+ * 200,000px height unconditionally (worse -- it destabilised Bases enough
+ * that even a five-row view serialized half-built).
+ *
+ * That is the third time reaching into another plugin's internals has made
+ * things worse rather than better, after suspending Dataview's refresh and
+ * pausing between notes. So the rows are taken as found, and
+ * `isBasesViewUnfinished` plus the truncation check make a short table
+ * refuse to publish rather than ship as though it were complete.
+ *
+ * The honest fix is to read Bases' own data rather than its DOM, which needs
+ * an API it does not currently expose.
+ */
+
+/**
+ * True when a view has been built but its rows have not arrived.
+ *
+ * Bases renders its header and toolbar before it has any rows, so a view in
+ * that state has child elements and text and looks finished to anything
+ * asking "is this populated". It is the same shape of mistake as a Dataview
+ * block serializing the word "Loading": present, non-empty, and not the
+ * answer.
+ *
+ * The toolbar's own result count is what makes this decidable. A view
+ * claiming results while showing none is unfinished; a view claiming none is
+ * simply empty, and waiting for it would never end.
+ */
+/**
+ * True when a Bases embed exists but has not produced a view yet.
+ *
+ * The embed wrapper and its toolbar render before the view inside them does,
+ * and a check that only inspects `.bases-view` elements finds none to
+ * object to, so the page serializes with a toolbar and no table. This was
+ * intermittent -- the same note published 18 rows on one run and none on the
+ * next -- which is the signature of a race rather than a missing feature.
+ */
+export function hasUnbuiltBasesEmbed(root: HTMLElement): boolean {
+  for (const embed of Array.from(root.querySelectorAll(".bases-embed"))) {
+    if (!embed.querySelector(".bases-view")) return true;
+  }
+  return false;
+}
+
+export function isBasesViewUnfinished(view: Element): boolean {
+  // Bases says so itself. A table container carries `is-loading` until its
+  // rows exist, which beats inferring the same thing from counts -- and it
+  // is available immediately, while the toolbar still reads "Results" with
+  // no number in it.
+  if (view.querySelector(".is-loading")) return true;
+
+  const rows = view.querySelectorAll(
+    ".bases-tbody > .bases-tr, .bases-cards-item",
+  ).length;
+  if (rows > 0) return false;
+
+  // No rows. The only reading of that which means "finished" is a view whose
+  // own toolbar says there are none to show.
+  //
+  // An earlier version treated a rendered header as evidence of being
+  // finished, which inverted the moment the columns appeared before the
+  // rows: the toolbar still read "Results" with no number, so the view was
+  // called complete and published empty. A count we cannot read yet is not
+  // a count of zero.
+  const claimed = claimedResultCount(view);
+  return claimed !== 0;
+}
+
 /** The total Bases reports in its toolbar, e.g. "5 results". Ground truth. */
 function claimedResultCount(view: Element): number | null {
   const embed = view.closest(".bases-embed") ?? view.parentElement;
