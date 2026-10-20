@@ -37,6 +37,7 @@ export interface SettingsHost {
       requireFrontmatterFlag: string | null;
       theme?: string;
       failOnPrivacyLeak?: boolean;
+      customDomain?: string;
     };
     github: {
       apiBase: string;
@@ -240,6 +241,23 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setValue(github.branch)
           .onChange(async (value) => {
             github.branch = value.trim() || "gh-pages";
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Custom domain")
+      .setDesc(
+        "Optional. Point a CNAME record at your GitHub Pages address first, " +
+          "then put the domain here and publish.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("notes.example.com")
+          .setValue(this.host.settings.site.customDomain ?? "")
+          .onChange(async (value) => {
+            this.host.settings.site.customDomain =
+              value.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "") || undefined;
             await this.host.saveSettings();
           }),
       );

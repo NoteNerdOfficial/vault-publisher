@@ -402,21 +402,63 @@ body {
 
 /* --- index ----------------------------------------------------------- */
 
-.osp-index { list-style: none; margin: 0; padding: 0; max-width: var(--osp-measure); }
-.osp-index li { border-bottom: 1px solid var(--osp-border); }
-.osp-index a {
+.markdown-rendered .osp-index-lead {
+  font-family: var(--osp-font-ui);
+  font-size: 0.8rem;
+  letter-spacing: var(--osp-eyebrow-tracking);
+  text-transform: uppercase;
+  color: var(--osp-text-muted);
+  margin: 0 0 2.5rem;
+}
+
+.markdown-rendered .osp-index-group {
+  font-family: var(--osp-font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: var(--osp-eyebrow-tracking);
+  text-transform: uppercase;
+  color: var(--osp-text-muted);
+  margin: 2.5rem 0 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: var(--osp-rule) solid var(--osp-border);
+}
+
+.markdown-rendered .osp-index {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: var(--osp-measure);
+}
+
+.markdown-rendered .osp-index-item {
+  margin: 0;
+  padding: 0;
+}
+
+.markdown-rendered .osp-index-item a {
   display: block;
-  padding: 0.9rem 0;
+  padding: 0.55rem 0;
   color: var(--osp-text);
   text-decoration: none;
-  font-family: var(--osp-font-ui);
+  font-family: var(--osp-font-display);
+  font-size: 1.05rem;
+  border-bottom: var(--osp-rule) solid transparent;
+  transition: color 90ms ease;
 }
-.osp-index a:hover { color: var(--osp-link); }
-.osp-index-path {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--osp-text-muted);
-  margin-top: 0.15rem;
+
+.markdown-rendered .osp-index-item a:hover {
+  color: var(--osp-link);
+}
+
+/* A wide index reads better in columns than as one long ribbon. */
+@media (min-width: 60rem) {
+  .markdown-rendered .osp-index {
+    columns: 2;
+    column-gap: 3rem;
+  }
+  .markdown-rendered .osp-index-item {
+    break-inside: avoid;
+  }
 }
 `;
 

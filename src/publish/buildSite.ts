@@ -44,6 +44,15 @@ export interface SiteConfig {
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
   /**
+   * Custom domain for the published site, written to a CNAME file.
+   *
+   * GitHub Pages reads the domain from a file in the branch, not from the
+   * repository settings alone, and a publish that sends a complete tree
+   * without it would silently un-set a domain the user had configured in the
+   * web UI. So once it is set here it is written on every publish.
+   */
+  customDomain?: string;
+  /**
    * Refuse to publish when a page contains content from an unpublished note.
    *
    * Off by default, and that default is a judgement call rather than an
@@ -351,6 +360,12 @@ export async function buildSite(
   // Obsidian attachment folders are commonly named `_attachments`.
   files.push({ path: ".nojekyll", content: "" });
 
+  // Pages takes the custom domain from this file. Writing a full tree every
+  // time means omitting it would remove a domain the user had already set,
+  // so it goes in whenever one is configured.
+  const domain = config.customDomain?.trim();
+  if (domain) files.push({ path: "CNAME", content: `${domain}\n` });
+
   const htmlFiles = files.filter((f) => f.path.endsWith(".html"));
   const invalidNesting = htmlFiles.reduce(
     (sum, f) => sum + countInvalidNesting(f.content as string),
@@ -413,13 +428,50 @@ function countMatches(html: string, needle: string): number {
   return html.split(needle).length - 1;
 }
 
+/**
+ * The site's front page.
+ *
+ * A flat list of every file was fine for seven test notes and is useless at
+ * three hundred: it tells a reader the vault has a lot in it and nothing
+ * about what. So pages are grouped by the folder they came from, which is
+ * the structure the author already made and the one they will recognise.
+ *
+ * Pages at the top level lead, because a vault's loose notes are usually its
+ * entry points, and folders follow in alphabetical order.
+ */
 function buildIndex(config: SiteConfig, pages: PageResult[]): string {
-  const items = pages
-    .map(
-      (page) =>
-        `<li><a href="${page.url}">${escapeHtml(page.title)}<span class="osp-index-path">${escapeHtml(page.url)}</span></a></li>`,
-    )
+  const groups = new Map<string, PageResult[]>();
+  for (const page of pages) {
+    const slash = page.url.lastIndexOf("/");
+    const group = slash === -1 ? "" : page.url.slice(0, slash);
+    const bucket = groups.get(group);
+    if (bucket) bucket.push(page);
+    else groups.set(group, [page]);
+  }
+
+  const ordered = Array.from(groups.entries()).sort(([a], [b]) => {
+    if (a === "") return -1;
+    if (b === "") return 1;
+    return a.localeCompare(b);
+  });
+
+  const sections = ordered
+    .map(([group, items]) => {
+      const heading = group
+        ? `<h2 class="osp-index-group">${escapeHtml(group.replace(/\//g, " / "))}</h2>`
+        : "";
+      const list = items
+        .map(
+          (page) =>
+            `<li class="osp-index-item"><a href="${page.url}">${escapeHtml(page.title)}</a></li>`,
+        )
+        .join("\n          ");
+      return `${heading}\n        <ul class="osp-index">\n          ${list}\n        </ul>`;
+    })
     .join("\n        ");
+
+  const count = pages.length;
+  const lead = `<p class="osp-index-lead">${count} ${count === 1 ? "page" : "pages"}.</p>`;
 
   return buildPage({
     meta: {
@@ -427,7 +479,8 @@ function buildIndex(config: SiteConfig, pages: PageResult[]): string {
       url: "index.html",
       siteName: config.siteName,
     },
-    content: `<ul class="osp-index">\n        ${items}\n      </ul>`,
+    content: `${lead}\n        ${sections}`,
     headings: [],
   });
 }
+
