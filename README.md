@@ -1,4 +1,4 @@
-# vault-publisher
+# Vault Publisher
 
 Publishes an Obsidian vault as a static website, rendered by Obsidian itself.
 
@@ -37,6 +37,12 @@ src/publish/    turning rendered HTML into a site
   buildSite.ts    selection, render, assemble
 src/github/
   client.ts       Git Data API: blobs, tree, commit, ref, Pages
+src/platform/   things only a desktop Electron host can do
+  secrets.ts      token encryption via the OS keychain
+  migrate.ts      carrying settings across a change of plugin id
+  backgroundThrottling.ts
+src/ui/
+  settingsTab.ts  the settings screen
 research/       findings, including the competitive scan and spike results
 docs/           the working plan
 ```
@@ -51,6 +57,8 @@ node scripts/deploy.mjs /path/to/vault
 ```
 
 The test vault lives outside this repo, at `~/Documents/Obsidian/spike-vault`, so plugin source is never mixed up with the notes used to exercise it. Override with `VAULT_PUBLISHER_VAULT` or a path argument.
+
+The plugin id is `vault-publisher`; it shipped during development as `site-publisher-spike`, and the first run under the new id imports the old settings and offers to delete the folder they came from.
 
 The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking, which is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and bump the manifest version to trigger a reload.
 

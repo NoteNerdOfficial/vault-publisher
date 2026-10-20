@@ -1,11 +1,11 @@
 {
-  "id": "site-publisher-spike",
-  "name": "Site Publisher (spike)",
-  "version": "0.0.56",
+  "id": "vault-publisher",
+  "name": "Vault Publisher",
+  "version": "0.0.58",
   "minAppVersion": "1.7.2",
-  "description": "Render-fidelity spike: renders notes through Obsidian and serializes the result to HTML.",
+  "description": "Publishes your vault as a static website, rendered by Obsidian itself, so Dataview, Bases and Mermaid output survives.",
   "author": "NoteNerd",
-  "authorUrl": "",
+  "authorUrl": "https://github.com/NoteNerdOfficial",
   "fundingUrl": "",
   "isDesktopOnly": true
 }

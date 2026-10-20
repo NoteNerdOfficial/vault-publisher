@@ -21,6 +21,11 @@ import {
 } from "./platform/secrets";
 import { VaultPublisherSettingsTab } from "./ui/settingsTab";
 import {
+  findLegacyFolder,
+  hasStoredSettings,
+  migrateLegacySettings,
+} from "./platform/migrate";
+import {
   probeBackgroundThrottling,
   suspendBackgroundThrottling,
 } from "./platform/backgroundThrottling";
@@ -37,7 +42,7 @@ import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
  */
 
 const INPUT_FOLDER = "spike-notes";
-const OUTPUT_FOLDER = "_spike-output";
+const OUTPUT_FOLDER = "_vault-publisher";
 const PREVIEW_FOLDER = "_site-preview";
 
 interface Settings {
@@ -79,7 +84,7 @@ interface NoteReport {
   probes: ProbeResult[];
 }
 
-export default class SitePublisherSpike extends Plugin {
+export default class VaultPublisherPlugin extends Plugin {
   settings: Settings = DEFAULT_SETTINGS;
 
   /**
@@ -153,7 +158,7 @@ export default class SitePublisherSpike extends Plugin {
       await this.appendRunLog(
         `FAILED ${mode} after ${Math.round(performance.now() - started)}ms\n\n${detail}`,
       );
-      new Notice(`Site Publisher: ${mode} failed, see ${OUTPUT_FOLDER}/run-log.md`);
+      new Notice(`Vault Publisher: ${mode} failed, see ${OUTPUT_FOLDER}/run-log.md`);
     }
   }
 
@@ -175,7 +180,23 @@ export default class SitePublisherSpike extends Plugin {
   }
 
   private async loadSettings(): Promise<void> {
-    const stored = (await this.loadData()) as Partial<Settings> | null;
+    let stored = (await this.loadData()) as Partial<Settings> | null;
+
+    // Renaming the plugin changed its id, and Obsidian keys plugin data by
+    // id, so a renamed plugin starts with nothing. Pull the old settings
+    // across once, on a run that has none of its own.
+    if (!hasStoredSettings(stored)) {
+      const migrated = await migrateLegacySettings(this.app);
+      if (migrated.data) {
+        stored = migrated.data as Partial<Settings>;
+        this.legacyFolder = migrated.staleFolder;
+        new Notice(
+          `Vault Publisher: brought your settings over from ${migrated.from}.`,
+          6000,
+        );
+      }
+    }
+
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...stored,
@@ -185,6 +206,37 @@ export default class SitePublisherSpike extends Plugin {
     // The token lives encrypted on disk and in the clear only in memory, so
     // everything downstream can use it without knowing about any of this.
     this.settings.github.token = revealToken(this.settings.github.token);
+
+    // Write straight away, so the next load finds our own data and the
+    // migration does not run again -- including after a deliberate reset.
+    if (this.legacyFolder) await this.saveSettings();
+
+    // Independently of whether a migration just happened: if the old folder
+    // is still on disk, the settings screen should keep offering to remove
+    // it, because it still contains a copy of the token.
+    this.legacyFolder = this.legacyFolder ?? (await findLegacyFolder(this.app));
+  }
+
+  /** Old plugin folder left behind by a rename, if there was one. */
+  legacyFolder: string | null = null;
+
+  /**
+   * Deletes the folder the plugin used to live in.
+   *
+   * Only ever called from the settings screen, by someone who has read what
+   * is in it. The folder is inside the vault's own config directory and was
+   * written by an earlier version of this plugin, so this is not reaching
+   * into anything that is not ours.
+   */
+  async removeLegacyFolder(): Promise<boolean> {
+    if (!this.legacyFolder) return false;
+    try {
+      await this.app.vault.adapter.rmdir(this.legacyFolder, true);
+      this.legacyFolder = null;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -309,7 +361,7 @@ export default class SitePublisherSpike extends Plugin {
     const path = this.settings.diagnosePath ?? "spike-notes/02-dataview-table.md";
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
-      new Notice(`Site Publisher: no note at ${path}`);
+      new Notice(`Vault Publisher: no note at ${path}`);
       return;
     }
 
@@ -367,7 +419,7 @@ export default class SitePublisherSpike extends Plugin {
   async publish(): Promise<void> {
     const { github } = this.settings;
     if (!github.token || !github.owner || !github.repo) {
-      new Notice("Site Publisher: set github.owner, github.repo and github.token first");
+      new Notice("Vault Publisher: set the repository and token in settings first");
       return;
     }
 
@@ -382,7 +434,7 @@ export default class SitePublisherSpike extends Plugin {
     const say = (line: string) => {
       log.push(line);
       this.progress?.(line);
-      new Notice(`Site Publisher: ${line}`, 3000);
+      new Notice(`Vault Publisher: ${line}`, 3000);
     };
 
     try {
@@ -486,7 +538,7 @@ export default class SitePublisherSpike extends Plugin {
             ? e.message
             : String(e);
       log.push(`FAILED: ${message}`);
-      new Notice(`Site Publisher failed: ${message}`, 8000);
+      new Notice(`Vault Publisher failed: ${message}`, 8000);
     }
 
     await this.writePublishLog(log);
@@ -640,7 +692,7 @@ export default class SitePublisherSpike extends Plugin {
     const app = this.app as App & { plugins?: { plugins?: Record<string, unknown> } };
     const started = performance.now();
 
-    new Notice("Site Publisher spike: starting");
+    new Notice("Vault Publisher: starting");
 
     const dataviewReady = await waitForDataviewIndex(app as never);
     const files = this.app.vault
@@ -649,7 +701,7 @@ export default class SitePublisherSpike extends Plugin {
       .sort((a, b) => a.path.localeCompare(b.path));
 
     if (!files.length) {
-      new Notice(`Site Publisher spike: no notes under ${INPUT_FOLDER}/`);
+      new Notice(`Vault Publisher: no notes under ${INPUT_FOLDER}/`);
       return;
     }
 
@@ -677,7 +729,7 @@ export default class SitePublisherSpike extends Plugin {
     });
 
     new Notice(
-      `Site Publisher spike: ${reports.length} notes in ${Math.round(elapsed)}ms. See ${OUTPUT_FOLDER}/report.md`,
+      `Vault Publisher: ${reports.length} notes in ${Math.round(elapsed)}ms. See ${OUTPUT_FOLDER}/report.md`,
     );
   }
 

@@ -26,6 +26,10 @@ import { describeStorage, storageMode } from "../platform/secrets";
 export interface SettingsHost {
   /** Set by this tab so a running build can report what it is doing. */
   progress: ((step: string, done?: number, total?: number) => void) | null;
+  /** Folder an earlier version of this plugin left behind, if any. */
+  legacyFolder: string | null;
+  /** Deletes that folder. Resolves to false if it could not be removed. */
+  removeLegacyFolder(): Promise<boolean>;
   settings: {
     site: {
       siteName: string;
@@ -65,11 +69,51 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    this.renderLegacyNotice(containerEl);
     this.renderFirstRun(containerEl);
     this.renderConnection(containerEl);
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
     this.renderPublish(containerEl);
+  }
+
+  /**
+   * Offers to clear out the folder the plugin used to live in.
+   *
+   * The rename left a complete copy of the old settings behind, and those
+   * settings include the GitHub token. It is encrypted, and it is still a
+   * credential sitting in a folder nothing will ever load again, inside a
+   * vault that is probably synced. Worth one button rather than a line in a
+   * changelog nobody reads.
+   */
+  private renderLegacyNotice(root: HTMLElement): void {
+    const folder = this.host.legacyFolder;
+    if (!folder) return;
+
+    new Setting(root).setName("Leftover from the old plugin").setHeading();
+
+    new Setting(root)
+      .setName("Remove the previous plugin folder")
+      .setDesc(
+        `Your settings were brought across from ${folder}. That folder still ` +
+          "holds a copy of them, including your GitHub token, and nothing " +
+          "reads it any more.",
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Remove")
+          .setWarning()
+          .onClick(async () => {
+            button.setDisabled(true);
+            const removed = await this.host.removeLegacyFolder();
+            new Notice(
+              removed
+                ? "Removed the old plugin folder."
+                : "Could not remove it; delete it by hand if you want it gone.",
+            );
+            this.display();
+          }),
+      );
   }
 
   /**
