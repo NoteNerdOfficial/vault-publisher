@@ -20,6 +20,8 @@ import {
 } from "./drift";
 import { countInvalidNesting, countLoadingPlaceholders } from "./normalize";
 import { Leak, PrivacyReport, emptyPrivacyReport, scanForLeaks } from "./privacy";
+import { AssetStats, assetUrl, collectAssets, emptyAssetStats } from "./assets";
+import { stabilizeIds } from "./stableIds";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
 
@@ -121,6 +123,8 @@ export interface PageResult {
   bases: BasesStats;
   /** Content from unpublished notes found on this page. */
   privacy: PrivacyReport;
+  /** Images and other media the page referenced. */
+  assets: AssetStats;
   /** How the settle wait ended. "timeout" and "quiet" are the slow paths. */
   settleReason: string;
 }
@@ -153,6 +157,12 @@ export interface BuildResult {
   basesUnhandled: string[];
   /** Every unpublished note whose content reached a page, with where. */
   privacyLeaks: (Leak & { page: string })[];
+  /** Media files copied into the site. */
+  assetsPublished: number;
+  /** Total bytes of media, so a publish can say what it is uploading. */
+  assetBytes: number;
+  /** References that looked like vault media but could not be resolved. */
+  assetsUnresolved: string[];
   /**
    * Whether the build got slower as it ran, measured from control notes.
    *
@@ -205,6 +215,10 @@ export async function buildSite(
   const skipped: { path: string; reason: string }[] = [];
   const driftSamples: DriftSample[] = [];
 
+  // Media is deduplicated across the whole site: one picture used by forty
+  // notes is uploaded once.
+  const wantedAssets = new Map<string, TFile>();
+
   const host = createRenderHost();
   try {
     const renderAll = async () => {
@@ -226,6 +240,7 @@ export async function buildSite(
         const title = titleFor(app, file);
         let bases = emptyBasesStats();
         let privacy = emptyPrivacyReport();
+        let assets = emptyAssetStats();
         const rendered = await renderFile(app, file, host, {
           transform: (container) => {
             dropRedundantTitleHeading(container, title);
@@ -239,8 +254,14 @@ export async function buildSite(
               resolver,
               url,
             ).unresolvedTargets;
+            assets = collectAssets(app, container, file.path, url, {
+              want: (asset) => wantedAssets.set(asset.path, asset),
+            });
             // After rewriting, so downgraded links are visible as such.
             privacy = scanForLeaks(container, unpublished);
+            // Last, so nothing downstream is holding a reference to an id
+            // that is about to change.
+            stabilizeIds(container);
           },
         });
 
@@ -275,6 +296,7 @@ export async function buildSite(
             !rendered.settle.settled && rendered.settle.pendingAtEnd > 0,
           bases,
           privacy,
+          assets,
           settleReason: rendered.settle.reason,
         });
 
@@ -298,6 +320,21 @@ export async function buildSite(
     }
   } finally {
     host.remove();
+  }
+
+  // Media the pages referenced, read once each and carried as binary.
+  let assetBytes = 0;
+  for (const [path, file] of wantedAssets) {
+    try {
+      const data = await app.vault.readBinary(file);
+      assetBytes += data.byteLength;
+      files.push({ path: assetUrl(path), content: data });
+    } catch (error) {
+      skipped.push({
+        path,
+        reason: `could not read media: ${error instanceof Error ? error.message : error}`,
+      });
+    }
   }
 
   // Harvested first, site.css second: ours must win where both have an
@@ -340,6 +377,11 @@ export async function buildSite(
     ),
     privacyLeaks: pages.flatMap((p) =>
       p.privacy.leaks.map((leak) => ({ ...leak, page: p.url })),
+    ),
+    assetsPublished: wantedAssets.size,
+    assetBytes,
+    assetsUnresolved: Array.from(
+      new Set(pages.flatMap((p) => p.assets.unresolved)),
     ),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
   };

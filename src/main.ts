@@ -9,6 +9,11 @@ import { buildSite, BuildResult, SiteConfig } from "./publish/buildSite";
 import { formatBytes } from "./publish/drift";
 import { DEFAULT_THEME } from "./publish/themes";
 import {
+  MANIFEST_PATH,
+  diffAgainstManifest,
+  parseManifest,
+} from "./publish/incremental";
+import {
   describeStorage,
   protectToken,
   revealToken,
@@ -76,6 +81,16 @@ interface NoteReport {
 
 export default class SitePublisherSpike extends Plugin {
   settings: Settings = DEFAULT_SETTINGS;
+
+  /**
+   * Where progress goes while a build or publish runs.
+   *
+   * A publish renders every note in the vault and then talks to GitHub, which
+   * on a large vault is long enough that silence reads as a hang. Notices
+   * scroll away and cannot show a proportion, so the settings screen
+   * registers a sink here and shows the steps as they happen.
+   */
+  progress: ((step: string, done?: number, total?: number) => void) | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -217,7 +232,8 @@ export default class SitePublisherSpike extends Plugin {
     const restoreThrottling = suspendBackgroundThrottling();
     try {
       const result = await buildSite(this.app, this.settings.site, (done, total, path) => {
-        if (done % 10 === 0) new Notice(`Rendering ${done + 1}/${total}: ${path}`, 1000);
+        this.progress?.(`Rendering ${path}`, done, total);
+        if (done % 25 === 0) new Notice(`Rendering ${done + 1}/${total}`, 1000);
       });
       await this.writeBuildReport(result);
       return result;
@@ -365,6 +381,7 @@ export default class SitePublisherSpike extends Plugin {
     const log: string[] = [];
     const say = (line: string) => {
       log.push(line);
+      this.progress?.(line);
       new Notice(`Site Publisher: ${line}`, 3000);
     };
 
@@ -419,10 +436,41 @@ export default class SitePublisherSpike extends Plugin {
         return;
       }
 
+      // Incremental: compare the rendered bytes against what was published
+      // last time, and point unchanged entries at blobs the branch already
+      // holds. The tree stays complete, so deletions still need no
+      // bookkeeping; only the upload shrinks.
+      const [previousRaw, existingBlobs] = await Promise.all([
+        client.readFile(github.branch, MANIFEST_PATH),
+        client.getTreeBlobs(github.branch),
+      ]);
+      const previous = parseManifest(previousRaw);
+      const diff = diffAgainstManifest(result.files, previous, existingBlobs);
+
+      const files = [
+        ...result.files,
+        {
+          path: MANIFEST_PATH,
+          content: JSON.stringify(diff.next, null, 0),
+        },
+      ];
+
+      if (previousRaw) {
+        say(
+          `${diff.changed.length} changed, ${diff.unchanged} unchanged` +
+            (diff.removed.length ? `, ${diff.removed.length} removed` : ""),
+        );
+      }
+      if (diff.changed.length === 0 && diff.removed.length === 0 && previousRaw) {
+        say("nothing to publish: the site is already up to date");
+        await this.writePublishLog(log);
+        return;
+      }
+
       const commit = await client.commitFiles({
         branch: github.branch,
         message: `Publish ${result.pages.length} pages from Obsidian`,
-        files: result.files,
+        files,
       });
       say(`committed ${commit.commitSha.slice(0, 7)} to ${github.branch}`);
 
@@ -466,6 +514,12 @@ export default class SitePublisherSpike extends Plugin {
     lines.push(`Blocks that would break on reparse: ${result.invalidNesting}`);
     lines.push(`Pages serialized incomplete: ${result.incompletePages}`);
     lines.push(`Blocks still showing a loading placeholder: ${result.loadingPlaceholders}`);
+    lines.push(
+      `Media files: ${result.assetsPublished} (${Math.round(result.assetBytes / 1024)} KB)` +
+        (result.assetsUnresolved.length
+          ? `, ${result.assetsUnresolved.length} unresolved`
+          : ""),
+    );
     lines.push("");
 
     lines.push(

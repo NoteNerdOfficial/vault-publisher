@@ -1,5 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import { THEMES } from "../publish/themes";
+import { THEMES, getTheme } from "../publish/themes";
 import { describeStorage, storageMode } from "../platform/secrets";
 
 /**
@@ -24,6 +24,8 @@ import { describeStorage, storageMode } from "../platform/secrets";
  */
 
 export interface SettingsHost {
+  /** Set by this tab so a running build can report what it is doing. */
+  progress: ((step: string, done?: number, total?: number) => void) | null;
   settings: {
     site: {
       siteName: string;
@@ -51,6 +53,8 @@ export interface SettingsHost {
 export class VaultPublisherSettingsTab extends PluginSettingTab {
   private host: SettingsHost;
   private statusEl: HTMLElement | null = null;
+  private progressEl: HTMLElement | null = null;
+  private progressBar: HTMLElement | null = null;
 
   constructor(app: App, host: SettingsHost & { app: App }) {
     super(app, host as never);
@@ -61,10 +65,47 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    this.renderFirstRun(containerEl);
     this.renderConnection(containerEl);
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
     this.renderPublish(containerEl);
+  }
+
+  /**
+   * A checklist, shown only until setup is finished.
+   *
+   * Three screens was the goal, and three screens for someone who has already
+   * set the thing up is two screens too many. So this is not a wizard that
+   * must be clicked through: it is a short list of what is still missing,
+   * which disappears once nothing is.
+   */
+  private renderFirstRun(root: HTMLElement): void {
+    const { github, site } = this.host.settings;
+    const steps: { done: boolean; text: string }[] = [
+      { done: Boolean(github.token), text: "Add a GitHub token" },
+      { done: Boolean(github.owner && github.repo), text: "Name the repository to publish to" },
+      { done: Boolean(site.siteName), text: "Give the site a name" },
+    ];
+    if (steps.every((step) => step.done)) return;
+
+    new Setting(root).setName("Finish setting up").setHeading();
+
+    const list = root.createEl("ol");
+    list.style.cssText =
+      "margin:-0.5em 0 1.5em;padding-left:1.4em;font-size:0.9em;line-height:1.8;";
+    for (const step of steps) {
+      const item = list.createEl("li");
+      item.setText(step.done ? `${step.text} — done` : step.text);
+      item.style.opacity = step.done ? "0.5" : "1";
+      if (step.done) item.style.textDecoration = "line-through";
+    }
+
+    const note = root.createDiv();
+    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-1em 0 1.5em;";
+    note.setText(
+      "The repository is created for you on the first publish, and GitHub Pages is switched on automatically.",
+    );
   }
 
   // -- 1. connect ----------------------------------------------------------
@@ -253,6 +294,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       description.setText(theme.description);
     };
 
+    const preview = root.createDiv();
+    preview.style.cssText = "margin:0 0 1.5em;";
+
     new Setting(root)
       .setName("Style")
       .setDesc("Applied the next time the site is built.")
@@ -262,11 +306,100 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         dropdown.onChange(async (value) => {
           site.theme = value;
           describe();
+          this.renderThemePreview(preview, value);
           await this.host.saveSettings();
         });
       });
 
     describe();
+    this.renderThemePreview(preview, site.theme ?? THEMES[0].name);
+  }
+
+  /**
+   * A sample of the theme, drawn from its own tokens.
+   *
+   * Picking a look from three words and a dropdown is guesswork, and the
+   * honest alternative -- build the site and look -- costs a full render.
+   * This is deliberately a small specimen rather than a screenshot: the
+   * colours, the type pairing and the heading scale all come from the same
+   * token set the published stylesheet uses, so it cannot drift from the
+   * real thing the way a stored image would.
+   *
+   * It is not a page preview and does not pretend to be. Layout, the table
+   * of contents and plugin output are not represented.
+   */
+  private renderThemePreview(host: HTMLElement, themeName: string): void {
+    const theme = getTheme(themeName);
+    const dark = document.body.classList.contains("theme-dark");
+    const palette = { ...theme.base, ...(dark ? theme.dark : theme.light) };
+    const v = (name: string) => palette[name] ?? "";
+
+    host.empty();
+
+    const card = host.createDiv();
+    card.style.cssText = [
+      `background:${v("--osp-bg")}`,
+      `color:${v("--osp-text")}`,
+      `border:1px solid ${v("--osp-border")}`,
+      `border-radius:${v("--osp-radius")}`,
+      "padding:1.1rem 1.25rem",
+      "overflow:hidden",
+    ].join(";");
+
+    const eyebrow = card.createDiv();
+    eyebrow.setText("SPIKE SITE");
+    eyebrow.style.cssText = [
+      `font-family:${v("--osp-font-ui")}`,
+      `color:${v("--osp-text-muted")}`,
+      `letter-spacing:${v("--osp-eyebrow-tracking")}`,
+      "font-size:0.65rem",
+      "font-weight:600",
+      "margin-bottom:0.6rem",
+    ].join(";");
+
+    const heading = card.createDiv();
+    heading.setText("A note about rivers");
+    heading.style.cssText = [
+      `font-family:${v("--osp-font-display")}`,
+      `font-weight:${v("--osp-title-weight")}`,
+      `letter-spacing:${v("--osp-title-tracking")}`,
+      "font-size:1.35rem",
+      "line-height:1.15",
+      "margin-bottom:0.4rem",
+    ].join(";");
+
+    const body = card.createDiv();
+    body.innerHTML =
+      'Water finds the cheapest path downhill, and so does a note that has been ' +
+      'rewritten often enough. <span class="osp-preview-link">A link looks like this</span>.';
+    body.style.cssText = [
+      `font-family:${v("--osp-font-body")}`,
+      `line-height:${v("--osp-line-height")}`,
+      "font-size:0.9rem",
+    ].join(";");
+
+    const link = body.querySelector(".osp-preview-link") as HTMLElement | null;
+    if (link) {
+      link.style.cssText = [
+        `color:${v("--osp-link")}`,
+        "text-decoration:underline",
+        `text-decoration-thickness:${v("--osp-link-underline")}`,
+        "text-underline-offset:3px",
+      ].join(";");
+    }
+
+    const swatches = card.createDiv();
+    swatches.style.cssText = "display:flex;gap:6px;margin-top:0.9rem;";
+    for (const token of ["--osp-accent", "--osp-link", "--osp-surface", "--osp-border"]) {
+      const dot = swatches.createDiv();
+      dot.style.cssText = [
+        "width:16px",
+        "height:16px",
+        "border-radius:50%",
+        `background:${v(token)}`,
+        `border:1px solid ${v("--osp-border")}`,
+      ].join(";");
+    }
   }
 
   // -- 4. publish ----------------------------------------------------------
@@ -274,15 +407,42 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   private renderPublish(root: HTMLElement): void {
     new Setting(root).setName("Publish").setHeading();
 
+    this.progressEl = root.createDiv();
+    this.progressEl.style.cssText =
+      "font-size:0.9em;margin:0 0 0.75em;min-height:1.3em;color:var(--text-muted);";
+
+    const track = root.createDiv();
+    track.style.cssText =
+      "height:4px;border-radius:2px;background:var(--background-modifier-border);margin:0 0 1.25em;overflow:hidden;";
+    this.progressBar = track.createDiv();
+    this.progressBar.style.cssText =
+      "height:100%;width:0;background:var(--interactive-accent);transition:width 120ms linear;";
+
+    // The sink stays registered for the life of the tab: a publish started
+    // from here keeps reporting even if the user scrolls away, and a publish
+    // started from the command palette fills this in if the tab is open.
+    this.host.progress = (step, done, total) => {
+      if (this.progressEl) this.progressEl.setText(step);
+      if (this.progressBar) {
+        const pct =
+          done !== undefined && total ? Math.round((done / total) * 100) : null;
+        this.progressBar.style.width = pct === null ? "100%" : `${pct}%`;
+        this.progressBar.style.opacity = pct === null ? "0.35" : "1";
+      }
+    };
+
     new Setting(root)
       .setName("Build a preview")
       .setDesc("Renders the site into a folder in this vault without sending anything to GitHub.")
       .addButton((button) =>
         button.setButtonText("Build preview").onClick(async () => {
           button.setDisabled(true);
+          this.setProgress("Starting…");
           try {
             await this.host.buildToPreview();
+            this.setProgress("Preview built.");
           } catch (error) {
+            this.setProgress("Build failed.");
             new Notice(`Build failed: ${error instanceof Error ? error.message : error}`);
           } finally {
             button.setDisabled(false);
@@ -299,15 +459,26 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setCta()
           .onClick(async () => {
             button.setDisabled(true);
+            this.setProgress("Starting…");
             try {
               await this.host.publish();
             } catch (error) {
+              this.setProgress("Publish failed.");
               new Notice(`Publish failed: ${error instanceof Error ? error.message : error}`);
             } finally {
               button.setDisabled(false);
             }
           }),
       );
+  }
+
+  private setProgress(text: string): void {
+    this.host.progress?.(text);
+  }
+
+  /** Stops reporting into elements that are about to be discarded. */
+  hide(): void {
+    this.host.progress = null;
   }
 
   private setStatus(message: string, kind: "ok" | "error" | "info" = "info"): void {

@@ -38,6 +38,14 @@ export interface PublishFile {
   /** Path within the repository, with no leading slash. */
   path: string;
   content: string | ArrayBuffer;
+  /**
+   * Blob already in the repository holding exactly this content.
+   *
+   * When set, the tree entry points at it and the bytes are not sent again.
+   * The tree stays complete either way, so a file simply absent from it is
+   * still deleted; only the upload is skipped, never the entry.
+   */
+  existingSha?: string;
 }
 
 export class GitHubError extends Error {
@@ -75,6 +83,16 @@ export class GitHubClient {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
           "Content-Type": "application/json",
+          // Without these a second publish fails with "Update is not a fast
+          // forward". GitHub serves refs with an ETag, the HTTP stack
+          // answers the next read from cache, and the branch tip we commit
+          // against is the one from *before* the previous publish moved it.
+          // Measured: two publishes sixteen seconds apart, the second
+          // rejected. A stale read here is not a slow cache, it is a wrong
+          // parent commit.
+          "Cache-Control": "no-cache, no-store, max-age=0",
+          Pragma: "no-cache",
+          "If-None-Match": "",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         // We handle non-2xx ourselves so the error carries GitHub's own
@@ -225,7 +243,14 @@ export class GitHubClient {
 
     const tree: TreeEntry[] = [];
     for (const file of files) {
-      if (typeof file.content === "string") {
+      if (file.existingSha) {
+        tree.push({
+          path: file.path,
+          mode: FILE_MODE,
+          type: "blob",
+          sha: file.existingSha,
+        });
+      } else if (typeof file.content === "string") {
         tree.push({
           path: file.path,
           mode: FILE_MODE,
@@ -270,6 +295,58 @@ export class GitHubClient {
   }
 
   /** The authenticated user, used to confirm the token and fill in the owner. */
+  /**
+   * Every file on a branch, as path to blob sha.
+   *
+   * Used to point a tree entry at bytes the repository already has instead of
+   * uploading them again. Returns an empty map for a branch that does not
+   * exist yet, which is the first publish.
+   */
+  async getTreeBlobs(branch: string): Promise<Map<string, string>> {
+    const base = `/repos/${this.config.owner}/${this.config.repo}`;
+    const head = await this.getRef(branch);
+    if (!head) return new Map();
+
+    try {
+      const commit = await this.request<{ tree: { sha: string } }>(
+        "GET",
+        `${base}/git/commits/${head}`,
+      );
+      const tree = await this.request<{
+        tree: { path: string; type: string; sha: string }[];
+        truncated?: boolean;
+      }>("GET", `${base}/git/trees/${commit.tree.sha}?recursive=1`);
+
+      // A truncated listing is missing entries, and a missing entry only
+      // means that file gets uploaded again. Correct, just less thrifty.
+      const blobs = new Map<string, string>();
+      for (const entry of tree.tree) {
+        if (entry.type === "blob") blobs.set(entry.path, entry.sha);
+      }
+      return blobs;
+    } catch {
+      // Losing this costs bandwidth, never correctness: without it every
+      // file is simply sent in full.
+      return new Map();
+    }
+  }
+
+  /** Reads one file from a branch, or null when it is not there. */
+  async readFile(branch: string, path: string): Promise<string | null> {
+    const base = `/repos/${this.config.owner}/${this.config.repo}`;
+    try {
+      const response = await this.request<{ content?: string; encoding?: string }>(
+        "GET",
+        `${base}/contents/${encodeURI(path)}?ref=${encodeURIComponent(branch)}`,
+      );
+      if (!response.content) return null;
+      const cleaned = response.content.replace(/\n/g, "");
+      return decodeURIComponent(escape(atob(cleaned)));
+    } catch {
+      return null;
+    }
+  }
+
   async getViewer(): Promise<{ login: string }> {
     return this.request<{ login: string }>("GET", "/user");
   }
