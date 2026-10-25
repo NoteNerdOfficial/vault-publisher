@@ -1,6 +1,12 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
-import { describeStorage, storageMode } from "../platform/secrets";
+import { isScopeChosen } from "../publish/buildSite";
+import {
+  TokenState,
+  describeStorage,
+  describeTokenState,
+  storageMode,
+} from "../platform/secrets";
 
 /**
  * The settings screen.
@@ -30,13 +36,19 @@ export interface SettingsHost {
   legacyFolder: string | null;
   /** Deletes that folder. Resolves to false if it could not be removed. */
   removeLegacyFolder(): Promise<boolean>;
+  /** Whether the stored token could be read. */
+  tokenState: TokenState;
+  /** Replaces the token. Use this rather than assigning to settings. */
+  setToken(value: string): void;
   settings: {
     site: {
       siteName: string;
-      folder: string;
+      /** Folder path, `""` for the whole vault, `null` for unchosen. */
+      folder: string | null;
       requireFrontmatterFlag: string | null;
       theme?: string;
       failOnPrivacyLeak?: boolean;
+      failOnTruncatedBase?: boolean;
       customDomain?: string;
     };
     github: {
@@ -60,6 +72,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   private statusEl: HTMLElement | null = null;
   private progressEl: HTMLElement | null = null;
   private progressBar: HTMLElement | null = null;
+  /**
+   * Whether the folder field is showing, when no folder has been typed yet.
+   *
+   * Not persisted: it only disambiguates a state the stored value cannot,
+   * which is "wants a folder, has not named one". Once a folder is named the
+   * value speaks for itself, and on a reopen that is what it is read from.
+   */
+  private folderMode = false;
+
+  /** Which of the three scope states the controls should show. */
+  private scopeMode(): "unset" | "vault" | "folder" {
+    const folder = this.host.settings.site.folder;
+    if (folder === "") return "vault";
+    if (folder !== null) return "folder";
+    return this.folderMode ? "folder" : "unset";
+  }
 
   constructor(app: App, host: SettingsHost & { app: App }) {
     super(app, host as never);
@@ -131,6 +159,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       { done: Boolean(github.token), text: "Add a GitHub token" },
       { done: Boolean(github.owner && github.repo), text: "Name the repository to publish to" },
       { done: Boolean(site.siteName), text: "Give the site a name" },
+      { done: isScopeChosen(site), text: "Choose what to publish" },
     ];
     if (steps.every((step) => step.done)) return;
 
@@ -173,10 +202,20 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             // An untouched field shows dots; only a real edit replaces the
             // stored token, or opening settings would wipe it.
             if (value.includes("•")) return;
-            github.token = value.trim();
+            this.host.setToken(value.trim());
             await this.host.saveSettings();
           });
       });
+
+    // A token that is present but unreadable. Worth its own notice, because
+    // the field looks empty and the remedy is not to paste a new token.
+    const trouble = describeTokenState(this.host.tokenState);
+    if (trouble) {
+      const notice = root.createDiv({ cls: "osp-settings-warning" });
+      notice.setText(trouble);
+      notice.style.cssText =
+        "font-size:0.85em;opacity:0.8;border-left:2px solid var(--text-warning);padding-left:0.75em;margin:0 0 1em;";
+    }
 
     if (storageMode() === "plaintext") {
       const warning = root.createDiv({ cls: "osp-settings-warning" });
@@ -296,18 +335,48 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }),
       );
 
+    // Three states, so a control with three states. A text box cannot tell
+    // "the whole vault" from "I have not decided", and the difference between
+    // those two is every private note in the vault.
     new Setting(root)
-      .setName("Folder")
-      .setDesc("Only notes inside this folder are published. Leave empty for the whole vault.")
-      .addText((text) =>
-        text
-          .setPlaceholder("(whole vault)")
-          .setValue(site.folder)
-          .onChange(async (value) => {
-            site.folder = value.trim().replace(/^\/+|\/+$/g, "");
-            await this.host.saveSettings();
-          }),
-      );
+      .setName("Scope")
+      .setDesc(
+        "Publishing the whole vault publishes every note in it. Choose " +
+          "deliberately: this is the setting that decides what becomes public.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("unset", "— choose —");
+        dropdown.addOption("vault", "The whole vault");
+        dropdown.addOption("folder", "One folder");
+        dropdown.setValue(this.scopeMode());
+        dropdown.onChange(async (value) => {
+          // Picking "One folder" does not itself choose a scope: an empty
+          // folder path is not an answer. So the stored value stays null
+          // until something is typed, and only the mode changes.
+          this.folderMode = value === "folder";
+          site.folder = value === "vault" ? "" : null;
+          await this.host.saveSettings();
+          // Redrawn because the folder field below appears and disappears
+          // with this choice, and the checklist above it changes too.
+          this.display();
+        });
+      });
+
+    if (this.scopeMode() === "folder") {
+      new Setting(root)
+        .setName("Folder")
+        .setDesc("Only notes inside this folder are published.")
+        .addText((text) =>
+          text
+            .setPlaceholder("notes")
+            .setValue(site.folder ?? "")
+            .onChange(async (value) => {
+              const trimmed = value.trim().replace(/^\/+|\/+$/g, "");
+              site.folder = trimmed || null;
+              await this.host.saveSettings();
+            }),
+        );
+    }
 
     new Setting(root)
       .setName("Require a frontmatter flag")
@@ -337,6 +406,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setValue(site.failOnPrivacyLeak ?? false)
           .onChange(async (value) => {
             site.failOnPrivacyLeak = value;
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Refuse to publish a shortened Bases view")
+      .setDesc(
+        "Bases only builds the rows it is currently showing, so a long view " +
+          "reaches the publisher short. Published pages say how many rows " +
+          "they are showing; turn this on to stop the publish instead.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(site.failOnTruncatedBase ?? false)
+          .onChange(async (value) => {
+            site.failOnTruncatedBase = value;
             await this.host.saveSettings();
           }),
       );
@@ -409,7 +494,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     ].join(";");
 
     const eyebrow = card.createDiv();
-    eyebrow.setText("SPIKE SITE");
+    eyebrow.setText(
+      (this.host.settings.site.siteName || "Your site").toUpperCase(),
+    );
     eyebrow.style.cssText = [
       `font-family:${v("--osp-font-ui")}`,
       `color:${v("--osp-text-muted")}`,

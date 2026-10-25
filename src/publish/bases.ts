@@ -108,6 +108,7 @@ export function reemitBases(root: HTMLElement): BasesStats {
     const emitted = Number(figure.dataset.ospRows ?? "0");
     if (claimed !== null && emitted < claimed) {
       stats.truncated.push(`${name || type}: ${emitted}/${claimed}`);
+      noteTruncation(figure, emitted, claimed);
     }
     delete figure.dataset.ospRows;
 
@@ -115,6 +116,33 @@ export function reemitBases(root: HTMLElement): BasesStats {
   }
 
   return stats;
+}
+
+/**
+ * Says on the page that a view is showing fewer rows than it found.
+ *
+ * Bases only builds the rows it is currently showing, so a long view reaches
+ * us with most of its rows never having existed in the DOM. For a while that
+ * refused the whole publish, which meant one long base stopped a three
+ * hundred note site from going out at all -- a guard against publishing
+ * something quietly wrong, turned into a guarantee of publishing nothing.
+ *
+ * So the rows we have are published and the gap is stated, in the output
+ * rather than in a log. A reader can see that the table is partial, which is
+ * the thing the silent version got wrong. `failOnTruncatedBase` restores the
+ * refusal for anyone who would rather not publish at all.
+ */
+function noteTruncation(
+  figure: HTMLElement,
+  emitted: number,
+  claimed: number,
+): void {
+  const note = figure.ownerDocument.createElement("p");
+  note.className = "osp-base-truncated";
+  note.textContent =
+    `Showing ${emitted} of ${claimed} rows. ` +
+    "This view is interactive in Obsidian.";
+  figure.append(note);
 }
 
 /**

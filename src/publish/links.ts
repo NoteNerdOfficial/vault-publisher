@@ -15,6 +15,8 @@
  * about it would be the wrong default.
  */
 
+import { decodeUrlComponent, encodeUrlPath } from "./urls";
+
 export interface LinkTarget {
   /** Vault path of a note being published, e.g. "library/pattern-language.md". */
   sourcePath: string;
@@ -133,7 +135,9 @@ function replaceWithSpan(anchor: HTMLAnchorElement): void {
   const span = anchor.ownerDocument.createElement("span");
   span.className = "osp-unresolved-link";
   span.textContent = anchor.textContent ?? "";
-  // Preserved so a hover title or an audit can still tell what was meant.
+  // The target names a note that is not being published, so this is written
+  // only for `scanForLeaks` to report on. `stripDebugAttributes` removes it
+  // afterwards -- it must not reach the published HTML.
   span.setAttribute("data-osp-unresolved", anchor.getAttribute("href") ?? "");
   anchor.replaceWith(span);
 }
@@ -151,7 +155,9 @@ export function relativeUrl(fromUrl: string, toUrl: string): string {
 
   const up = from.length - shared;
   const segments = [...Array(up).fill(".."), ...to.slice(shared), file];
-  const joined = segments.join("/");
+  // Encoded here because this is the last point before the value becomes an
+  // href: a note named "Draft #2" otherwise produces a link to nowhere.
+  const joined = encodeUrlPath(segments.join("/"));
   // "./" keeps a bare filename from being read as a protocol-relative or
   // scheme-like reference when a note's name contains a colon.
   return joined.startsWith("..") ? joined : `./${joined}`;
@@ -169,7 +175,7 @@ function stripExtension(path: string): string {
 
 /** Obsidian link matching ignores case and treats separators loosely. */
 function normalizeKey(value: string): string {
-  return decodeURIComponent(value).trim().toLowerCase();
+  return decodeUrlComponent(value).trim().toLowerCase();
 }
 
 /** Heading anchors have to match the ids the page generator emits. */

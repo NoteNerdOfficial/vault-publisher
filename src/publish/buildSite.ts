@@ -8,6 +8,7 @@ import {
   buildPage,
   dropRedundantTitleHeading,
   escapeHtml,
+  stripFrontmatter,
 } from "./page";
 import { harvestCss, harvestToStylesheet } from "./harvestCss";
 import { BasesStats, emptyBasesStats, reemitBases } from "./bases";
@@ -19,9 +20,22 @@ import {
   summarizeDrift,
 } from "./drift";
 import { countInvalidNesting, countLoadingPlaceholders } from "./normalize";
-import { Leak, PrivacyReport, emptyPrivacyReport, scanForLeaks } from "./privacy";
-import { AssetStats, assetUrl, collectAssets, emptyAssetStats } from "./assets";
+import {
+  Leak,
+  PrivacyReport,
+  emptyPrivacyReport,
+  indexUnpublished,
+  scanForLeaks,
+} from "./privacy";
+import {
+  AssetStats,
+  DEFAULT_MAX_ASSET_BYTES,
+  assetUrl,
+  collectAssets,
+  emptyAssetStats,
+} from "./assets";
 import { stabilizeIds, stripDebugAttributes } from "./stableIds";
+import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
 
@@ -37,8 +51,18 @@ import { PublishFile } from "../github/client";
 
 export interface SiteConfig {
   siteName: string;
-  /** Only notes under this folder are published. Empty means the whole vault. */
-  folder: string;
+  /**
+   * Which notes to publish: a folder path, `""` for the whole vault, or
+   * `null` for "the user has not chosen yet".
+   *
+   * The three-way distinction is the point. A publisher whose scope defaults
+   * to a folder name publishes nothing when that folder does not exist, and
+   * one that defaults to the whole vault publishes every private note in it
+   * on the first run. Neither default is safe, so there is no default: `null`
+   * means unchosen, and `isScopeChosen` is what the callers and the first-run
+   * checklist both ask before anything is built.
+   */
+  folder: string | null;
   /** When set, a note must also have this frontmatter key set to true. */
   requireFrontmatterFlag: string | null;
   /** Theme name from themes.ts. Falls back to the default when unknown. */
@@ -63,6 +87,26 @@ export interface SiteConfig {
    * vault that holds anything genuinely private can turn this on.
    */
   failOnPrivacyLeak?: boolean;
+  /**
+   * Refuse to publish when a Bases view is showing fewer rows than it found.
+   *
+   * Off by default, and for the same reason as the setting above: Bases only
+   * builds the rows it is currently showing, so a view of any length arrives
+   * short, and refusing by default meant one long base blocked an entire
+   * site. The gap is now stated on the page itself, which is the honest
+   * minimum. Turn this on to go back to refusing.
+   */
+  failOnTruncatedBase?: boolean;
+  /**
+   * Largest single attachment to publish, in bytes. Defaults to 25 MiB.
+   *
+   * A vault can hold a 4 GB screen recording, and nothing stopped one from
+   * being read into memory, base64-encoded and pushed at the Git Data API --
+   * which would fail the whole publish slowly and opaquely, after everything
+   * else had succeeded. Over the ceiling the file is skipped and reported, so
+   * the rest of the site still publishes.
+   */
+  maxAssetBytes?: number;
   /**
    * Suspend Dataview's periodic refresh while rendering.
    *
@@ -179,10 +223,34 @@ export interface BuildResult {
    * nothing degraded, only that nothing was watching.
    */
   drift: DriftReport | null;
+  /**
+   * How many notes the scope matched, before any of them were rendered.
+   *
+   * Separate from `pages.length`, which counts what survived rendering. The
+   * difference is the whole question when a build comes back empty: a filter
+   * that matched nothing is a misconfiguration, while a filter that matched
+   * three hundred notes that all failed to render is a fault. A publish
+   * sends a complete tree, so publishing an empty build would not publish
+   * nothing -- it would delete the site.
+   */
+  selectedCount: number;
+}
+
+/**
+ * True once the user has said what to publish.
+ *
+ * A frontmatter flag is a scope in its own right -- "every note marked
+ * `publish: true`, wherever it lives" is a complete answer -- so it satisfies
+ * this on its own even while the folder is unchosen.
+ */
+export function isScopeChosen(
+  site: Pick<SiteConfig, "folder" | "requireFrontmatterFlag">,
+): boolean {
+  return site.folder !== null || Boolean(site.requireFrontmatterFlag);
 }
 
 /** Vault path to published URL. Keeps folder structure, swaps the extension. */
-export function urlForNote(sourcePath: string, folder: string): string {
+export function urlForNote(sourcePath: string, folder: string | null): string {
   const relative =
     folder && sourcePath.startsWith(`${folder}/`)
       ? sourcePath.slice(folder.length + 1)
@@ -213,11 +281,13 @@ export async function buildSite(
   // query result can be recognised as belonging to a note the reader was
   // never meant to see.
   const published = new Set(selected.map((file) => file.path));
-  const unpublished = new Map<string, string>();
+  const unpublishedByName = new Map<string, string>();
   for (const file of app.vault.getMarkdownFiles()) {
     if (published.has(file.path)) continue;
-    unpublished.set(file.basename.toLowerCase(), file.path);
+    unpublishedByName.set(file.basename.toLowerCase(), file.path);
   }
+  // Compiled once here, not once per page: see `indexUnpublished`.
+  const unpublished = indexUnpublished(unpublishedByName);
 
   const files: PublishFile[] = [];
   const pages: PageResult[] = [];
@@ -227,6 +297,7 @@ export async function buildSite(
   // Media is deduplicated across the whole site: one picture used by forty
   // notes is uploaded once.
   const wantedAssets = new Map<string, TFile>();
+  const oversizedAssets = new Map<string, string>();
 
   const host = createRenderHost();
   try {
@@ -252,6 +323,10 @@ export async function buildSite(
         let assets = emptyAssetStats();
         const rendered = await renderFile(app, file, host, {
           transform: (container) => {
+            // First, before anything else reads the tree: the frontmatter is
+            // not content, and nothing downstream should be deciding what to
+            // do about it.
+            stripFrontmatter(container);
             dropRedundantTitleHeading(container, title);
             // Before link rewriting: re-emitting moves cell nodes rather than
             // flattening them to text, so the `.internal-link` elements a
@@ -263,9 +338,17 @@ export async function buildSite(
               resolver,
               url,
             ).unresolvedTargets;
-            assets = collectAssets(app, container, file.path, url, {
-              want: (asset) => wantedAssets.set(asset.path, asset),
-            });
+            assets = collectAssets(
+              app,
+              container,
+              file.path,
+              url,
+              { want: (asset) => wantedAssets.set(asset.path, asset) },
+              config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
+            );
+            for (const item of assets.oversized) {
+              oversizedAssets.set(item.path, item.reason);
+            }
             // After rewriting, so downgraded links are visible as such.
             privacy = scanForLeaks(container, unpublished);
             // Last, so nothing downstream is holding a reference to an id
@@ -331,6 +414,10 @@ export async function buildSite(
   } finally {
     host.remove();
   }
+
+  // Attachments `collectAssets` refused, reported once however many pages
+  // referenced them.
+  for (const [path, reason] of oversizedAssets) skipped.push({ path, reason });
 
   // Media the pages referenced, read once each and carried as binary.
   let assetBytes = 0;
@@ -400,10 +487,11 @@ export async function buildSite(
       new Set(pages.flatMap((p) => p.assets.unresolved)),
     ),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
+    selectedCount: selected.length,
   };
 }
 
-function selectNotes(app: App, config: SiteConfig): TFile[] {
+export function selectNotes(app: App, config: SiteConfig): TFile[] {
   return app.vault
     .getMarkdownFiles()
     .filter((file) => {
@@ -464,7 +552,9 @@ function buildIndex(config: SiteConfig, pages: PageResult[]): string {
       const list = items
         .map(
           (page) =>
-            `<li class="osp-index-item"><a href="${page.url}">${escapeHtml(page.title)}</a></li>`,
+            `<li class="osp-index-item"><a href="${escapeHtml(
+              encodeUrlPath(page.url),
+            )}">${escapeHtml(page.title)}</a></li>`,
         )
         .join("\n          ");
       return `${heading}\n        <ul class="osp-index">\n          ${list}\n        </ul>`;

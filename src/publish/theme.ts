@@ -155,6 +155,17 @@ body {
   cursor: help;
 }
 
+/* An embed whose file could not be resolved. The reference was removed
+   rather than published, so present the alt text as a caption would read
+   instead of leaving a browser's broken-image icon. */
+.osp-oversized-asset,
+.osp-unresolved-asset {
+  display: inline-block;
+  color: var(--osp-text-muted);
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
 .markdown-rendered ul,
 .markdown-rendered ol { padding-left: 1.4rem; margin: 0 0 1.25rem; }
 .markdown-rendered li { margin: 0.3rem 0; }
@@ -244,7 +255,12 @@ body {
 .markdown-rendered .task-list-item { list-style: none; }
 .markdown-rendered .task-list-item input { margin-right: 0.5rem; }
 
-.markdown-rendered mjx-container { overflow-x: auto; max-width: 100%; }
+.markdown-rendered mjx-container {
+  max-width: 100%;
+  /* Do not make the MathJax line box a vertical scroll container. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 
 .markdown-rendered img { max-width: 100%; height: auto; border-radius: 4px; }
 
@@ -397,6 +413,16 @@ body {
   color: var(--osp-text-muted);
   border-left: 2px solid var(--osp-border);
   padding-left: 0.75rem;
+  margin: 0.5rem 0 0;
+}
+
+/* A view showing fewer rows than it found. Quieter than an error, because it
+   is not one, but it has to be visible: a partial table that says nothing is
+   indistinguishable from a complete one. */
+.markdown-rendered .osp-base-truncated {
+  font-family: var(--osp-font-ui);
+  font-size: 0.78rem;
+  color: var(--osp-text-muted);
   margin: 0.5rem 0 0;
 }
 

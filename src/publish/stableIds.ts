@@ -39,14 +39,20 @@ const VOLATILE_PATTERNS: { test: RegExp; prefix: string }[] = [
 ];
 
 /**
- * Attributes a framework leaves behind that mean nothing on a published page.
+ * Attributes that mean nothing on a published page, and should not be in one.
  *
  * Datacore builds its views with JSX, and the transform it ships adds
  * `__self` and `__source` to every element for debugging. They serialize as
  * `__self="[object Object]"`, which is noise in the output and a small
  * amount of information about the author's file paths.
+ *
+ * `data-osp-unresolved` is ours: `rewriteLinks` records the original target
+ * of a link that pointed at an unpublished note, and `scanForLeaks` reads it
+ * to report what the page gestures at. Both have finished by the time this
+ * runs, and the value is the name of a note the author chose not to publish,
+ * so it must not survive into the HTML.
  */
-const DEBUG_ATTRIBUTES = ["__self", "__source"];
+const DEBUG_ATTRIBUTES = ["__self", "__source", "data-osp-unresolved"];
 
 /** Removes framework debug attributes from the whole subtree. */
 export function stripDebugAttributes(root: HTMLElement): number {

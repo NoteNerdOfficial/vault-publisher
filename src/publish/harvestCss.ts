@@ -83,6 +83,17 @@ function variablesOnly(rule: CSSStyleRule, prefixes: string[]): string {
 }
 
 /**
+ * MathJax's layout rules refer to custom fonts such as MJXTEX and MJXZERO.
+ * These are CSSFontFaceRules rather than selector rules, so they cannot be
+ * found by selectorMatchesPrefixes but are still required for correct glyph
+ * metrics (fractions, integrals, superscripts, and stretchy delimiters).
+ */
+function isMathJaxFontFace(rule: CSSFontFaceRule): boolean {
+  const family = rule.style.getPropertyValue("font-family").toLowerCase();
+  return family.includes("mjx");
+}
+
+/**
  * Walks the loaded stylesheets and returns the rules whose selectors mention
  * one of `prefixes`. At-rules are recursed into so media-query and supports
  * blocks are not silently dropped, and are re-emitted with their condition.
@@ -148,6 +159,17 @@ function collectRules(
       if (selectorMatchesPrefixes(rule.name, prefixes)) {
         out.push({ origin, cssText: rule.cssText });
       }
+      continue;
+    }
+
+    // MathJax's glyph fonts are not optional decoration: without them the
+    // browser falls back to ordinary serif fonts while retaining MathJax's
+    // measured layout, which makes equations visibly misaligned.
+    if (rule instanceof CSSFontFaceRule && isMathJaxFontFace(rule)) {
+      out.push({
+        origin,
+        cssText: wrap ? `${wrap} { ${rule.cssText} }` : rule.cssText,
+      });
     }
   }
 }

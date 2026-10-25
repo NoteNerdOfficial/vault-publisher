@@ -83,25 +83,97 @@ export function protectToken(token: string): string {
   }
 }
 
+/**
+ * What came back from trying to read the stored token.
+ *
+ * `locked` and `lost` were previously indistinguishable, and that cost the
+ * user their token. Both returned `""`, the settings screen showed the field
+ * as empty, and the next save -- changing the site name was enough -- wrote
+ * that empty value over the ciphertext. A token that was merely unreadable
+ * for a moment was destroyed by looking at the settings.
+ */
+export type TokenState =
+  /** Nothing stored. */
+  | "none"
+  /** Decrypted, or stored in plaintext. Usable. */
+  | "ready"
+  /**
+   * Ciphertext is present but `safeStorage` is not available right now --
+   * Obsidian withdrew the `remote` bridge, or the keychain is locked. The
+   * stored value is still good and must be left exactly as it is.
+   */
+  | "locked"
+  /**
+   * Decryption was attempted and failed: a different machine, a reset
+   * keychain, a changed OS user. Not recoverable; the user needs a new token.
+   */
+  | "lost";
+
+export interface RevealedToken {
+  readonly state: TokenState;
+  /** The usable token. Empty unless `state` is `ready`. */
+  readonly token: string;
+  /** Exactly what was on disk, to be written back untouched when unreadable. */
+  readonly sealed: string;
+}
+
 /** Decrypts a stored token. A value that was never encrypted passes through. */
-export function revealToken(stored: string): string {
-  if (!stored) return "";
-  if (!stored.startsWith(ENCRYPTED_PREFIX)) return stored;
+export function revealToken(stored: string): RevealedToken {
+  if (!stored) return { state: "none", token: "", sealed: "" };
+  if (!stored.startsWith(ENCRYPTED_PREFIX)) {
+    return { state: "ready", token: stored, sealed: stored };
+  }
 
   const storage = safeStorage();
   const payload = stored.slice(ENCRYPTED_PREFIX.length);
-  if (!storage) return "";
+  if (!storage) return { state: "locked", token: "", sealed: stored };
 
   try {
     const req = nodeRequire();
     const Buffer = req ? req("buffer").Buffer : (globalThis as any).Buffer;
-    return storage.decryptString(Buffer.from(payload, "base64"));
+    const token = storage.decryptString(Buffer.from(payload, "base64"));
+    return { state: "ready", token, sealed: stored };
   } catch {
-    // Wrong machine, reset keychain, or a changed OS user. The token is not
-    // recoverable and the user has to paste a new one; returning empty makes
-    // the settings UI show it as missing rather than show mojibake.
-    return "";
+    return { state: "lost", token: "", sealed: stored };
   }
+}
+
+/** What to tell the user, or null when there is nothing wrong. */
+export function describeTokenState(state: TokenState): string | null {
+  switch (state) {
+    case "locked":
+      return (
+        "Your saved token could not be read right now, because this platform " +
+        "is not offering encrypted storage in this session. It has been left " +
+        "untouched on disk -- restarting Obsidian usually restores access. " +
+        "Entering a new token here will replace it."
+      );
+    case "lost":
+      return (
+        "Your saved token could not be decrypted. This happens when the vault " +
+        "has moved to another machine or user account, or the system keychain " +
+        "was reset. Paste a new token to replace it."
+      );
+    default:
+      return null;
+  }
+}
+
+/**
+ * What to write to disk for the token.
+ *
+ * `inMemory` is the usable token, empty when there is none or it could not be
+ * read. `sealed` is what was already on disk, empty once the user has
+ * deliberately edited the field.
+ *
+ * The rule in one place because getting it wrong destroys a token: ciphertext
+ * we could not open, with nothing offered to replace it, is written back
+ * exactly as it was. Re-encrypting an empty string would overwrite it, and
+ * the save that does so is triggered by any unrelated settings change.
+ */
+export function tokenForStorage(inMemory: string, sealed: string): string {
+  if (sealed && !inMemory) return sealed;
+  return protectToken(inMemory);
 }
 
 /** True when the stored value is ciphertext rather than a bare token. */

@@ -55,6 +55,61 @@ export function emptyPrivacyReport(): PrivacyReport {
   return { leaks: [], notes: [] };
 }
 
+/**
+ * The unpublished notes, prepared once for the whole build.
+ *
+ * The textual scan used to build one regex per unpublished note and test each
+ * one against each generated block, so the work scaled with
+ * (unpublished x blocks x pages) -- and a vault that publishes a small subset
+ * of a large vault is both the shape that needs this scan most and the one the
+ * 300-note scale test never exercised. Publishing 10 notes out of 2,000 with
+ * four queries a page meant roughly 80,000 regex compilations.
+ *
+ * Instead the names go into one alternation, compiled once here and reused for
+ * every page: each block is scanned in a single pass, and the matched text
+ * says which note was found. Longest names first, so a note called
+ * "api design" is preferred over a note called "api" where both could match.
+ */
+export interface UnpublishedIndex {
+  /** Lower-cased basename to vault path. */
+  readonly byName: Map<string, string>;
+  /** Alternations over the names. Empty when nothing is unpublished. */
+  readonly patterns: readonly RegExp[];
+}
+
+/**
+ * Names per alternation. A regex over thousands of alternatives is slow to
+ * compile and can exceed what the engine will accept, so the names are
+ * batched; a handful of passes over a block is still far less work than one
+ * pass per name.
+ */
+const NAMES_PER_PATTERN = 400;
+
+/** A character that may not sit against a name for it to count as a match. */
+const WORD_CHARACTER = "[\\p{L}\\p{N}_-]";
+
+export function indexUnpublished(byName: Map<string, string>): UnpublishedIndex {
+  const names = Array.from(byName.keys())
+    .filter((name) => name.length > 0)
+    .sort((a, b) => b.length - a.length || a.localeCompare(b));
+
+  const patterns: RegExp[] = [];
+  for (let i = 0; i < names.length; i += NAMES_PER_PATTERN) {
+    const batch = names.slice(i, i + NAMES_PER_PATTERN).map(escapeRegExp);
+    patterns.push(
+      // Lookaround rather than capturing the neighbouring characters: a
+      // consuming boundary would swallow the gap between two adjacent names
+      // and miss the second one.
+      new RegExp(
+        `(?<!${WORD_CHARACTER})(${batch.join("|")})(?!${WORD_CHARACTER})`,
+        "giu",
+      ),
+    );
+  }
+
+  return { byName, patterns };
+}
+
 /** Shortens a run of output to something readable in a report table. */
 function excerpt(text: string, limit = 70): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -65,12 +120,13 @@ function excerpt(text: string, limit = 70): string {
  * Scans a rendered page for content belonging to notes that are not being
  * published.
  *
- * `unpublished` maps a lower-cased basename to the note's vault path. Names
- * are matched rather than paths because that is what query output prints.
+ * Names are matched rather than paths because that is what query output
+ * prints. Build the index once with `indexUnpublished` and pass it for every
+ * page.
  */
 export function scanForLeaks(
   root: HTMLElement,
-  unpublished: Map<string, string>,
+  unpublished: UnpublishedIndex,
 ): PrivacyReport {
   const leaks: Leak[] = [];
   const seen = new Set<string>();
@@ -93,7 +149,7 @@ export function scanForLeaks(
       el.textContent ??
       "";
     const name = basename(target);
-    const path = unpublished.get(name);
+    const path = unpublished.byName.get(name);
     if (path) record(path, "link", excerpt(el.textContent ?? name));
   }
 
@@ -101,19 +157,48 @@ export function scanForLeaks(
   for (const block of Array.from(
     root.querySelectorAll(GENERATED_BLOCK_SELECTOR),
   )) {
-    const text = block.textContent ?? "";
-    if (!text.trim()) continue;
-    for (const [name, path] of unpublished) {
-      // Word-ish boundaries: a note called "api" should not match "rapid".
-      const pattern = new RegExp(
-        `(^|[^\\p{L}\\p{N}_-])${escapeRegExp(name)}([^\\p{L}\\p{N}_-]|$)`,
-        "iu",
-      );
-      if (pattern.test(text)) record(path, "text", excerpt(text));
+    const text = blockText(block);
+    if (!text) continue;
+    for (const pattern of unpublished.patterns) {
+      // Shared across pages, so the lastIndex a global regex carries between
+      // calls has to be cleared rather than inherited.
+      pattern.lastIndex = 0;
+      for (const match of text.matchAll(pattern)) {
+        const path = unpublished.byName.get(match[1].toLowerCase());
+        if (path) record(path, "text", excerpt(text));
+      }
     }
   }
 
   return { leaks, notes: Array.from(new Set(leaks.map((l) => l.sourcePath))) };
+}
+
+/**
+ * The text of a generated block, with element boundaries preserved.
+ *
+ * `textContent` concatenates, so a Dataview table of `<td>The Glass Bead
+ * Game</td><td>1943</td>` reads as "The Glass Bead Game1943" -- and the name
+ * is then followed by a digit, so a word-boundary match fails and the leak is
+ * missed. Since query output is overwhelmingly tables, that was most of what
+ * this scan exists to catch.
+ *
+ * Joined with a newline rather than a space on purpose: a space would let two
+ * unrelated cells, "Design" and "Patterns", read as a note called "design
+ * patterns" and report a leak that is not there. A note name cannot contain a
+ * newline, so this separator can only prevent false negatives, never create
+ * false positives.
+ */
+function blockText(block: Element): string {
+  const walker = block.ownerDocument.createTreeWalker(
+    block,
+    NodeFilter.SHOW_TEXT,
+  );
+  const parts: string[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue ?? "";
+    if (value.trim()) parts.push(value);
+  }
+  return parts.join("\n");
 }
 
 function basename(target: string): string {

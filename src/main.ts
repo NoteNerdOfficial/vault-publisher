@@ -5,7 +5,12 @@ import { findStaticHazards, probeHtml, ProbeResult } from "./render/probe";
 import { probeStylesheets } from "./render/cssProbe";
 import { waitForDataviewIndex } from "./render/settle";
 import { countInvalidNesting } from "./publish/normalize";
-import { buildSite, BuildResult, SiteConfig } from "./publish/buildSite";
+import {
+  buildSite,
+  BuildResult,
+  SiteConfig,
+  isScopeChosen,
+} from "./publish/buildSite";
 import { formatBytes } from "./publish/drift";
 import { DEFAULT_THEME } from "./publish/themes";
 import {
@@ -14,10 +19,13 @@ import {
   parseManifest,
 } from "./publish/incremental";
 import {
+  TokenState,
   describeStorage,
+  describeTokenState,
   protectToken,
   revealToken,
   storageMode,
+  tokenForStorage,
 } from "./platform/secrets";
 import { VaultPublisherSettingsTab } from "./ui/settingsTab";
 import {
@@ -64,8 +72,12 @@ interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   autoRun: "none",
   site: {
-    siteName: "Spike Site",
-    folder: "spike-notes",
+    // No site name and no scope: both have to be chosen. A placeholder name
+    // would tick the first-run checklist's own box, and either possible
+    // default for the scope is wrong in a way the user would not find out
+    // about until after they had published. See `isScopeChosen`.
+    siteName: "",
+    folder: null,
     requireFrontmatterFlag: null,
     theme: DEFAULT_THEME,
   },
@@ -205,7 +217,10 @@ export default class VaultPublisherPlugin extends Plugin {
     };
     // The token lives encrypted on disk and in the clear only in memory, so
     // everything downstream can use it without knowing about any of this.
-    this.settings.github.token = revealToken(this.settings.github.token);
+    const revealed = revealToken(this.settings.github.token);
+    this.settings.github.token = revealed.token;
+    this.tokenState = revealed.state;
+    this.sealedToken = revealed.sealed;
 
     // Write straight away, so the next load finds our own data and the
     // migration does not run again -- including after a deliberate reset.
@@ -219,6 +234,31 @@ export default class VaultPublisherPlugin extends Plugin {
 
   /** Old plugin folder left behind by a rename, if there was one. */
   legacyFolder: string | null = null;
+
+  /** Whether the stored token could be read, so the UI can say why not. */
+  tokenState: TokenState = "none";
+
+  /**
+   * The token exactly as it sits on disk.
+   *
+   * Held so that a save can put back what it could not read. Without this, an
+   * unreadable token became an empty one on the next write.
+   */
+  sealedToken = "";
+
+  /**
+   * Replaces the token, from the settings screen.
+   *
+   * Going through here rather than assigning to `settings.github.token` is
+   * what makes the preservation in `saveSettings` safe: a deliberate edit
+   * drops the sealed value, so clearing the field really does clear the
+   * token, while an incidental save leaves it alone.
+   */
+  setToken(value: string): void {
+    this.settings.github.token = value;
+    this.tokenState = value ? "ready" : "none";
+    this.sealedToken = "";
+  }
 
   /**
    * Deletes the folder the plugin used to live in.
@@ -246,12 +286,14 @@ export default class VaultPublisherPlugin extends Plugin {
    * needs it on every request; only what reaches disk is protected.
    */
   async saveSettings(): Promise<void> {
+    const token = tokenForStorage(
+      this.settings.github.token,
+      this.sealedToken,
+    );
+
     await this.saveData({
       ...this.settings,
-      github: {
-        ...this.settings.github,
-        token: protectToken(this.settings.github.token),
-      },
+      github: { ...this.settings.github, token },
     });
   }
 
@@ -294,9 +336,46 @@ export default class VaultPublisherPlugin extends Plugin {
     }
   }
 
+  /**
+   * Describes the scope, for a message that tells someone what to change.
+   *
+   * "No notes matched" sends a user looking at their vault. Naming the folder
+   * and the flag that did the filtering sends them to the setting.
+   */
+  private describeScope(): string {
+    const { folder, requireFrontmatterFlag } = this.settings.site;
+    const where =
+      folder === null
+        ? "no folder chosen"
+        : folder === ""
+          ? "the whole vault"
+          : `the folder "${folder}"`;
+    return requireFrontmatterFlag
+      ? `${where}, with "${requireFrontmatterFlag}: true" required in frontmatter`
+      : where;
+  }
+
   async buildToPreview(): Promise<void> {
+    if (!isScopeChosen(this.settings.site)) {
+      new Notice(
+        "Vault Publisher: choose what to publish in settings first.",
+        6000,
+      );
+      return;
+    }
+
     new Notice("Building site...");
     const result = await this.build();
+
+    // A preview is how someone checks a filter, so an empty one is a result
+    // rather than a fault. It still has to say so: an empty preview folder
+    // and a preview that was never written look identical on disk.
+    if (result.selectedCount === 0) {
+      new Notice(
+        `Vault Publisher: no notes matched (${this.describeScope()}).`,
+        8000,
+      );
+    }
 
     const adapter = this.app.vault.adapter;
     for (const file of result.files) {
@@ -335,7 +414,7 @@ export default class VaultPublisherPlugin extends Plugin {
         const sealed = protectToken(sample);
         const opened = revealToken(sealed);
         return [
-          `Round trip: ${opened === sample ? "OK" : "FAILED"}`,
+          `Round trip: ${opened.token === sample ? "OK" : `FAILED (${opened.state})`}`,
           `Stored form: \`${sealed.slice(0, 24)}${sealed.length > 24 ? "…" : ""}\``,
           "",
         ];
@@ -418,8 +497,25 @@ export default class VaultPublisherPlugin extends Plugin {
 
   async publish(): Promise<void> {
     const { github } = this.settings;
+    // Said separately from the generic gate below: "your token is there but
+    // unreadable" calls for restarting Obsidian, not for pasting a new token,
+    // and the two were previously reported as the same thing.
+    if (!github.token && this.tokenState !== "none") {
+      new Notice(
+        `Vault Publisher: ${describeTokenState(this.tokenState) ?? "token unavailable"}`,
+        12000,
+      );
+      return;
+    }
     if (!github.token || !github.owner || !github.repo) {
       new Notice("Vault Publisher: set the repository and token in settings first");
+      return;
+    }
+    if (!isScopeChosen(this.settings.site)) {
+      new Notice(
+        "Vault Publisher: choose what to publish in settings first.",
+        6000,
+      );
       return;
     }
 
@@ -452,13 +548,37 @@ export default class VaultPublisherPlugin extends Plugin {
         say(`using ${repo.full_name}`);
       }
 
+      // A publish makes a handful of requests plus one blob per changed
+      // binary, so a few hundred left is fine and a few dozen is not. Said
+      // before the work starts, because failing half way through leaves the
+      // branch committed and Pages rebuilding.
+      const remaining = client.rateRemaining;
+      if (remaining !== null && remaining < 100) {
+        say(`WARNING: only ${remaining} GitHub API requests left this hour`);
+      }
+
       const result = await this.build();
       say(`built ${result.pages.length} pages, ${result.files.length} files`);
 
+      // Before anything else is checked. A publish sends a complete tree, so
+      // committing a build that selected nothing does not publish an empty
+      // site -- it replaces a live one with an empty site. The likeliest
+      // cause is a folder that does not exist, which is a typo away.
+      if (result.selectedCount === 0) {
+        say(`ABORTED: no notes matched (${this.describeScope()})`);
+        await this.writePublishLog(log);
+        return;
+      }
+
+      // Said here as well as in the build report: a note or an attachment
+      // that did not make it is exactly the thing someone needs to be told
+      // without going looking.
+      for (const skip of result.skipped) {
+        say(`SKIPPED ${skip.path}: ${skip.reason}`);
+      }
+
       // Every one of these means the built site differs from what Obsidian
-      // shows, which is the one promise this plugin exists to keep. A
-      // truncated Bases view is the quietest of them: the table looks
-      // perfectly well-formed and is simply missing rows.
+      // shows, which is the one promise this plugin exists to keep.
       const privacyNotes = new Set(
         result.privacyLeaks.map((leak) => leak.sourcePath),
       );
@@ -474,16 +594,33 @@ export default class VaultPublisherPlugin extends Plugin {
         return;
       }
 
+      // Always reported, whether or not it stops the publish. A shortened
+      // Bases view is the quietest way this can be wrong: the table looks
+      // perfectly well-formed and is simply missing rows. The page now says
+      // so itself, so this is the operator's copy of the same fact.
+      if (result.basesTruncated.length) {
+        say(
+          `${result.basesTruncated.length} bases view(s) published shortened, see the build report`,
+        );
+        for (const view of result.basesTruncated) say(`  shortened: ${view}`);
+      }
+
+      if (this.settings.site.failOnTruncatedBase && result.basesTruncated.length) {
+        say(
+          `ABORTED: refusing to publish with ${result.basesTruncated.length} shortened bases view(s)`,
+        );
+        await this.writePublishLog(log);
+        return;
+      }
+
       if (
         result.invalidNesting > 0 ||
         result.incompletePages > 0 ||
-        result.loadingPlaceholders > 0 ||
-        result.basesTruncated.length > 0
+        result.loadingPlaceholders > 0
       ) {
         say(
-          `ABORTED: ${result.invalidNesting} blocks would break on reparse, ${result.incompletePages} pages serialized incomplete, ${result.loadingPlaceholders} blocks still loading, ${result.basesTruncated.length} bases views truncated`,
+          `ABORTED: ${result.invalidNesting} blocks would break on reparse, ${result.incompletePages} pages serialized incomplete, ${result.loadingPlaceholders} blocks still loading`,
         );
-        for (const view of result.basesTruncated) say(`  truncated: ${view}`);
         await this.writePublishLog(log);
         return;
       }
@@ -492,6 +629,13 @@ export default class VaultPublisherPlugin extends Plugin {
       // last time, and point unchanged entries at blobs the branch already
       // holds. The tree stays complete, so deletions still need no
       // bookkeeping; only the upload shrinks.
+      // The tip the incremental diff is about to be computed against. A
+      // publish sends a complete tree, so if the branch moves between these
+      // reads and the commit below, our tree silently reverts whatever landed
+      // in between -- another device, a second window, a direct edit on
+      // GitHub. Captured first, checked at the commit.
+      const baseSha = await client.getRef(github.branch);
+
       const [previousRaw, existingBlobs] = await Promise.all([
         client.readFile(github.branch, MANIFEST_PATH),
         client.getTreeBlobs(github.branch),
@@ -523,6 +667,7 @@ export default class VaultPublisherPlugin extends Plugin {
         branch: github.branch,
         message: `Publish ${result.pages.length} pages from Obsidian`,
         files,
+        expectedHeadSha: baseSha,
       });
       say(`committed ${commit.commitSha.slice(0, 7)} to ${github.branch}`);
 
@@ -531,6 +676,14 @@ export default class VaultPublisherPlugin extends Plugin {
 
       log.push(`\nSite URL: ${pages.html_url ?? "(see repo settings)"}`);
     } catch (e) {
+      // The one failure with a specific remedy: nothing was committed, and
+      // publishing again rebuilds against what is now on the branch.
+      if (e instanceof GitHubError && e.status === 409) {
+        say("ABORTED: the branch moved while this publish was being prepared");
+        say("nothing was committed -- publish again to rebuild against it");
+        await this.writePublishLog(log);
+        return;
+      }
       const message =
         e instanceof GitHubError
           ? `${e.message} [status ${e.status}]`

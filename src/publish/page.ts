@@ -30,6 +30,38 @@ export interface Heading {
 }
 
 /**
+ * Where Obsidian puts a note's frontmatter in rendered output.
+ *
+ * The site stylesheet hides these too (`theme.ts`, search for
+ * `.frontmatter`). Keep the two lists in step: the stylesheet is the belt and
+ * this is the braces, and the braces are the half that matters.
+ */
+export const FRONTMATTER_SELECTOR = ".frontmatter, .frontmatter-container";
+
+/**
+ * Removes the note's frontmatter from the page.
+ *
+ * `MarkdownRenderer.render` is handed the whole file, YAML and all, and emits
+ * the frontmatter as an element it expects a stylesheet to hide. Hidden is not
+ * the same as absent: `display: none` still serializes, so every published
+ * page was carrying its note's full frontmatter in the HTML source, readable
+ * by anyone who looked.
+ *
+ * The privacy scan does not cover this. It looks for content belonging to
+ * notes that are *not* being published, which is a different question from a
+ * published note's own metadata -- and a vault that uses a frontmatter flag to
+ * decide what is public is, by construction, keeping decisions in exactly the
+ * place this was exposing.
+ *
+ * Returns how many elements were removed, so a build can report it.
+ */
+export function stripFrontmatter(root: HTMLElement): number {
+  const found = Array.from(root.querySelectorAll(FRONTMATTER_SELECTOR));
+  for (const el of found) el.remove();
+  return found.length;
+}
+
+/**
  * Removes a leading <h1> that just repeats the page title.
  *
  * Writing `# Title` at the top of a note is near-universal habit, and the

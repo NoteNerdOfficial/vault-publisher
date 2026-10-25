@@ -1,4 +1,5 @@
 import { requestUrl, RequestUrlResponse } from "obsidian";
+import { encodeUrlPath } from "../publish/urls";
 
 /**
  * Pushing a built site to GitHub without git, and without Actions.
@@ -64,6 +65,17 @@ export class GitHubError extends Error {
 export class GitHubClient {
   constructor(private readonly config: GitHubConfig) {}
 
+  private lastRateRemaining: number | null = null;
+
+  /**
+   * Requests left in the hour, as of the last response, or null if this host
+   * does not report it. Read after the preflight calls so a publish can warn
+   * before it starts uploading rather than fail part way through.
+   */
+  get rateRemaining(): number | null {
+    return this.lastRateRemaining;
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -110,17 +122,26 @@ export class GitHubClient {
     }
 
     const rateRemaining = parseRate(response.headers);
+    // Every response carries this, and until now it was read and thrown away
+    // unless the request failed -- so a publish could not warn before it ran
+    // out, only explain afterwards.
+    if (rateRemaining !== null) this.lastRateRemaining = rateRemaining;
 
     if (response.status >= 400) {
-      const message =
+      const apiMessage =
         (response.json as { message?: string } | undefined)?.message ??
         `HTTP ${response.status}`;
-      throw new GitHubError(
-        `${method} ${path} failed: ${message}`,
-        response.status,
-        response.json ?? response.text,
-        rateRemaining,
-      );
+      // A 403 with nothing left in the quota is a rate limit, not a
+      // permissions problem, and GitHub's own message says "rate limit
+      // exceeded" only sometimes. Saying when it refills is the useful part.
+      const exhausted =
+        rateRemaining === 0 &&
+        (response.status === 403 || response.status === 429);
+      const reset = exhausted ? parseRateReset(response.headers) : null;
+      const message = exhausted
+        ? `GitHub API rate limit reached${reset ? `, refills at ${reset}` : ""}. Nothing was committed.`
+        : `${method} ${path} failed: ${apiMessage}`;
+      throw new GitHubError(message, response.status, response.json ?? response.text, rateRemaining);
     }
 
     return response.json as T;
@@ -337,7 +358,9 @@ export class GitHubClient {
     try {
       const response = await this.request<{ content?: string; encoding?: string }>(
         "GET",
-        `${base}/contents/${encodeURI(path)}?ref=${encodeURIComponent(branch)}`,
+        // Per segment, not encodeURI: that leaves "%", "#" and "?" alone, so a
+        // note called "50% done" produced a malformed request URL.
+        `${base}/contents/${encodeUrlPath(path)}?ref=${encodeURIComponent(branch)}`,
       );
       if (!response.content) return null;
       const cleaned = response.content.replace(/\n/g, "");
@@ -381,15 +404,30 @@ interface TreeEntry {
   sha?: string;
 }
 
-function parseRate(headers: Record<string, string>): number | null {
+function parseNumericHeader(
+  headers: Record<string, string>,
+  name: string,
+): number | null {
   // Header casing varies between GitHub.com and Enterprise Server.
+  const wanted = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === "x-ratelimit-remaining") {
+    if (key.toLowerCase() === wanted) {
       const n = Number(value);
       return Number.isFinite(n) ? n : null;
     }
   }
   return null;
+}
+
+function parseRate(headers: Record<string, string>): number | null {
+  return parseNumericHeader(headers, "x-ratelimit-remaining");
+}
+
+/** When the quota refills, as a local time, or null if the header is absent. */
+function parseRateReset(headers: Record<string, string>): string | null {
+  const seconds = parseNumericHeader(headers, "x-ratelimit-reset");
+  if (seconds === null) return null;
+  return new Date(seconds * 1000).toLocaleTimeString();
 }
 
 /**
