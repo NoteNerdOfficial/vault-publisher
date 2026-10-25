@@ -9,7 +9,9 @@ docs/
 research/
 
 # Local working agreement, not part of the published plugin.
+# AGENTS.md is a symlink to CLAUDE.md, for agents that read that name.
 CLAUDE.md
+AGENTS.md
 
 # Test vaults live outside the repo, so the plugin source is never confused
 # with the content used to exercise it. See docs/PLAN.md for the path.

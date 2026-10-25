@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# Keeps tool attribution out of commit messages. See CLAUDE.md: the
+# repository owner is the sole author of every commit.
+
+set -e
+msg_file="$1"
+fail=0
+say() { printf '\033[31mcommit-msg:\033[0m %s\n' "$1" >&2; fail=1; }
+
+# Comment lines are git's own template, not part of the message.
+body=$(grep -v '^#' "$msg_file" || true)
+
+printf '%s' "$body" | grep -qiE '^[[:space:]]*co-authored-by:' \
+  && say "message carries a Co-Authored-By trailer"
+
+printf '%s' "$body" | grep -qiE 'generated with|co-?authored (by|with) (claude|an? (ai|llm|assistant))|🤖' \
+  && say "message credits a tool"
+
+if [ "$fail" -ne 0 ]; then
+  printf '\nThe owner is the sole author. Remove the attribution line.\n' >&2
+  exit 1
+fi

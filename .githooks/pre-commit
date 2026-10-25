@@ -1,0 +1,64 @@
+#!/bin/sh
+#
+# Enforces the rules in CLAUDE.md that can be checked mechanically.
+#
+# A rule in a document is advisory: it works only for an agent that read the
+# document and chose to follow it. This hook applies to every commit in this
+# clone, by any agent or any human, whether or not they have read anything.
+#
+# Install: git config core.hooksPath .githooks
+# Bypass:  git commit --no-verify   <- do not. If a check is wrong, fix the
+#          check, so the next commit is protected too.
+
+set -e
+
+NOREPLY="users.noreply.github.com"
+fail=0
+say() { printf '\033[31mpre-commit:\033[0m %s\n' "$1" >&2; fail=1; }
+
+# -- 1. Identity -----------------------------------------------------------
+# Resolved the way git will resolve it for this commit, including any
+# per-command override, so an override cannot slip past.
+author=$(git var GIT_AUTHOR_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
+committer=$(git var GIT_COMMITTER_IDENT | sed -n 's/.*<\(.*\)>.*/\1/p')
+
+case "$author" in
+  *"$NOREPLY") ;;
+  *) say "author email is '$author', not a $NOREPLY address" ;;
+esac
+case "$committer" in
+  *"$NOREPLY") ;;
+  *) say "committer email is '$committer', not a $NOREPLY address" ;;
+esac
+
+# -- 2. Secrets and personal data in the staged content --------------------
+# Only added lines are checked: a pre-existing problem is not this commit's
+# to fix, and flagging it would make the hook impossible to get past.
+added=$(git diff --cached --no-color -U0 | grep '^+' | grep -v '^+++' || true)
+
+if [ -n "$added" ]; then
+  printf '%s' "$added" | grep -qE 'ghp_[A-Za-z0-9]{16}|github_pat_[A-Za-z0-9_]{20}' \
+    && say "a GitHub token appears in the staged changes"
+
+  printf '%s' "$added" | grep -qE 'enc:v1:[A-Za-z0-9+/=]{40,}' \
+    && say "what looks like real keychain ciphertext appears in the staged changes"
+
+  # Personal email addresses. The noreply address is allowed; so is the
+  # placeholder shape used in the token field's own UI text.
+  emails=$(printf '%s' "$added" \
+    | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+    | grep -v "$NOREPLY" | grep -vE '@example\.(com|org)$' | sort -u || true)
+  [ -n "$emails" ] && say "email address in the staged changes: $(printf '%s' "$emails" | tr '\n' ' ')"
+
+  # Absolute home-directory paths. A deliberately fictional one in a test is
+  # allowed by name, because the test that proves paths do not leak needs one.
+  paths=$(printf '%s' "$added" \
+    | grep -oE '/(Users|home)/[A-Za-z0-9._-]+' \
+    | grep -vE '^/Users/(somebody|example-user|test-user)$' | sort -u || true)
+  [ -n "$paths" ] && say "absolute home path in the staged changes: $(printf '%s' "$paths" | tr '\n' ' ')"
+fi
+
+if [ "$fail" -ne 0 ]; then
+  printf '\nSee CLAUDE.md. Fix the above rather than passing --no-verify.\n' >&2
+  exit 1
+fi
