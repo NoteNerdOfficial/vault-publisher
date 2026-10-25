@@ -79,6 +79,8 @@ const DEFAULT_SETTINGS: Settings = {
     siteName: "",
     folder: null,
     requireFrontmatterFlag: null,
+    updatedProperty: "updated",
+    pinnedProperty: "pinned",
     theme: DEFAULT_THEME,
   },
   github: {

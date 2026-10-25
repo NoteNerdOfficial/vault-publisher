@@ -133,3 +133,42 @@ export function countLoadingPlaceholders(html: string): number {
     // blocks a reader would actually see stuck.
     .filter((el) => !el.parentElement?.closest(selector)).length;
 }
+
+/**
+ * Makes plugin output honest on a static page. DataviewJS can create controls
+ * whose event listeners disappear during serialization, and Datacore can
+ * stringify an error object as `[object Object]`. Neither should be shipped
+ * as if it were functioning content.
+ */
+export function normalizeStaticPluginOutput(root: HTMLElement): number {
+  let changed = 0;
+
+  for (const block of Array.from(root.querySelectorAll(".block-language-datacorejsx"))) {
+    if ((block.textContent ?? "").trim() !== "[object Object]" || block.children.length) continue;
+    block.textContent = "Datacore could not render this block.";
+    block.classList.add("osp-datacore-error");
+    changed++;
+  }
+
+  for (const block of Array.from(root.querySelectorAll(".block-language-dataviewjs"))) {
+    for (const control of Array.from(block.querySelectorAll("button, input, select, textarea"))) {
+      const replacement = root.ownerDocument.createElement("span");
+      replacement.className = "osp-static-control";
+      replacement.textContent = staticControlText(control);
+      control.replaceWith(replacement);
+      changed++;
+    }
+  }
+
+  return changed;
+}
+
+function staticControlText(control: Element): string {
+  if (control instanceof HTMLInputElement) {
+    if (control.type === "checkbox") return control.checked ? "☑" : "☐";
+    return control.value || control.getAttribute("placeholder") || "";
+  }
+  if (control instanceof HTMLTextAreaElement) return control.value;
+  if (control instanceof HTMLSelectElement) return control.value;
+  return control.textContent?.trim() || "";
+}

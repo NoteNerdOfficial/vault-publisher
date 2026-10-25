@@ -46,6 +46,8 @@ export interface SettingsHost {
       /** Folder path, `""` for the whole vault, `null` for unchosen. */
       folder: string | null;
       requireFrontmatterFlag: string | null;
+      updatedProperty?: string;
+      pinnedProperty?: string;
       theme?: string;
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
@@ -390,6 +392,40 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setValue(site.requireFrontmatterFlag ?? "")
           .onChange(async (value) => {
             site.requireFrontmatterFlag = value.trim() || null;
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Date property")
+      .setDesc(
+        "Frontmatter key holding a note's own last-edited date. It dates the " +
+          "note's header and orders Recently updated. A note without it falls " +
+          "back to the file's modified time.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("updated")
+          .setValue(site.updatedProperty ?? "")
+          .onChange(async (value) => {
+            site.updatedProperty = value.trim() || undefined;
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Start here property")
+      .setDesc(
+        "Frontmatter key that marks a note as a place to begin. Notes with it " +
+          "set to true lead the jump-to panel. Bookmarks are deliberately not " +
+          "used: they can name notes you are not publishing.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("pinned")
+          .setValue(site.pinnedProperty ?? "")
+          .onChange(async (value) => {
+            site.pinnedProperty = value.trim() || undefined;
             await this.host.saveSettings();
           }),
       );

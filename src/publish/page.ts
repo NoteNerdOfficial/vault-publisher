@@ -13,6 +13,16 @@
  */
 
 import { slugifyFragment } from "./links";
+import { CLIENT_SCRIPT, THEME_BOOT } from "./clientScript";
+import {
+  ShellInput,
+  breadcrumb,
+  commandBar,
+  jumpPanel,
+  contextRail,
+  mentionsBelow,
+  vaultPanel,
+} from "./shell";
 
 export interface PageMeta {
   title: string;
@@ -21,6 +31,8 @@ export interface PageMeta {
   description?: string;
   /** Site-wide name for the header and OG metadata. */
   siteName: string;
+  /** Frontmatter worth showing above the note: status, dates, tags. */
+  properties?: Array<{ label: string; value: string; tags?: string[] }>;
 }
 
 export interface Heading {
@@ -59,6 +71,36 @@ export function stripFrontmatter(root: HTMLElement): number {
   const found = Array.from(root.querySelectorAll(FRONTMATTER_SELECTOR));
   for (const el of found) el.remove();
   return found.length;
+}
+
+/** Preserves callout fold state and supplies an accessible browser toggle. */
+export function prepareCollapsibleCallouts(root: HTMLElement): number {
+  let prepared = 0;
+  let index = 0;
+
+  for (const callout of Array.from(root.querySelectorAll(".callout.is-collapsible"))) {
+    const content = callout.querySelector<HTMLElement>(".callout-content");
+    const fold = callout.querySelector<HTMLElement>(".callout-fold");
+    if (!content || !fold) continue;
+
+    const collapsed = callout.classList.contains("is-collapsed");
+    const contentId = `osp-callout-content-${index++}`;
+    content.id = contentId;
+    content.style.removeProperty("display");
+    content.hidden = collapsed;
+
+    const button = root.ownerDocument.createElement("button");
+    button.type = "button";
+    button.className = "osp-callout-toggle";
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-controls", contentId);
+    button.setAttribute("aria-label", collapsed ? "Expand callout" : "Collapse callout");
+    while (fold.firstChild) button.append(fold.firstChild);
+    fold.replaceWith(button);
+    prepared++;
+  }
+
+  return prepared;
 }
 
 /**
@@ -121,20 +163,54 @@ export function buildPage(options: {
   /** Serialized content, already normalized and link-rewritten. */
   content: string;
   headings: Heading[];
+  /**
+   * Everything around the note: the vault panel, the context rail, the graph.
+   *
+   * Optional, and its absence is not a degraded mode -- the index page and
+   * the tests build pages without it, and what comes out is the note on its
+   * own, which is a complete page.
+   */
+  shell?: Omit<ShellInput, "url" | "title" | "root" | "headings" | "siteName">;
 }): string {
   const { meta, content, headings } = options;
   const root = pathToRoot(meta.url);
   const description = meta.description ?? "";
 
-  // Only h2 and h3 go in the table of contents: h1 is the page title, and
-  // deeper levels make the rail unreadable on a narrow screen.
-  const toc = headings
-    .filter((h) => h.level === 2 || h.level === 3)
-    .map(
-      (h) =>
-        `<li class="osp-toc-item osp-toc-h${h.level}"><a href="#${h.id}">${escapeHtml(h.text)}</a></li>`,
-    )
-    .join("\n        ");
+  const shell: ShellInput | null = options.shell
+    ? {
+        ...options.shell,
+        siteName: meta.siteName,
+        url: meta.url,
+        title: meta.title,
+        root,
+        headings,
+      }
+    : null;
+
+  const article =
+    `<article class="osp-article markdown-rendered">` +
+    `<h1 class="osp-title">${escapeHtml(meta.title)}</h1>` +
+    propertiesBlock(meta.properties, root) +
+    `\n${content}\n` +
+    `</article>` +
+    (shell ? mentionsBelow(shell) : "");
+
+  const body = shell
+    ? `<div class="osp-shell">` +
+      commandBar(shell) +
+      vaultPanel(shell) +
+      jumpPanel(shell) +
+      `<main class="osp-main" id="osp-main">` +
+      breadcrumb(shell) +
+      `<div class="osp-doc">${article}</div>` +
+      `</main>` +
+      contextRail(shell) +
+      `</div>`
+    : `<div class="osp-shell osp-shell-bare">` +
+      `<main class="osp-main" id="osp-main">` +
+      `<div class="osp-doc">${article}</div>` +
+      `</main>` +
+      `</div>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -148,34 +224,45 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}">`
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}">` : ""}
 <link rel="stylesheet" href="${root}assets/obsidian.css">
 <link rel="stylesheet" href="${root}assets/site.css">
+<script>${THEME_BOOT}</script>
 </head>
 <body>
 <a class="osp-skip-link" href="#osp-main">Skip to content</a>
-<div class="osp-shell">
-  <header class="osp-header">
-    <a class="osp-site-name" href="${root}index.html">${escapeHtml(meta.siteName)}</a>
-  </header>
-  <main class="osp-main" id="osp-main">
-    <article class="osp-article markdown-rendered">
-      <h1 class="osp-title">${escapeHtml(meta.title)}</h1>
-${content}
-    </article>
-  </main>
-${
-  toc
-    ? `  <aside class="osp-rail" aria-label="On this page">
-      <nav class="osp-toc">
-        <ul>
-        ${toc}
-        </ul>
-      </nav>
-    </aside>`
-    : ""
-}
-</div>
+${body}
+<script>${CLIENT_SCRIPT}</script>
 </body>
 </html>
 `;
+}
+
+/**
+ * Frontmatter the author chose to show, above the note.
+ *
+ * Only the keys the build was asked for reach this: everything else was
+ * removed by `stripFrontmatter`, which is the half that matters.
+ */
+function propertiesBlock(properties: PageMeta["properties"], root: string): string {
+  if (!properties?.length) return "";
+  return (
+    `<div class="osp-meta">` +
+    properties
+      .map((property) =>
+        property.tags?.length
+          ? `<span class="osp-tagcloud">` +
+            property.tags
+              .map(
+                (tag) =>
+                  `<a class="osp-tag" href="${root}index.html#tag-${escapeHtml(tag)}">` +
+                  `#${escapeHtml(tag)}</a>`,
+              )
+              .join("") +
+            `</span>`
+          : `<span class="osp-meta-item">${escapeHtml(property.label)} ` +
+            `<span class="osp-meta-value">${escapeHtml(property.value)}</span></span>`,
+      )
+      .join("") +
+    `</div>`
+  );
 }
 
 export function escapeHtml(value: string): string {

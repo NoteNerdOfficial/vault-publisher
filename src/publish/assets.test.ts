@@ -120,6 +120,21 @@ describe("collectAssets", () => {
     expect(root.innerHTML).not.toContain(HOME);
   });
 
+  it("marks an empty missing-image wrapper as unresolved", () => {
+    const root = render(
+      `<span class="internal-embed mod-empty-attachment" src="missing.png" ` +
+        `alt="missing.png"></span>`,
+    );
+
+    const stats = collectAssets(fakeApp({}, null), root, "note.md", "note.html", {
+      want: () => {},
+    });
+
+    expect(stats.unresolved).toEqual(["missing.png"]);
+    expect(root.querySelector(".osp-unresolved-asset")).not.toBeNull();
+    expect(root.innerHTML).not.toContain("src=");
+  });
+
   // The ceiling has to be applied here, not at upload time: rewriting the
   // reference and then skipping the file left a broken image on a live page.
   it("refuses an oversized attachment without rewriting the page", () => {

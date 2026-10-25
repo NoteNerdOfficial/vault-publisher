@@ -15,6 +15,7 @@
  * about it would be the wrong default.
  */
 
+import { excerptAround } from "./backlinks";
 import { decodeUrlComponent, encodeUrlPath } from "./urls";
 
 export interface LinkTarget {
@@ -31,6 +32,14 @@ export interface LinkRewriteStats {
   /** The distinct link texts that could not be resolved, for reporting. */
   unresolvedTargets: string[];
   external: number;
+  /**
+   * Where the resolved links point, and the sentence each was written in.
+   *
+   * Collected here because this is the only pass that knows both -- the
+   * target a link resolved to and the prose around it -- and the backlink
+   * list on the target page is built from exactly that pair.
+   */
+  resolvedTargets: Array<{ url: string; context: string }>;
 }
 
 /**
@@ -88,6 +97,7 @@ export function rewriteLinks(
     unresolved: 0,
     unresolvedTargets: [],
     external: 0,
+    resolvedTargets: [],
   };
   const unresolved = new Set<string>();
 
@@ -119,11 +129,57 @@ export function rewriteLinks(
       "href",
       relativeUrl(fromUrl, target.url) + (fragment ? `#${slugifyFragment(fragment)}` : ""),
     );
+    stats.resolvedTargets.push({
+      url: target.url,
+      context: contextFor(anchor),
+    });
+    stats.resolved++;
+  }
+
+  // Bases re-emits document values as spans carrying the vault path in
+  // `data-href`, not as anchors. Turn those into ordinary links after the
+  // table has been made semantic.
+  for (const span of Array.from(root.querySelectorAll(".internal-link[data-href]"))) {
+    const href = span.getAttribute("data-href") ?? "";
+    const target = resolver.resolve(href);
+    if (!target) {
+      unresolved.add(splitFragment(href)[0]);
+      stats.unresolved++;
+      const replacement = span.ownerDocument.createElement("span");
+      replacement.className = "osp-unresolved-link";
+      replacement.textContent = span.textContent ?? "";
+      replacement.setAttribute("data-osp-unresolved", href);
+      span.replaceWith(replacement);
+      continue;
+    }
+
+    const [, fragment] = splitFragment(href);
+    const anchor = span.ownerDocument.createElement("a");
+    anchor.className = "internal-link";
+    anchor.href = relativeUrl(fromUrl, target.url) + (fragment ? `#${slugifyFragment(fragment)}` : "");
+    while (span.firstChild) anchor.append(span.firstChild);
+    span.replaceWith(anchor);
+    // A Bases cell is a table cell, not prose; an excerpt of it would be the
+    // row, which says nothing about the link.
+    stats.resolvedTargets.push({ url: target.url, context: "" });
     stats.resolved++;
   }
 
   stats.unresolvedTargets = Array.from(unresolved);
   return stats;
+}
+
+/**
+ * The prose a link sits in, for the backlink list on its target.
+ *
+ * The nearest block ancestor, not the whole page: a reader scanning "linked
+ * from" is asking in what connection, and the paragraph answers that while
+ * the note does not.
+ */
+function contextFor(anchor: HTMLAnchorElement): string {
+  const block = anchor.closest("p, li, td, th, blockquote, figcaption, dd");
+  if (!block) return "";
+  return excerptAround(block.textContent ?? "", anchor.textContent ?? "");
 }
 
 /**

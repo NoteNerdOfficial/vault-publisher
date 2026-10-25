@@ -170,6 +170,17 @@ export function collectAssets(
     }
   }
 
+  // A missing Obsidian image can serialize as an empty embed wrapper with no
+  // child <img>, so the normal media loop never sees it. Remove its app-local
+  // reference and leave an explicit marker instead of publishing a blank box.
+  for (const el of Array.from(root.querySelectorAll(".internal-embed.mod-empty-attachment, .internal-embed.image-embed"))) {
+    if (el.querySelector("img")) continue;
+    const src = el.getAttribute("src") ?? el.getAttribute("alt") ?? "";
+    if (!src) continue;
+    stats.unresolved.push(src.slice(0, 200));
+    disarm(el);
+  }
+
   return stats;
 }
 

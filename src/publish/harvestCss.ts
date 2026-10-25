@@ -22,6 +22,11 @@ export interface HarvestRule {
   cssText: string;
 }
 
+export interface HarvestedAsset {
+  path: string;
+  content: ArrayBuffer;
+}
+
 /**
  * Selector prefixes whose rules we take. Deliberately narrow: harvesting
  * broadly would drag in Obsidian's own typography and colours and fight the
@@ -120,6 +125,57 @@ export function harvestCss(
   }
 
   return harvested;
+}
+
+/**
+ * Copies MathJax's built-in fonts into the published tree and rewrites the
+ * harvested @font-face rules to point at them. The original `/lib/mathjax`
+ * URLs only exist inside Obsidian's app:// origin; they are not available to
+ * a browser opening the generated site.
+ */
+export async function materializeMathJaxFonts(
+  rules: HarvestRule[],
+): Promise<{ rules: HarvestRule[]; assets: HarvestedAsset[] }> {
+  const bySource = new Map<string, { path: string; content: ArrayBuffer }>();
+  const rewritten = rules.map((rule) => {
+    if (!rule.cssText.startsWith("@font-face")) return rule;
+
+    const cssText = rule.cssText.replace(
+      /url\((['"]?)([^'"\)]+)\1\)/g,
+      (_match, quote: string, source: string) => {
+        const absolute = new URL(source, document.baseURI).href;
+        let asset = bySource.get(absolute);
+        if (!asset) {
+          // Filled below after all URLs have been discovered. Keeping this
+          // placeholder makes the rewrite deterministic across rules.
+          asset = { path: `assets/mathjax/${fontFileName(source)}`, content: new ArrayBuffer(0) };
+          bySource.set(absolute, asset);
+        }
+        return `url(${quote}${relativeMathJaxPath(asset.path)}${quote})`;
+      },
+    );
+    return { ...rule, cssText };
+  });
+
+  for (const [source, asset] of bySource) {
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new Error(`Could not fetch MathJax font ${source}: HTTP ${response.status}`);
+    }
+    asset.content = await response.arrayBuffer();
+  }
+
+  return { rules: rewritten, assets: Array.from(bySource.values()) };
+}
+
+function fontFileName(source: string): string {
+  const pathname = new URL(source, document.baseURI).pathname;
+  const name = pathname.slice(pathname.lastIndexOf("/") + 1);
+  return name || "font.woff2";
+}
+
+function relativeMathJaxPath(assetPath: string): string {
+  return assetPath.replace(/^assets\//, "");
 }
 
 function collectRules(

@@ -8,9 +8,14 @@ import {
   buildPage,
   dropRedundantTitleHeading,
   escapeHtml,
+  prepareCollapsibleCallouts,
   stripFrontmatter,
 } from "./page";
-import { harvestCss, harvestToStylesheet } from "./harvestCss";
+import {
+  harvestCss,
+  harvestToStylesheet,
+  materializeMathJaxFonts,
+} from "./harvestCss";
 import { BasesStats, emptyBasesStats, reemitBases } from "./bases";
 import {
   DriftReport,
@@ -19,7 +24,11 @@ import {
   isControlNote,
   summarizeDrift,
 } from "./drift";
-import { countInvalidNesting, countLoadingPlaceholders } from "./normalize";
+import {
+  countInvalidNesting,
+  countLoadingPlaceholders,
+  normalizeStaticPluginOutput,
+} from "./normalize";
 import {
   Leak,
   PrivacyReport,
@@ -35,6 +44,16 @@ import {
   emptyAssetStats,
 } from "./assets";
 import { stabilizeIds, stripDebugAttributes } from "./stableIds";
+import { Mention, OutgoingLinks, buildBacklinkIndex, relatedNotes } from "./backlinks";
+import { buildLocalGraph } from "./graph";
+import {
+  NavNote,
+  buildNavTree,
+  collectTags,
+  formatDay,
+  recencyBuckets,
+} from "./nav";
+import { folderSlug } from "./shell";
 import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
@@ -67,6 +86,20 @@ export interface SiteConfig {
   requireFrontmatterFlag: string | null;
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
+  /** Frontmatter key holding a note's own edit date. Defaults to `updated`. */
+  updatedProperty?: string;
+  /**
+   * Frontmatter key marking a note as one to start from. Defaults to `pinned`.
+   *
+   * Deliberately not Obsidian's bookmarks: those are reached through an
+   * internal API, they hold folders and saved searches as well as notes, and
+   * they can name notes that are not being published -- which would put a
+   * private note's title on a public page, the leak `privacy.ts` exists to
+   * catch.
+   */
+  pinnedProperty?: string;
+  /** Now, injectable so a build is reproducible in a test. */
+  now?: Date;
   /**
    * Custom domain for the published site, written to a CNAME file.
    *
@@ -292,6 +325,24 @@ export async function buildSite(
   const files: PublishFile[] = [];
   const pages: PageResult[] = [];
   const skipped: { path: string; reason: string }[] = [];
+
+  /**
+   * Rendered notes, held until the whole site is known.
+   *
+   * A page cannot be assembled while it is being rendered any more: its rail
+   * shows what links *to* it, and that is only knowable once every other note
+   * has been through the rewriter. So rendering fills this, and the pages are
+   * built afterwards, in one pass.
+   */
+  const rendered: Array<{
+    url: string;
+    title: string;
+    html: string;
+    headings: ReturnType<typeof assignHeadingIds>;
+    outgoing: Array<{ url: string; context: string }>;
+    nav: NavNote;
+    tags: string[];
+  }> = [];
   const driftSamples: DriftSample[] = [];
 
   // Media is deduplicated across the whole site: one picture used by forty
@@ -316,28 +367,28 @@ export async function buildSite(
         const url = urlForNote(file.path, config.folder);
         let headings: ReturnType<typeof assignHeadingIds> = [];
         let unresolvedTargets: string[] = [];
+        let outgoing: Array<{ url: string; context: string }> = [];
 
         const title = titleFor(app, file);
         let bases = emptyBasesStats();
         let privacy = emptyPrivacyReport();
         let assets = emptyAssetStats();
-        const rendered = await renderFile(app, file, host, {
+        const renderedNote = await renderFile(app, file, host, {
           transform: (container) => {
             // First, before anything else reads the tree: the frontmatter is
             // not content, and nothing downstream should be deciding what to
             // do about it.
             stripFrontmatter(container);
+            prepareCollapsibleCallouts(container);
             dropRedundantTitleHeading(container, title);
             // Before link rewriting: re-emitting moves cell nodes rather than
             // flattening them to text, so the `.internal-link` elements a
             // Bases cell contains are still there for the rewriter to find.
             bases = reemitBases(container);
             headings = assignHeadingIds(container);
-            unresolvedTargets = rewriteLinks(
-              container,
-              resolver,
-              url,
-            ).unresolvedTargets;
+            const rewritten = rewriteLinks(container, resolver, url);
+            unresolvedTargets = rewritten.unresolvedTargets;
+            outgoing = rewritten.resolvedTargets;
             assets = collectAssets(
               app,
               container,
@@ -346,6 +397,7 @@ export async function buildSite(
               { want: (asset) => wantedAssets.set(asset.path, asset) },
               config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
             );
+            normalizeStaticPluginOutput(container);
             for (const item of assets.oversized) {
               oversizedAssets.set(item.path, item.reason);
             }
@@ -358,21 +410,22 @@ export async function buildSite(
           },
         });
 
-        if (rendered.error) {
+        if (renderedNote.error) {
           skipped.push({
             path: file.path,
-            reason: rendered.error.split("\n")[0],
+            reason: renderedNote.error.split("\n")[0],
           });
           continue;
         }
 
-        files.push({
-          path: url,
-          content: buildPage({
-            meta: { title, url, siteName: config.siteName },
-            content: rendered.html,
-            headings,
-          }),
+        rendered.push({
+          url,
+          title,
+          html: renderedNote.html,
+          headings,
+          outgoing,
+          nav: navNoteFor(app, file, url, title, config),
+          tags: tagsFor(app, file),
         });
 
         pages.push({
@@ -380,17 +433,17 @@ export async function buildSite(
           url,
           title,
           unresolvedTargets,
-          guarded: countMatches(rendered.html, "mermaid-guard-title"),
-          errored: countMatches(rendered.html, "dataview-error"),
-          renderMs: rendered.renderMs,
-          totalMs: rendered.totalMs,
-          pending: rendered.settle.pendingAtEnd,
+          guarded: countMatches(renderedNote.html, "mermaid-guard-title"),
+          errored: countMatches(renderedNote.html, "dataview-error"),
+          renderMs: renderedNote.renderMs,
+          totalMs: renderedNote.totalMs,
+          pending: renderedNote.settle.pendingAtEnd,
           incomplete:
-            !rendered.settle.settled && rendered.settle.pendingAtEnd > 0,
+            !renderedNote.settle.settled && renderedNote.settle.pendingAtEnd > 0,
           bases,
           privacy,
           assets,
-          settleReason: rendered.settle.reason,
+          settleReason: renderedNote.settle.reason,
         });
 
         // Control notes are identical and contain nothing asynchronous, so
@@ -399,7 +452,7 @@ export async function buildSite(
           driftSamples.push({
             path: file.path,
             index,
-            renderMs: rendered.renderMs,
+            renderMs: renderedNote.renderMs,
             heapBytes: heapBytes(),
           });
         }
@@ -413,6 +466,65 @@ export async function buildSite(
     }
   } finally {
     host.remove();
+  }
+
+  // Every note is rendered, so what links to what is finally knowable. The
+  // shell is built once and the pages are assembled around it.
+  const navNotes = rendered.map((page) => page.nav);
+  const navTree = buildNavTree(navNotes);
+  const pinned = navNotes.filter((note) => note.pinned);
+  const recency = recencyBuckets(navNotes, config.now ?? new Date());
+  const tags = collectTags(rendered.map((page) => ({ url: page.url, tags: page.tags })));
+  const titles = new Map(rendered.map((page) => [page.url, page.title]));
+
+  const outgoing: OutgoingLinks[] = rendered.map((page) => ({
+    url: page.url,
+    title: page.title,
+    links: page.outgoing,
+  }));
+  const backlinks = buildBacklinkIndex(outgoing);
+  const outgoingByUrl = new Map(outgoing.map((page) => [page.url, page]));
+
+  for (const page of rendered) {
+    const mentions: Mention[] = backlinks.get(page.url) ?? [];
+    const related = relatedNotes(page.url, outgoingByUrl.get(page.url), mentions, titles);
+    const words = countWords(page.html);
+
+    files.push({
+      path: page.url,
+      content: buildPage({
+        meta: {
+          title: page.title,
+          url: page.url,
+          siteName: config.siteName,
+          properties: noteHeader(page, mentions.length),
+        },
+        content: page.html,
+        headings: page.headings,
+        shell: {
+          nav: navTree,
+          pinned,
+          recency,
+          tags,
+          backlinks: mentions,
+          related,
+          graph: buildLocalGraph({
+            url: page.url,
+            title: page.title,
+            out: page.outgoing.map((link) => link.url),
+            in: mentions.map((mention) => mention.url),
+            titles,
+          }),
+          stats: {
+            words,
+            readingMinutes: Math.max(1, Math.round(words / 220)),
+            sections: page.headings.filter((heading) => heading.level === 2).length,
+          },
+          today: config.now ?? new Date(),
+          noteCount: navNotes.length,
+        },
+      }),
+    });
   }
 
   // Attachments `collectAssets` refused, reported once however many pages
@@ -437,12 +549,24 @@ export async function buildSite(
   // Harvested first, site.css second: ours must win where both have an
   // opinion, since the harvest is for layout we cannot re-author, not for
   // Obsidian's typography or colours.
+  const harvested = await materializeMathJaxFonts(harvestCss());
+  files.push(...harvested.assets);
   files.push({
     path: "assets/obsidian.css",
-    content: harvestToStylesheet(harvestCss()),
+    content: harvestToStylesheet(harvested.rules),
   });
   files.push({ path: "assets/site.css", content: siteCss(config.theme) });
-  files.push({ path: "index.html", content: buildIndex(config, pages) });
+  files.push({
+    path: "index.html",
+    content: buildIndex(config, pages, rendered, {
+      nav: navTree,
+      pinned,
+      recency,
+      tags,
+      today: config.now ?? new Date(),
+      noteCount: navNotes.length,
+    }),
+  });
   // Pages would otherwise run the committed HTML through Jekyll, which
   // ignores files and folders whose names begin with an underscore -- and
   // Obsidian attachment folders are commonly named `_attachments`.
@@ -513,6 +637,68 @@ function titleFor(app: App, file: TFile): string {
     : file.basename;
 }
 
+/**
+ * A note as navigation sees it.
+ *
+ * `updated` prefers a frontmatter date over the file's own mtime, and the
+ * reason is that mtime is not a record of editing: sync, a plugin rewriting
+ * frontmatter, or a vault copied to a new machine all touch it. A date the
+ * author wrote is a claim about the note; an mtime is a claim about the
+ * filesystem.
+ */
+function navNoteFor(
+  app: App,
+  file: TFile,
+  url: string,
+  title: string,
+  config: SiteConfig,
+): NavNote {
+  const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
+  const slash = url.lastIndexOf("/");
+
+  return {
+    url,
+    title,
+    folder: slash === -1 ? "" : url.slice(0, slash),
+    updated: stampFor(frontmatter?.[config.updatedProperty ?? "updated"], file),
+    pinned: frontmatter?.[config.pinnedProperty ?? "pinned"] === true,
+  };
+}
+
+/** `YYYY-MM-DDTHH:MM`, which is the resolution batch detection needs. */
+function stampFor(value: unknown, file: TFile): string | null {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.length >= 16 ? value.slice(0, 16) : `${value.slice(0, 10)}T12:00`;
+  }
+  const mtime = file.stat?.mtime;
+  if (!mtime) return null;
+  return new Date(mtime).toISOString().slice(0, 16);
+}
+
+function tagsFor(app: App, file: TFile): string[] {
+  const cache = app.metadataCache.getFileCache(file);
+  const inline = (cache?.tags ?? []).map((tag) => tag.tag.replace(/^#/, ""));
+  const front = cache?.frontmatter?.tags;
+  const declared = Array.isArray(front)
+    ? front.map(String)
+    : typeof front === "string"
+      ? front.split(/[,\s]+/).filter(Boolean)
+      : [];
+  return Array.from(new Set([...inline, ...declared].map((tag) => tag.replace(/^#/, "")))).filter(
+    Boolean,
+  );
+}
+
+/** Words in the rendered note, for the rail's one line of fact. */
+export function countWords(html: string): number {
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[a-z#0-9]+;/gi, " ");
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
 function countMatches(html: string, needle: string): number {
   return html.split(needle).length - 1;
 }
@@ -528,7 +714,12 @@ function countMatches(html: string, needle: string): number {
  * Pages at the top level lead, because a vault's loose notes are usually its
  * entry points, and folders follow in alphabetical order.
  */
-function buildIndex(config: SiteConfig, pages: PageResult[]): string {
+function buildIndex(
+  config: SiteConfig,
+  pages: PageResult[],
+  tagged: Array<{ url: string; title: string; tags: string[] }>,
+  shell: IndexShell,
+): string {
   const groups = new Map<string, PageResult[]>();
   for (const page of pages) {
     const slash = page.url.lastIndexOf("/");
@@ -547,7 +738,7 @@ function buildIndex(config: SiteConfig, pages: PageResult[]): string {
   const sections = ordered
     .map(([group, items]) => {
       const heading = group
-        ? `<h2 class="osp-index-group">${escapeHtml(group.replace(/\//g, " / "))}</h2>`
+        ? `<h2 class="osp-index-group" id="folder-${escapeHtml(folderSlug(group))}">${escapeHtml(group.replace(/\//g, " / "))}</h2>`
         : "";
       const list = items
         .map(
@@ -570,8 +761,127 @@ function buildIndex(config: SiteConfig, pages: PageResult[]): string {
       url: "index.html",
       siteName: config.siteName,
     },
-    content: `${lead}\n        ${sections}`,
+    content: `${lead}\n        ${recentIndex(shell)}${tagIndex(shell, tagged)}${sections}`,
     headings: [],
+    shell: {
+      ...shell,
+      backlinks: [],
+      related: [],
+      graph: { nodes: [], edges: [], centre: { title: config.siteName, x: 0, y: 0 }, width: 0, height: 0 },
+      stats: { words: 0, readingMinutes: 1, sections: 0 },
+    },
   });
 }
+
+type IndexShell = Omit<
+  Parameters<typeof buildPage>[0]["shell"] & object,
+  "backlinks" | "related" | "graph" | "stats"
+>;
+
+/**
+ * Every recently-edited note, in full.
+ *
+ * The panel's recency list is capped and collapsed, which is right for a
+ * sidebar and wrong as the only answer: its "show all" has to land somewhere
+ * that actually shows them all, and this is it.
+ */
+function recentIndex(shell: IndexShell): string {
+  if (!shell.recency.length) return "";
+  return (
+    `<h2 class="osp-index-group" id="recent">Recently updated</h2>\n        ` +
+    shell.recency
+      .map(
+        (bucket) =>
+          `<h3 class="osp-index-bucket">${bucket.label}<span class="osp-num">${bucket.count}</span></h3>` +
+          `<ul class="osp-index">` +
+          bucket.rows
+            .flatMap((row) => (row.kind === "batch" ? row.notes : [row.note]))
+            .map(
+              (note) =>
+                `<li class="osp-index-item"><a href="${escapeHtml(encodeUrlPath(note.url))}">` +
+                `${escapeHtml(note.title)}</a></li>`,
+            )
+            .join("") +
+          `</ul>`,
+      )
+      .join("\n        ") +
+    "\n        "
+  );
+}
+
+/**
+ * Where a tag goes.
+ *
+ * The panel offers tags as somewhere to go, and a chip that scrolls to
+ * another chip is not somewhere. So each tag is a section with the notes
+ * carrying it, and the cloud at the top is the way into them.
+ */
+function tagIndex(
+  shell: IndexShell,
+  tagged: Array<{ url: string; title: string; tags: string[] }>,
+): string {
+  if (!shell.tags.length) return "";
+
+  const notesFor = (name: string) =>
+    tagged.filter((page) => page.tags.includes(name));
+
+  return (
+    `<h2 class="osp-index-group" id="tags">Tags</h2>\n        <div class="osp-tagcloud">` +
+    shell.tags
+      .map(
+        (tag) =>
+          `<a class="osp-tag" href="#tag-${escapeHtml(tag.name)}">#${escapeHtml(tag.name)}` +
+          `<span class="osp-num">${tag.count}</span></a>`,
+      )
+      .join("") +
+    `</div>\n        ` +
+    shell.tags
+      .map(
+        (tag) =>
+          `<h3 class="osp-index-bucket" id="tag-${escapeHtml(tag.name)}">#${escapeHtml(tag.name)}` +
+          `<span class="osp-num">${tag.count}</span></h3>` +
+          `<ul class="osp-index">` +
+          notesFor(tag.name)
+            .map(
+              (page) =>
+                `<li class="osp-index-item"><a href="${escapeHtml(encodeUrlPath(page.url))}">` +
+                `${escapeHtml(page.title)}</a></li>`,
+            )
+            .join("") +
+          `</ul>`,
+      )
+      .join("\n        ") +
+    "\n        "
+  );
+}
+
+/**
+ * The few facts a note carries about itself.
+ *
+ * Only what the build was asked for: the date key the user named, the links
+ * it actually resolved, and the tags already in the vault. Everything else in
+ * the frontmatter was removed before this ran, which is the half that
+ * matters -- see `stripFrontmatter`.
+ */
+function noteHeader(
+  page: { nav: NavNote; tags: string[]; outgoing: Array<{ url: string }> },
+  incoming: number,
+): Array<{ label: string; value: string; tags?: string[] }> {
+  const header: Array<{ label: string; value: string; tags?: string[] }> = [];
+
+  if (page.nav.updated) {
+    const day = formatDay(page.nav.updated);
+    if (day) header.push({ label: "Updated", value: day });
+  }
+
+  const outgoing = new Set(page.outgoing.map((link) => link.url)).size;
+  if (incoming || outgoing) {
+    header.push({ label: "Links", value: `${incoming} in \u00b7 ${outgoing} out` });
+  }
+
+  if (page.tags.length) header.push({ label: "", value: "", tags: page.tags });
+
+  return header;
+}
+
 

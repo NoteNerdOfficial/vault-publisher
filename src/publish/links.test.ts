@@ -75,6 +75,17 @@ describe("rewriteLinks", () => {
     );
   });
 
+  it("rewrites Bases data-href spans into ordinary links", () => {
+    const root = render(
+      `<span class="internal-link" data-href="notes/basics.md">Basics</span>`,
+    );
+    const stats = rewriteLinks(root, resolver, "deep/page.html");
+
+    expect(stats.resolved).toBe(1);
+    expect(root.querySelector("a")?.getAttribute("href")).toBe("../basics.html");
+    expect(root.querySelector("a")?.textContent).toBe("Basics");
+  });
+
   it("percent-encodes an awkward target", () => {
     const root = render(`<a href="Q&amp;A 50% done">that one</a>`);
     const stats = rewriteLinks(root, resolver, "page.html");
