@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
-import { isScopeChosen } from "../publish/buildSite";
+import { SiteConfig, isScopeChosen, resolveHomeNote, selectNotes } from "../publish/buildSite";
 import {
   TokenState,
   describeStorage,
@@ -46,6 +46,7 @@ export interface SettingsHost {
       /** Folder path, `""` for the whole vault, `null` for unchosen. */
       folder: string | null;
       requireFrontmatterFlag: string | null;
+      homeNote?: string;
       updatedProperty?: string;
       pinnedProperty?: string;
       theme?: string;
@@ -396,6 +397,28 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }),
       );
 
+    // The field is a path, but the useful half is the answer: this says
+    // which note the front page is actually going to be, including when the
+    // field is empty and the vault's own README is winning.
+    new Setting(root)
+      .setName("Homepage")
+      .setDesc(this.describeHome())
+      .addText((text) =>
+        text
+          .setPlaceholder("README.md")
+          .setValue(site.homeNote ?? "")
+          .onChange(async (value) => {
+            site.homeNote = value.trim() || undefined;
+            await this.host.saveSettings();
+          }),
+      )
+      .addExtraButton((button) =>
+        button
+          .setIcon("refresh-cw")
+          .setTooltip("Check which note this resolves to")
+          .onClick(() => this.display()),
+      );
+
     new Setting(root)
       .setName("Date property")
       .setDesc(
@@ -461,6 +484,39 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await this.host.saveSettings();
           }),
       );
+  }
+
+  /**
+   * What the front page will be, in one sentence.
+   *
+   * Resolved against the notes the scope actually matches, because that is
+   * the question: a `README.md` outside the published folder is not the
+   * site's homepage, and a homepage named but not published is a typo the
+   * user would otherwise only find after publishing.
+   */
+  private describeHome(): string {
+    const site = this.host.settings.site;
+    const fallback =
+      "Leave empty to use the vault's README, then index.md, then Home.md. " +
+      "With none of those, the front page is a generated overview: what you " +
+      "marked as a starting point, the most linked notes, what changed " +
+      "lately, and the tags.";
+
+    if (!isScopeChosen(site)) return fallback;
+
+    const home = resolveHomeNote(selectNotes(this.app, site as SiteConfig), site);
+    const named = site.homeNote?.trim();
+
+    if (named && !home.path) {
+      return `Nothing published matches "${named}", so the front page is the generated overview. ${fallback}`;
+    }
+    if (named && home.path && home.unresolved) {
+      return `Nothing published matches "${named}". Using ${home.path} instead. ${fallback}`;
+    }
+    if (home.path) {
+      return `Now using ${home.path}, published as the front page rather than at its own address. ${fallback}`;
+    }
+    return fallback;
   }
 
   // -- 3. how it looks -----------------------------------------------------

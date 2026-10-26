@@ -833,8 +833,27 @@ body {
 }
 .osp-crumb.osp-scrolled { border-bottom-color: var(--osp-border); }
 
-.osp-crumb-back { flex: none; padding-left: 0.3rem; }
-.osp-crumb-back .osp-label { max-width: 11rem; }
+/* The two arrows read as one control, so they sit together with no gap and
+   a single rule around the pair. Disabled is the resting state of the
+   forward one for most of a visit: it fades rather than disappearing, or the
+   back arrow would move under the cursor every time it changed. */
+.osp-crumb-nav { display: flex; flex: none; align-items: center; gap: 0.1rem; }
+.osp-crumb-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: max(5px, var(--osp-radius));
+  background: transparent;
+  color: var(--osp-text-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.osp-crumb-step:hover:not(:disabled) { color: var(--osp-text); background: var(--osp-hover); }
+.osp-crumb-step:disabled { opacity: 0.35; cursor: default; }
 
 .osp-crumb-trail {
   display: flex;
@@ -978,20 +997,32 @@ body {
 }
 .osp-rail-title .osp-num { margin-left: auto; font-weight: 600; }
 
-/* A table of contents, behaving as one: the section being read is marked,
-   and nothing else in the margin moves while the note is being read. */
+/* A table of contents, behaving as one: a rail down the margin with the
+   section being read marked on it, and nothing else moving while the note is
+   being read. The mark is a segment of the rail rather than a colour on the
+   text, so the eye can find the place in the list without reading it. */
+.osp-outline {
+  margin-left: 0.5rem;
+  border-left: var(--osp-rule) solid var(--osp-border);
+}
 .osp-outline a {
   display: block;
-  padding: 0.3rem 0.5rem;
-  border-radius: max(4px, var(--osp-radius));
+  margin-left: calc(var(--osp-rule) * -1);
+  padding: 0.3rem 0.5rem 0.3rem 0.75rem;
+  border-left: 2px solid transparent;
+  border-radius: 0 max(4px, var(--osp-radius)) max(4px, var(--osp-radius)) 0;
   font-size: var(--osp-ui-md);
   color: var(--osp-text-muted);
   text-decoration: none;
-  transition: color 120ms ease, background 120ms ease;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 .osp-outline a:hover { color: var(--osp-text); background: var(--osp-hover); }
-.osp-outline a.osp-active { color: var(--osp-accent); font-weight: 650; }
-.osp-outline .osp-lvl3 a { padding-left: 1.4rem; font-size: var(--osp-ui-sm); }
+.osp-outline a.osp-active {
+  border-left-color: var(--osp-accent);
+  color: var(--osp-text);
+  font-weight: 650;
+}
+.osp-outline .osp-lvl3 a { padding-left: 1.75rem; font-size: var(--osp-ui-sm); }
 
 /* --- graph ------------------------------------------------------------ */
 
@@ -1059,7 +1090,6 @@ body {
      that has to fit. */
   .osp-crumb-trail li:not(:last-child) { display: none; }
   .osp-crumb-trail li:last-child .osp-crumb-sep { display: none; }
-  .osp-crumb-back .osp-label { max-width: 7.5rem; }
 }
 
 /* An outline link jumps rather than teleports, so the reader keeps their
@@ -1139,6 +1169,109 @@ html { scroll-behavior: smooth; }
   .markdown-rendered .osp-index-item {
     break-inside: avoid;
   }
+}
+
+.markdown-rendered .osp-index-group .osp-num,
+.markdown-rendered .osp-index-bucket .osp-num {
+  margin-left: 0.5rem;
+  font-weight: 600;
+  opacity: 0.75;
+}
+.markdown-rendered .osp-index-item .osp-num {
+  margin-left: 0.5rem;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-md);
+  color: var(--osp-text-muted);
+}
+
+/* --- the homepage, and the pages shaped like it ----------------------- */
+
+/* A list meant to be read rather than scanned: title, one fact, first line.
+   Rows are separated by a rule rather than boxed, because a page of cards is
+   a page of frames competing with the words inside them. */
+
+.markdown-rendered .osp-home-section { margin: 0; }
+
+.markdown-rendered .osp-home-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: var(--osp-measure);
+}
+
+.markdown-rendered .osp-home-item { margin: 0; padding: 0; }
+
+.markdown-rendered .osp-home-item > a {
+  display: block;
+  padding: 0.7rem 0;
+  border-top: var(--osp-rule) solid var(--osp-faint);
+  color: inherit;
+  text-decoration: none;
+  transition: padding-left 160ms var(--osp-ease);
+}
+.markdown-rendered .osp-home-item:first-child > a { border-top: 0; }
+.markdown-rendered .osp-home-item > a:hover { padding-left: 0.5rem; }
+.markdown-rendered .osp-home-item > a:hover .osp-home-title { color: var(--osp-link); }
+
+.osp-home-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-family: var(--osp-font-display);
+  font-size: 1.05rem;
+  font-weight: var(--osp-heading-weight);
+  color: var(--osp-text);
+  transition: color 90ms ease;
+}
+
+/* The one fact, pushed to the end of the line and sized down: it answers
+   "which of these?" after the title has answered "what?". */
+.osp-home-trail {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-sm);
+  font-weight: 500;
+  color: var(--osp-text-muted);
+  white-space: nowrap;
+}
+
+.osp-home-excerpt {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-md);
+  line-height: 1.5;
+  color: var(--osp-text-muted);
+}
+
+.markdown-rendered .osp-home-more {
+  margin: 1rem 0 0;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-md);
+}
+.markdown-rendered .osp-home-more a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--osp-link);
+  text-decoration: none;
+  font-weight: 550;
+}
+.markdown-rendered .osp-home-more a .osp-icon-sm {
+  transition: transform 160ms var(--osp-ease);
+}
+.markdown-rendered .osp-home-more a:hover .osp-icon-sm { transform: translateX(3px); }
+
+.markdown-rendered .osp-home-section .osp-tagcloud { padding: 0; }
+
+/* Under a homepage somebody wrote: clearly the site's furniture rather than
+   a continuation of their note. */
+.markdown-rendered .osp-home-explore {
+  max-width: var(--osp-measure);
+  margin: 3.5rem 0 0;
+  padding-top: 0.5rem;
+  border-top: var(--osp-rule) solid var(--osp-border);
 }
 `;
 

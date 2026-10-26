@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { App, TFile } from "obsidian";
-import { SiteConfig, isScopeChosen, selectNotes, urlForNote } from "./buildSite";
+import {
+  SiteConfig,
+  isScopeChosen,
+  resolveHomeNote,
+  selectNotes,
+  urlForNote,
+} from "./buildSite";
 
 /**
  * Enough of an App for selection, which reads two things: the list of
@@ -115,5 +121,69 @@ describe("urlForNote", () => {
 
   it("treats an unchosen scope like the whole vault", () => {
     expect(urlForNote("notes/deep.md", null)).toBe("notes/deep.html");
+  });
+});
+
+describe("resolveHomeNote", () => {
+  const files = (...paths: string[]) => paths.map((path) => ({ path }));
+
+  it("takes the vault's README when nothing is set", () => {
+    const home = resolveHomeNote(files("README.md", "inbox.md"), { folder: "" });
+    expect(home).toEqual({ path: "README.md", unresolved: null });
+  });
+
+  it("does not care how the README is capitalised", () => {
+    expect(resolveHomeNote(files("readme.md"), { folder: "" }).path).toBe("readme.md");
+  });
+
+  it("prefers the README over index.md and Home.md", () => {
+    const home = resolveHomeNote(files("Home.md", "index.md", "README.md"), { folder: "" });
+    expect(home.path).toBe("README.md");
+  });
+
+  // A README three folders down is documentation for that folder.
+  it("only looks at the top of what is published", () => {
+    expect(resolveHomeNote(files("notes/README.md"), { folder: "" }).path).toBe(null);
+  });
+
+  it("reads the top as the top of the published folder, not the vault", () => {
+    const home = resolveHomeNote(files("notes/README.md", "notes/deep/README.md"), {
+      folder: "notes",
+    });
+    expect(home.path).toBe("notes/README.md");
+  });
+
+  it("takes the note the user named, over the README", () => {
+    const home = resolveHomeNote(files("README.md", "welcome.md"), {
+      folder: "",
+      homeNote: "welcome.md",
+    });
+    expect(home).toEqual({ path: "welcome.md", unresolved: null });
+  });
+
+  it("accepts a name without the extension, and a path inside the folder", () => {
+    expect(
+      resolveHomeNote(files("notes/welcome.md"), { folder: "notes", homeNote: "welcome" }).path,
+    ).toBe("notes/welcome.md");
+    expect(
+      resolveHomeNote(files("notes/welcome.md"), { folder: "notes", homeNote: "notes/welcome.md" })
+        .path,
+    ).toBe("notes/welcome.md");
+  });
+
+  // The typo that is otherwise silent: the build falls back to the README and
+  // the user is left looking at a page they thought they had replaced.
+  it("reports a homepage that is not being published, and falls back", () => {
+    const home = resolveHomeNote(files("README.md"), { folder: "", homeNote: "welcome.md" });
+    expect(home).toEqual({ path: "README.md", unresolved: "welcome.md" });
+  });
+
+  it("reports it with nothing to fall back to as well", () => {
+    const home = resolveHomeNote(files("inbox.md"), { folder: "", homeNote: "welcome.md" });
+    expect(home).toEqual({ path: null, unresolved: "welcome.md" });
+  });
+
+  it("leaves a vault with no front page to the generated overview", () => {
+    expect(resolveHomeNote(files("inbox.md", "notes/a.md"), { folder: "" }).path).toBe(null);
   });
 });

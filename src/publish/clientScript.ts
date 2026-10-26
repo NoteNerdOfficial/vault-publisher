@@ -259,31 +259,61 @@ export const CLIENT_SCRIPT = `(function () {
   /* --- the crumb: where you are, and the way back ------------------ */
 
   var crumb = document.querySelector("[data-osp-crumb]");
-  var backLink = document.querySelector("[data-osp-back]");
-  var backLabel = document.querySelector("[data-osp-back-label]");
+  var backBtn = document.querySelector("[data-osp-back]");
+  var fwdBtn = document.querySelector("[data-osp-forward]");
 
-  /* The trail is this tab's own, so it survives navigation and nothing else:
-     a back control that says where it goes is worth a little bookkeeping, and
-     "Back" with no name is worth none. */
-  if (backLink && backLabel) {
-    var here = {
-      u: location.pathname,
-      t: (document.querySelector(".osp-title") || {}).textContent || document.title,
+  /* Which way this tab can go.
+
+     The history API will move in either direction but will not say whether
+     there is anything that way, so the arrows keep their own count: each page
+     stamps its position into its history entry, which the browser hands back
+     when that entry is revisited, and the furthest position reached is kept
+     per tab. Arriving somewhere new truncates the forward end, exactly as the
+     browser's own history does.
+
+     The count only covers this site. Back is disabled at the first page of
+     the visit even though the browser could leave for wherever the reader
+     came from -- these arrows move within the vault, like Obsidian's. */
+  if (backBtn && fwdBtn) {
+    var HERE = "osp-history-at";
+    var DEPTH = "osp-history-depth";
+
+    var read = function (key) {
+      try {
+        var raw = parseInt(sessionStorage.getItem(key), 10);
+        return isNaN(raw) ? null : raw;
+      } catch (e) { return null; }
     };
-    var trail = [];
-    try { trail = JSON.parse(sessionStorage.getItem("osp-trail") || "[]"); } catch (e) {}
-    if (!trail.length || trail[trail.length - 1].u !== here.u) {
-      trail.push(here);
-      if (trail.length > 12) trail.shift();
-      try { sessionStorage.setItem("osp-trail", JSON.stringify(trail)); } catch (e) {}
+    var write = function (key, value) {
+      try { sessionStorage.setItem(key, String(value)); } catch (e) {}
+    };
+
+    var at;
+    var state = history.state;
+    if (state && typeof state.ospAt === "number") {
+      at = state.ospAt;
+    } else {
+      var previous = read(HERE);
+      at = previous === null ? 0 : previous + 1;
+      try { history.replaceState({ ospAt: at }, ""); } catch (e) {}
+      write(DEPTH, at);
     }
-    var previous = trail.length > 1 ? trail[trail.length - 2] : null;
-    if (previous) {
-      backLink.setAttribute("href", previous.u);
-      backLabel.textContent = previous.t;
-      backLink.setAttribute("aria-label", "Back to " + previous.t);
-      backLink.hidden = false;
-    }
+
+    var sync = function () {
+      /* Written here rather than once on load, because a page the browser
+         kept alive is shown again without running any of this. */
+      write(HERE, at);
+      var depth = read(DEPTH);
+      /* Without session storage there is nothing to count with. Back is
+         offered on the browser's own word, and forward is not guessed at. */
+      backBtn.disabled = depth === null ? history.length <= 1 : at <= 0;
+      fwdBtn.disabled = depth === null || at >= depth;
+    };
+
+    sync();
+    backBtn.addEventListener("click", function () { history.back(); });
+    fwdBtn.addEventListener("click", function () { history.forward(); });
+    window.addEventListener("pageshow", sync);
   }
 
   /* --- the outline follows the reading ----------------------------- */

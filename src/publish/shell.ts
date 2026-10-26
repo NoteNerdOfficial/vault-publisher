@@ -15,6 +15,24 @@ import { NavBucket, NavNode, NavNote, relativeDay } from "./nav";
 import { Heading } from "./page";
 import { encodeUrlPath } from "./urls";
 
+/**
+ * Where the pages the build invents ended up.
+ *
+ * Not constants, because a vault may already publish a note at `browse.html`
+ * or a folder called `tags`, and the note has the better claim -- the author
+ * named it. `sitePaths` in `landing.ts` picks around them, and every link to
+ * one of these pages reads it from here so there is one answer rather than
+ * one per caller.
+ */
+export interface SitePaths {
+  /** The full folder-by-folder listing, e.g. "browse.html". */
+  browse: string;
+  /** The list of every tag, e.g. "tags.html". */
+  tags: string;
+  /** Folder the per-tag pages are published under, e.g. "tags". */
+  tagPrefix: string;
+}
+
 export interface ShellInput {
   siteName: string;
   /** The page being rendered. */
@@ -25,7 +43,18 @@ export interface ShellInput {
   nav: NavNode[];
   pinned: NavNote[];
   recency: NavBucket[];
-  tags: Array<{ name: string; count: number }>;
+  /** Every tag in the published set, with the page each one has. */
+  tags: Array<{ name: string; count: number; url: string }>;
+  paths: SitePaths;
+  /**
+   * The breadcrumb, when the page's URL does not describe it.
+   *
+   * A note's trail is its folders, which the URL already carries. A tag page
+   * lives at `tags/writing.html` and its trail is site / Tags / #writing --
+   * no folder called "Tags" exists, so deriving it from the path would link
+   * to a group on the browse page that is not there.
+   */
+  crumbs?: Array<{ label: string; url?: string }>;
   headings: Heading[];
   backlinks: Mention[];
   related: Mention[];
@@ -128,9 +157,13 @@ export function folderSlug(value: string): string {
  * Where this note sits, and the way back out.
  *
  * It stays at the top of the column while the note scrolls, because the one
- * question a long page stops answering is which note you are in. The back
- * control is scripted and ships hidden: it names the page you came from, and
- * a page nobody navigated to has nothing to name.
+ * question a long page stops answering is which note you are in.
+ *
+ * The pair of arrows is the browser's own history, the way Obsidian's is: a
+ * reader who opened four notes wants the fourth, third, fourth again without
+ * reading a label each time. They ship disabled, and the script enables
+ * whichever direction this tab can actually go -- a control that says it can
+ * do nothing is better than one that does nothing when pressed.
  */
 export function breadcrumb(input: ShellInput): string {
   const segments = input.url.split("/").slice(0, -1);
@@ -138,15 +171,23 @@ export function breadcrumb(input: ShellInput): string {
   const folders = segments.map((segment) => {
     walked = walked ? `${walked}/${segment}` : segment;
     return (
-      `<a href="${input.root}index.html#folder-${escapeHtml(folderSlug(walked))}">` +
-      `${escapeHtml(segment)}</a>`
+      `<a href="${input.root}${escapeHtml(encodeUrlPath(input.paths.browse))}` +
+      `#folder-${escapeHtml(folderSlug(walked))}">${escapeHtml(segment)}</a>`
     );
   });
 
   // The front page is the first crumb, so it does not also need to be the
   // last one.
-  const trail =
-    input.url === "index.html"
+  const trail = input.crumbs
+    ? [
+        `<a href="${input.root}index.html">${escapeHtml(input.siteName)}</a>`,
+        ...input.crumbs.map((crumb, index) =>
+          crumb.url && index < (input.crumbs?.length ?? 0) - 1
+            ? `<a href="${input.root}${escapeHtml(encodeUrlPath(crumb.url))}">${escapeHtml(crumb.label)}</a>`
+            : `<span aria-current="page">${escapeHtml(crumb.label)}</span>`,
+        ),
+      ]
+    : input.url === "index.html"
       ? [`<span aria-current="page">${escapeHtml(input.siteName)}</span>`]
       : [
           `<a href="${input.root}index.html">${escapeHtml(input.siteName)}</a>`,
@@ -156,9 +197,10 @@ export function breadcrumb(input: ShellInput): string {
 
   return (
     `<nav class="osp-crumb" data-osp-crumb aria-label="Breadcrumb">` +
-    `<a class="osp-btn osp-crumb-back" data-osp-back hidden href="${input.root}index.html">` +
-    icon("arrowLeft", "osp-icon-sm") +
-    `<span class="osp-label" data-osp-back-label>Back</span></a>` +
+    `<div class="osp-crumb-nav" role="group" aria-label="History">` +
+    historyButton("back", "arrowLeft", "Go back") +
+    historyButton("forward", "arrowRight", "Go forward") +
+    `</div>` +
     `<ol class="osp-crumb-trail">` +
     trail
       .map(
@@ -167,6 +209,17 @@ export function breadcrumb(input: ShellInput): string {
       )
       .join("") +
     `</ol></nav>`
+  );
+}
+
+/**
+ * One arrow. Disabled in the markup, because without the script there is no
+ * history to move through and a live-looking control would be a lie.
+ */
+function historyButton(direction: "back" | "forward", glyph: string, label: string): string {
+  return (
+    `<button type="button" class="osp-crumb-step" data-osp-${direction} disabled ` +
+    `aria-label="${label}" title="${label}">${icon(glyph, "osp-icon-sm")}</button>`
   );
 }
 
@@ -229,8 +282,8 @@ export function jumpPanel(input: ShellInput): string {
  *
  * Hidden rather than absent so the matching is a filter over markup the build
  * produced, the same way the note matches are a filter over the tree. With
- * scripting off the tags are still reachable: the index page lists them, and
- * that is where these rows point.
+ * scripting off the tags are still reachable: each row is a link to that
+ * tag's own page, which is where a tag goes from everywhere else too.
  */
 function tagIndex(input: ShellInput): string {
   if (!input.tags.length) return "";
@@ -239,7 +292,7 @@ function tagIndex(input: ShellInput): string {
     input.tags
       .map(
         (tag) =>
-          `<a class="osp-row" href="${input.root}index.html#tag-${escapeHtml(tag.name)}">` +
+          `<a class="osp-row" href="${input.root}${escapeHtml(encodeUrlPath(tag.url))}">` +
           icon("hash", "osp-icon-sm") +
           `<span class="osp-label">${escapeHtml(tag.name)}</span>` +
           `<span class="osp-num">${tag.count}</span></a>`,
@@ -288,7 +341,7 @@ export function recencySection(input: ShellInput): string {
     `<h2 class="osp-group-title">Recently updated<span class="osp-num">${total}</span></h2>` +
     body +
     (hidden > 0
-      ? `<a class="osp-row osp-row-more" href="${input.root}index.html#recent">` +
+      ? `<a class="osp-row osp-row-more" href="${input.root}${escapeHtml(encodeUrlPath(input.paths.browse))}#recent">` +
         `<span class="osp-label">Show all ${total} updated notes</span>` +
         icon("arrowRight", "osp-icon-sm") +
         `</a>`

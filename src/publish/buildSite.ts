@@ -7,7 +7,7 @@ import {
   assignHeadingIds,
   buildPage,
   dropRedundantTitleHeading,
-  escapeHtml,
+  pathToRoot,
   prepareCollapsibleCallouts,
   stripFrontmatter,
 } from "./page";
@@ -53,7 +53,20 @@ import {
   formatDay,
   recencyBuckets,
 } from "./nav";
-import { folderSlug } from "./shell";
+import { SitePaths, folderSlug } from "./shell";
+import {
+  LandingInput,
+  LandingNote,
+  TagLink,
+  browseContent,
+  exploreContent,
+  noteExcerpt,
+  overviewContent,
+  sitePaths,
+  tagPageContent,
+  tagUrls,
+  tagsIndexContent,
+} from "./landing";
 import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
@@ -86,6 +99,17 @@ export interface SiteConfig {
   requireFrontmatterFlag: string | null;
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
+  /**
+   * The note to publish as the homepage, as a vault path.
+   *
+   * Empty or unset means: the vault's own `README.md` if it is being
+   * published, then `index.md`, then `Home.md`, and failing all three a
+   * generated overview. A note used as the homepage is published *at*
+   * `index.html` rather than at its own URL, so every link to it -- wikilinks,
+   * backlinks, the tree, the graph -- points at the front page rather than at
+   * a second copy of it.
+   */
+  homeNote?: string;
   /** Frontmatter key holding a note's own edit date. Defaults to `updated`. */
   updatedProperty?: string;
   /**
@@ -291,6 +315,71 @@ export function urlForNote(sourcePath: string, folder: string | null): string {
   return relative.replace(/\.md$/i, ".html");
 }
 
+/**
+ * Names a vault will have used for its front page, in the order a reader
+ * would expect them to win. Matched case-insensitively, since a vault may
+ * hold `readme.md` or `README.md` and neither is more correct.
+ */
+const HOME_CANDIDATES = ["readme.md", "index.md", "home.md"];
+
+export interface HomeNote {
+  /** Vault path of the note to publish as the homepage, or null. */
+  path: string | null;
+  /**
+   * A homepage the user named that no published note matches.
+   *
+   * Reported rather than ignored: a typo here is silent otherwise -- the
+   * build falls back to the README and the user is left looking at a page
+   * they thought they had replaced.
+   */
+  unresolved: string | null;
+}
+
+/**
+ * Which note is the homepage.
+ *
+ * The setting wins, then the vault's own front page by convention, and a
+ * vault with neither gets the generated overview. Only notes being published
+ * are considered: a README outside the scope is not the site's homepage, and
+ * publishing it because it is called README would publish a note the user
+ * excluded.
+ */
+export function resolveHomeNote(
+  selected: Array<{ path: string }>,
+  config: Pick<SiteConfig, "folder" | "homeNote">,
+): HomeNote {
+  const scope = config.folder ?? "";
+  const named = config.homeNote?.trim().replace(/^\/+|\/+$/g, "");
+
+  if (named) {
+    const forms = [named, /\.md$/i.test(named) ? named : `${named}.md`];
+    const keys = new Set(
+      [...forms, ...(scope ? forms.map((form) => `${scope}/${form}`) : [])].map((form) =>
+        form.toLowerCase(),
+      ),
+    );
+    const hit = selected.find((file) => keys.has(file.path.toLowerCase()));
+    if (hit) return { path: hit.path, unresolved: null };
+  }
+
+  // A front page is one at the top of what is being published. A `README.md`
+  // three folders down is documentation for that folder, not for the site.
+  const top = selected.filter((file) => {
+    const relative =
+      scope && file.path.startsWith(`${scope}/`) ? file.path.slice(scope.length + 1) : file.path;
+    return !relative.includes("/");
+  });
+
+  for (const candidate of HOME_CANDIDATES) {
+    const hit = top.find(
+      (file) => (file.path.split("/").pop() ?? "").toLowerCase() === candidate,
+    );
+    if (hit) return { path: hit.path, unresolved: named ?? null };
+  }
+
+  return { path: null, unresolved: named ?? null };
+}
+
 export async function buildSite(
   app: App,
   config: SiteConfig,
@@ -304,9 +393,30 @@ export async function buildSite(
   await waitForDataviewIndex(app as never);
 
   const selected = selectNotes(app, config);
+  const home = resolveHomeNote(selected, config);
+
+  /**
+   * Where a note is published.
+   *
+   * The homepage note goes to `index.html` and nowhere else, so there is one
+   * copy of it and every link to it -- wikilink, backlink, tree row, graph
+   * node -- resolves to the front page.
+   *
+   * The second branch is a collision that used to be a silent overwrite: a
+   * vault holding `index.md` at its root published it to `index.html` and then
+   * wrote the generated index over the top of it. Now `index.md` is a
+   * homepage candidate, and when something else has already claimed the front
+   * page it keeps its content at a name that is still its own.
+   */
+  const urlFor = (path: string): string => {
+    if (home.path === path) return "index.html";
+    const url = urlForNote(path, config.folder);
+    return url.toLowerCase() === "index.html" ? "index-note.html" : url;
+  };
+
   const targets: LinkTarget[] = selected.map((file) => ({
     sourcePath: file.path,
-    url: urlForNote(file.path, config.folder),
+    url: urlFor(file.path),
   }));
   const resolver = new LinkResolver(targets);
 
@@ -364,7 +474,7 @@ export async function buildSite(
           );
         }
 
-        const url = urlForNote(file.path, config.folder);
+        const url = urlFor(file.path);
         let headings: ReturnType<typeof assignHeadingIds> = [];
         let unresolvedTargets: string[] = [];
         let outgoing: Array<{ url: string; context: string }> = [];
@@ -474,8 +584,8 @@ export async function buildSite(
   const navTree = buildNavTree(navNotes);
   const pinned = navNotes.filter((note) => note.pinned);
   const recency = recencyBuckets(navNotes, config.now ?? new Date());
-  const tags = collectTags(rendered.map((page) => ({ url: page.url, tags: page.tags })));
   const titles = new Map(rendered.map((page) => [page.url, page.title]));
+  const today = config.now ?? new Date();
 
   const outgoing: OutgoingLinks[] = rendered.map((page) => ({
     url: page.url,
@@ -484,6 +594,77 @@ export async function buildSite(
   }));
   const backlinks = buildBacklinkIndex(outgoing);
   const outgoingByUrl = new Map(outgoing.map((page) => [page.url, page]));
+
+  // The pages the build invents, named around the notes rather than over
+  // them, and every tag's own page.
+  const paths: SitePaths = sitePaths(rendered.map((page) => page.url));
+  const counted = collectTags(rendered.map((page) => ({ url: page.url, tags: page.tags })));
+  const tagUrlByName = tagUrls(counted, paths);
+  const tags: TagLink[] = counted.map((tag) => ({
+    ...tag,
+    url: tagUrlByName.get(tag.name) ?? paths.tags,
+  }));
+
+  /** Every published page, as the homepage, the browse page and a tag page see it. */
+  const landingNotes: LandingNote[] = rendered.map((page) => ({
+    url: page.url,
+    title: page.title,
+    folder: page.nav.folder,
+    updated: page.nav.updated,
+    pinned: page.nav.pinned,
+    tags: page.tags,
+    excerpt: noteExcerpt(page.html),
+    incoming: backlinks.get(page.url)?.length ?? 0,
+  }));
+
+  const landing = (url: string): LandingInput => ({
+    siteName: config.siteName,
+    notes: landingNotes,
+    tags,
+    recency,
+    paths,
+    today,
+    root: pathToRoot(url),
+  });
+
+  /**
+   * The shell for a page the build wrote rather than rendered.
+   *
+   * No backlinks, no related notes, no graph: those are claims about a note,
+   * and these pages are not notes. The vault panel, the search and the tags
+   * are the same everywhere, which is the point of them.
+   */
+  const sitePageShell = (
+    crumbs?: Array<{ label: string; url?: string }>,
+  ): NonNullable<Parameters<typeof buildPage>[0]["shell"]> => ({
+    nav: navTree,
+    pinned,
+    recency,
+    tags,
+    paths,
+    crumbs,
+    backlinks: [],
+    related: [],
+    graph: {
+      nodes: [],
+      edges: [],
+      centre: { title: config.siteName, x: 0, y: 0 },
+      width: 0,
+      height: 0,
+    },
+    stats: { words: 0, readingMinutes: 1, sections: 0 },
+    today,
+    noteCount: navNotes.length,
+  });
+
+  if (home.unresolved) {
+    skipped.push({
+      path: home.unresolved,
+      reason: home.path
+        ? `set as the homepage, but no published note matches it; using ${home.path} instead`
+        : "set as the homepage, but no published note matches it",
+    });
+  }
 
   for (const page of rendered) {
     const mentions: Mention[] = backlinks.get(page.url) ?? [];
@@ -497,15 +678,22 @@ export async function buildSite(
           title: page.title,
           url: page.url,
           siteName: config.siteName,
-          properties: noteHeader(page, mentions.length),
+          properties: noteHeader(page, mentions.length, tagUrlByName),
         },
-        content: page.html,
+        // The homepage note is somebody's README, so it says nothing about
+        // where the rest of the vault is. Below 56rem the panel is gone too,
+        // which would leave a short README with no way onward at all.
+        content:
+          page.url === "index.html"
+            ? `${page.html}\n${exploreContent(landing(page.url))}`
+            : page.html,
         headings: page.headings,
         shell: {
           nav: navTree,
           pinned,
           recency,
           tags,
+          paths,
           backlinks: mentions,
           related,
           graph: buildLocalGraph({
@@ -520,7 +708,7 @@ export async function buildSite(
             readingMinutes: Math.max(1, Math.round(words / 220)),
             sections: page.headings.filter((heading) => heading.level === 2).length,
           },
-          today: config.now ?? new Date(),
+          today,
           noteCount: navNotes.length,
         },
       }),
@@ -556,17 +744,59 @@ export async function buildSite(
     content: harvestToStylesheet(harvested.rules),
   });
   files.push({ path: "assets/site.css", content: siteCss(config.theme) });
+
+  // The homepage, when no note is standing in for it. A note that is -- the
+  // vault's README, or whatever the user chose -- was published at
+  // `index.html` by the loop above.
+  if (!home.path) {
+    files.push({
+      path: "index.html",
+      content: buildPage({
+        meta: { title: config.siteName, url: "index.html", siteName: config.siteName },
+        content: overviewContent(landing("index.html")),
+        headings: [],
+        shell: sitePageShell(),
+      }),
+    });
+  }
+
   files.push({
-    path: "index.html",
-    content: buildIndex(config, pages, rendered, {
-      nav: navTree,
-      pinned,
-      recency,
-      tags,
-      today: config.now ?? new Date(),
-      noteCount: navNotes.length,
+    path: paths.browse,
+    content: buildPage({
+      meta: { title: "Browse", url: paths.browse, siteName: config.siteName },
+      content: browseContent(landing(paths.browse), folderSlug),
+      headings: [],
+      shell: sitePageShell(),
     }),
   });
+
+  files.push({
+    path: paths.tags,
+    content: buildPage({
+      meta: { title: "Tags", url: paths.tags, siteName: config.siteName },
+      content: tagsIndexContent(landing(paths.tags)),
+      headings: [],
+      shell: sitePageShell(),
+    }),
+  });
+
+  // A tag is a page: it has a title, a count, the notes carrying it, a URL
+  // worth sending someone, and a way back. An anchor in a list of hundreds
+  // had none of that.
+  for (const tag of tags) {
+    files.push({
+      path: tag.url,
+      content: buildPage({
+        meta: { title: `#${tag.name}`, url: tag.url, siteName: config.siteName },
+        content: tagPageContent(tag, landing(tag.url)),
+        headings: [],
+        shell: sitePageShell([
+          { label: "Tags", url: paths.tags },
+          { label: `#${tag.name}` },
+        ]),
+      }),
+    });
+  }
   // Pages would otherwise run the committed HTML through Jekyll, which
   // ignores files and folders whose names begin with an underscore -- and
   // Obsidian attachment folders are commonly named `_attachments`.
@@ -704,158 +934,6 @@ function countMatches(html: string, needle: string): number {
 }
 
 /**
- * The site's front page.
- *
- * A flat list of every file was fine for seven test notes and is useless at
- * three hundred: it tells a reader the vault has a lot in it and nothing
- * about what. So pages are grouped by the folder they came from, which is
- * the structure the author already made and the one they will recognise.
- *
- * Pages at the top level lead, because a vault's loose notes are usually its
- * entry points, and folders follow in alphabetical order.
- */
-function buildIndex(
-  config: SiteConfig,
-  pages: PageResult[],
-  tagged: Array<{ url: string; title: string; tags: string[] }>,
-  shell: IndexShell,
-): string {
-  const groups = new Map<string, PageResult[]>();
-  for (const page of pages) {
-    const slash = page.url.lastIndexOf("/");
-    const group = slash === -1 ? "" : page.url.slice(0, slash);
-    const bucket = groups.get(group);
-    if (bucket) bucket.push(page);
-    else groups.set(group, [page]);
-  }
-
-  const ordered = Array.from(groups.entries()).sort(([a], [b]) => {
-    if (a === "") return -1;
-    if (b === "") return 1;
-    return a.localeCompare(b);
-  });
-
-  const sections = ordered
-    .map(([group, items]) => {
-      const heading = group
-        ? `<h2 class="osp-index-group" id="folder-${escapeHtml(folderSlug(group))}">${escapeHtml(group.replace(/\//g, " / "))}</h2>`
-        : "";
-      const list = items
-        .map(
-          (page) =>
-            `<li class="osp-index-item"><a href="${escapeHtml(
-              encodeUrlPath(page.url),
-            )}">${escapeHtml(page.title)}</a></li>`,
-        )
-        .join("\n          ");
-      return `${heading}\n        <ul class="osp-index">\n          ${list}\n        </ul>`;
-    })
-    .join("\n        ");
-
-  const count = pages.length;
-  const lead = `<p class="osp-index-lead">${count} ${count === 1 ? "page" : "pages"}.</p>`;
-
-  return buildPage({
-    meta: {
-      title: config.siteName,
-      url: "index.html",
-      siteName: config.siteName,
-    },
-    content: `${lead}\n        ${recentIndex(shell)}${tagIndex(shell, tagged)}${sections}`,
-    headings: [],
-    shell: {
-      ...shell,
-      backlinks: [],
-      related: [],
-      graph: { nodes: [], edges: [], centre: { title: config.siteName, x: 0, y: 0 }, width: 0, height: 0 },
-      stats: { words: 0, readingMinutes: 1, sections: 0 },
-    },
-  });
-}
-
-type IndexShell = Omit<
-  Parameters<typeof buildPage>[0]["shell"] & object,
-  "backlinks" | "related" | "graph" | "stats"
->;
-
-/**
- * Every recently-edited note, in full.
- *
- * The panel's recency list is capped and collapsed, which is right for a
- * sidebar and wrong as the only answer: its "show all" has to land somewhere
- * that actually shows them all, and this is it.
- */
-function recentIndex(shell: IndexShell): string {
-  if (!shell.recency.length) return "";
-  return (
-    `<h2 class="osp-index-group" id="recent">Recently updated</h2>\n        ` +
-    shell.recency
-      .map(
-        (bucket) =>
-          `<h3 class="osp-index-bucket">${bucket.label}<span class="osp-num">${bucket.count}</span></h3>` +
-          `<ul class="osp-index">` +
-          bucket.rows
-            .flatMap((row) => (row.kind === "batch" ? row.notes : [row.note]))
-            .map(
-              (note) =>
-                `<li class="osp-index-item"><a href="${escapeHtml(encodeUrlPath(note.url))}">` +
-                `${escapeHtml(note.title)}</a></li>`,
-            )
-            .join("") +
-          `</ul>`,
-      )
-      .join("\n        ") +
-    "\n        "
-  );
-}
-
-/**
- * Where a tag goes.
- *
- * The panel offers tags as somewhere to go, and a chip that scrolls to
- * another chip is not somewhere. So each tag is a section with the notes
- * carrying it, and the cloud at the top is the way into them.
- */
-function tagIndex(
-  shell: IndexShell,
-  tagged: Array<{ url: string; title: string; tags: string[] }>,
-): string {
-  if (!shell.tags.length) return "";
-
-  const notesFor = (name: string) =>
-    tagged.filter((page) => page.tags.includes(name));
-
-  return (
-    `<h2 class="osp-index-group" id="tags">Tags</h2>\n        <div class="osp-tagcloud">` +
-    shell.tags
-      .map(
-        (tag) =>
-          `<a class="osp-tag" href="#tag-${escapeHtml(tag.name)}">#${escapeHtml(tag.name)}` +
-          `<span class="osp-num">${tag.count}</span></a>`,
-      )
-      .join("") +
-    `</div>\n        ` +
-    shell.tags
-      .map(
-        (tag) =>
-          `<h3 class="osp-index-bucket" id="tag-${escapeHtml(tag.name)}">#${escapeHtml(tag.name)}` +
-          `<span class="osp-num">${tag.count}</span></h3>` +
-          `<ul class="osp-index">` +
-          notesFor(tag.name)
-            .map(
-              (page) =>
-                `<li class="osp-index-item"><a href="${escapeHtml(encodeUrlPath(page.url))}">` +
-                `${escapeHtml(page.title)}</a></li>`,
-            )
-            .join("") +
-          `</ul>`,
-      )
-      .join("\n        ") +
-    "\n        "
-  );
-}
-
-/**
  * The few facts a note carries about itself.
  *
  * Only what the build was asked for: the date key the user named, the links
@@ -866,8 +944,13 @@ function tagIndex(
 function noteHeader(
   page: { nav: NavNote; tags: string[]; outgoing: Array<{ url: string }> },
   incoming: number,
-): Array<{ label: string; value: string; tags?: string[] }> {
-  const header: Array<{ label: string; value: string; tags?: string[] }> = [];
+  tagUrlByName: Map<string, string>,
+): Array<{ label: string; value: string; tags?: Array<{ name: string; url: string }> }> {
+  const header: Array<{
+    label: string;
+    value: string;
+    tags?: Array<{ name: string; url: string }>;
+  }> = [];
 
   if (page.nav.updated) {
     const day = formatDay(page.nav.updated);
@@ -879,7 +962,13 @@ function noteHeader(
     header.push({ label: "Links", value: `${incoming} in \u00b7 ${outgoing} out` });
   }
 
-  if (page.tags.length) header.push({ label: "", value: "", tags: page.tags });
+  // A tag with no page is one no published note carries, which cannot happen
+  // -- the counts are built from these same notes. Dropped rather than linked
+  // nowhere, because "cannot happen" is not a reason to emit a broken link.
+  const tags = page.tags
+    .map((name) => ({ name, url: tagUrlByName.get(name) }))
+    .filter((tag): tag is { name: string; url: string } => Boolean(tag.url));
+  if (tags.length) header.push({ label: "", value: "", tags });
 
   return header;
 }

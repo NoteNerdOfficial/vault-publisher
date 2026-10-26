@@ -13,6 +13,7 @@
  */
 
 import { slugifyFragment } from "./links";
+import { encodeUrlPath } from "./urls";
 import { CLIENT_SCRIPT, THEME_BOOT } from "./clientScript";
 import {
   ShellInput,
@@ -31,8 +32,17 @@ export interface PageMeta {
   description?: string;
   /** Site-wide name for the header and OG metadata. */
   siteName: string;
-  /** Frontmatter worth showing above the note: status, dates, tags. */
-  properties?: Array<{ label: string; value: string; tags?: string[] }>;
+  /**
+   * Frontmatter worth showing above the note: status, dates, tags.
+   *
+   * A tag carries the page it belongs to rather than just its name, because
+   * the chip is a link and only the build knows where a tag lives.
+   */
+  properties?: Array<{
+    label: string;
+    value: string;
+    tags?: Array<{ name: string; url: string }>;
+  }>;
 }
 
 export interface Heading {
@@ -153,7 +163,7 @@ export function assignHeadingIds(root: HTMLElement): Heading[] {
 }
 
 /** Depth of a published URL, for resolving site-root assets relatively. */
-function pathToRoot(url: string): string {
+export function pathToRoot(url: string): string {
   const depth = url.split("/").length - 1;
   return depth === 0 ? "./" : "../".repeat(depth);
 }
@@ -252,8 +262,8 @@ function propertiesBlock(properties: PageMeta["properties"], root: string): stri
             property.tags
               .map(
                 (tag) =>
-                  `<a class="osp-tag" href="${root}index.html#tag-${escapeHtml(tag)}">` +
-                  `#${escapeHtml(tag)}</a>`,
+                  `<a class="osp-tag" href="${root}${escapeHtml(encodeUrlPath(tag.url))}">` +
+                  `#${escapeHtml(tag.name)}</a>`,
               )
               .join("") +
             `</span>`

@@ -13,8 +13,20 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildLocalGraph } from "./graph";
+import {
+  LandingInput,
+  LandingNote,
+  browseContent,
+  exploreContent,
+  overviewContent,
+  sitePaths,
+  tagPageContent,
+  tagUrls,
+  tagsIndexContent,
+} from "./landing";
 import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
 import { buildPage } from "./page";
+import { folderSlug } from "./shell";
 import { siteCss } from "./theme";
 
 const TODAY = new Date("2026-10-25T12:00:00Z");
@@ -80,6 +92,46 @@ const HEADINGS = [
 
 const URL = "notes/atomic-notes-in-practice.html";
 
+const TAGGED = [
+  { url: URL, tags: ["method", "note-taking", "evergreen"] },
+  { url: "notes/why-notes-decay.html", tags: ["method", "writing"] },
+  { url: "reference/glossary.html", tags: ["method"] },
+];
+
+const PATHS = sitePaths(NOTES.map((n) => n.url));
+const TAG_URLS = tagUrls(collectTags(TAGGED), PATHS);
+const TAGS = collectTags(TAGGED).map((tag) => ({
+  ...tag,
+  url: TAG_URLS.get(tag.name) as string,
+}));
+
+/** Every note as the site's own pages see it, with a line to read. */
+const LANDING: LandingNote[] = NOTES.map((note, index) => ({
+  url: note.url,
+  title: note.title,
+  folder: note.folder,
+  updated: note.updated,
+  pinned: note.pinned,
+  tags: TAGGED.find((t) => t.url === note.url)?.tags ?? [],
+  excerpt:
+    index % 3 === 0
+      ? "A note is worth keeping when it says one thing, and says it well enough that you can use it without rereading the thing it came from."
+      : "",
+  incoming: Math.max(0, 7 - index),
+}));
+
+function landing(url: string): LandingInput {
+  return {
+    siteName: "A Vault, Published",
+    notes: LANDING,
+    tags: TAGS,
+    recency: recencyBuckets(NOTES, TODAY),
+    paths: PATHS,
+    today: TODAY,
+    root: url.includes("/") ? "../" : "./",
+  };
+}
+
 const BACKLINKS = [
   {
     url: "notes/linking-your-thinking.html",
@@ -112,7 +164,14 @@ function page(themeName: string): string {
       properties: [
         { label: "Updated", value: "24 Oct 2026" },
         { label: "Links", value: "2 in \u00b7 3 out" },
-        { label: "", value: "", tags: ["method", "note-taking", "evergreen"] },
+        {
+          label: "",
+          value: "",
+          tags: ["method", "note-taking", "evergreen"].map((name) => ({
+            name,
+            url: TAG_URLS.get(name) as string,
+          })),
+        },
       ],
     },
     content: CONTENT,
@@ -121,11 +180,8 @@ function page(themeName: string): string {
       nav: buildNavTree(NOTES),
       pinned: NOTES.filter((n) => n.pinned),
       recency: recencyBuckets(NOTES, TODAY),
-      tags: collectTags([
-        { url: URL, tags: ["method", "note-taking", "evergreen"] },
-        { url: "notes/why-notes-decay.html", tags: ["method", "writing"] },
-        { url: "reference/glossary.html", tags: ["method"] },
-      ]),
+      tags: TAGS,
+      paths: PATHS,
       backlinks: BACKLINKS,
       related: RELATED,
       graph: buildLocalGraph({
@@ -136,6 +192,40 @@ function page(themeName: string): string {
         titles,
       }),
       stats: { words: 648, readingMinutes: 3, sections: 4 },
+      today: TODAY,
+      noteCount: NOTES.length,
+    },
+  });
+}
+
+/** A page the build writes rather than renders: no note, so no note context. */
+function sitePage(
+  title: string,
+  url: string,
+  content: string,
+  crumbs?: Array<{ label: string; url?: string }>,
+): string {
+  return buildPage({
+    meta: { title, url, siteName: "A Vault, Published" },
+    content,
+    headings: [],
+    shell: {
+      nav: buildNavTree(NOTES),
+      pinned: NOTES.filter((n) => n.pinned),
+      recency: recencyBuckets(NOTES, TODAY),
+      tags: TAGS,
+      paths: PATHS,
+      crumbs,
+      backlinks: [],
+      related: [],
+      graph: {
+        nodes: [],
+        edges: [],
+        centre: { title: "A Vault, Published", x: 0, y: 0 },
+        width: 0,
+        height: 0,
+      },
+      stats: { words: 0, readingMinutes: 1, sections: 0 },
       today: TODAY,
       noteCount: NOTES.length,
     },
@@ -167,16 +257,19 @@ describe("the shell", () => {
     );
     expect(panel).not.toContain("osp-tag");
     expect(html).toContain("data-osp-tag-index");
-    // And the chips go somewhere: the index page lists the notes per tag.
-    expect(html).toContain("index.html#tag-method");
+    // And the chips go somewhere a reader can arrive at, with a title, a
+    // count and a way back: the tag's own page.
+    expect(html).toContain('href="../tags/method.html"');
   });
 
   it("carries the trail and the way back above the note", () => {
     const html = page("press");
     expect(html).toContain('aria-label="Breadcrumb"');
-    expect(html).toContain("data-osp-back");
-    // Site, folder, note -- the folder links to its group on the index.
-    expect(html).toContain("index.html#folder-notes");
+    // Both arrows, and disabled until the script knows this tab can move.
+    expect(html).toContain("data-osp-back disabled");
+    expect(html).toContain("data-osp-forward disabled");
+    // Site, folder, note -- the folder links to its group on the browse page.
+    expect(html).toContain("browse.html#folder-notes");
     expect(html).toContain('<span aria-current="page">Atomic notes in practice</span>');
   });
 
@@ -191,12 +284,34 @@ describe("the shell", () => {
     if (!out) return;
     mkdirSync(join(out, "assets"), { recursive: true });
     mkdirSync(join(out, "notes"), { recursive: true });
+    mkdirSync(join(out, PATHS.tagPrefix), { recursive: true });
     for (const theme of ["press", "grove", "ink"]) {
       writeFileSync(join(out, `site-${theme}.css`), siteCss(theme));
     }
     writeFileSync(join(out, "assets/obsidian.css"), "/* stand-in for the harvested stylesheet */");
     writeFileSync(join(out, "assets/site.css"), siteCss("press"));
     writeFileSync(join(out, "notes/atomic-notes-in-practice.html"), page("press"));
+    writeFileSync(join(out, "index.html"), sitePage("A Vault, Published", "index.html", overviewContent(landing("index.html"))));
+    writeFileSync(join(out, PATHS.browse), sitePage("Browse", PATHS.browse, browseContent(landing(PATHS.browse), folderSlug)));
+    writeFileSync(join(out, PATHS.tags), sitePage("Tags", PATHS.tags, tagsIndexContent(landing(PATHS.tags))));
+    // The other homepage: a note the author wrote, with the strip that gives
+    // a reader somewhere to go after it.
+    writeFileSync(
+      join(out, "home-note.html"),
+      sitePage(
+        "Reading this vault",
+        "index.html",
+        `${CONTENT}\n${exploreContent(landing("index.html"))}`,
+      ),
+    );
+    const method = TAGS.find((tag) => tag.name === "method") as (typeof TAGS)[number];
+    writeFileSync(
+      join(out, method.url),
+      sitePage(`#${method.name}`, method.url, tagPageContent(method, landing(method.url)), [
+        { label: "Tags", url: PATHS.tags },
+        { label: `#${method.name}` },
+      ]),
+    );
     expect(true).toBe(true);
   });
 });
