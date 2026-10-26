@@ -37,7 +37,14 @@ export const DEFAULT_HARVEST_PREFIXES = [
   ".MJX",
   ".bases-",     // Bases grid and cell layout
   ".dataview",   // Dataview result structure
-  ".table-view-", // Dataview's table internals
+  // `.table-view-` is deliberately absent. Those rules are not structure:
+  // they set the header's weight and size, a medium `currentcolor` border
+  // under it, and `border-style: none` on every cell. All three outrank the
+  // site's own table rules by one element in the selector, so a Dataview
+  // table published with them looked like Obsidian's table in the middle of
+  // our page -- a black rule, a shouting header, and no row separators.
+  // A Dataview result is a real <table>; the stylesheet already knows what
+  // to do with one.
   ".mermaid",
   ".callout",    // Callout internals we do not re-author
   ".internal-embed",

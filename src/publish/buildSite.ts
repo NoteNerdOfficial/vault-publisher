@@ -8,7 +8,11 @@ import {
   buildPage,
   dropRedundantTitleHeading,
   pathToRoot,
+  neutralizeMermaidColours,
+  prepareCodeBlocks,
   prepareCollapsibleCallouts,
+  prepareTables,
+  prepareTaskStatuses,
   stripFrontmatter,
 } from "./page";
 import {
@@ -495,6 +499,12 @@ export async function buildSite(
             // flattening them to text, so the `.internal-link` elements a
             // Bases cell contains are still there for the rewriter to find.
             bases = reemitBases(container);
+            // After the Bases re-emitter, so its tables are wrapped and its
+            // numeric columns found by the same pass as everyone else's.
+            prepareCodeBlocks(container);
+            prepareTables(container);
+            prepareTaskStatuses(container);
+            neutralizeMermaidColours(container);
             headings = assignHeadingIds(container);
             const rewritten = rewriteLinks(container, resolver, url);
             unresolvedTargets = rewritten.unresolvedTargets;

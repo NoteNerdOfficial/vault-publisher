@@ -25,7 +25,7 @@ import {
   tagsIndexContent,
 } from "./landing";
 import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
-import { buildPage } from "./page";
+import { buildPage, prepareCodeBlocks, prepareTables } from "./page";
 import { folderSlug } from "./shell";
 import { siteCss } from "./theme";
 
@@ -79,7 +79,60 @@ anything.</p>
 <pre><code>![[Evergreen notes grow]]   # the title carries it</code></pre>
 <h2 id="what-it-looks-like">What it looks like in practice</h2>
 <p>Three habits, in the order they pay off.</p>
+<h2 id="what-a-note-carries">Everything else a note carries</h2>
+<p>Marks the markdown has but prose rarely shows at once: a <mark>highlight</mark>,
+a <kbd>⌘K</kbd>, a <del>retraction</del>, and a footnote.<sup class="footnote-ref">
+<a href="#fn-1" id="fnref-1">[1]</a></sup></p>
+<blockquote><p>A note that cannot be found is a note that was not written.</p></blockquote>
+<ul class="contains-task-list">
+<li class="task-list-item"><input type="checkbox"> Rewrite the titles that predict nothing</li>
+<li class="task-list-item is-checked"><input type="checkbox" checked> Link the four notes that were orphaned</li>
+</ul>
+<hr>
+<h3 id="a-table-of-numbers">A table of numbers</h3>
+<table><thead><tr><th>Folder</th><th>Notes</th><th>Words</th><th>Links out</th></tr></thead>
+<tbody>
+<tr><td>notes</td><td>124</td><td>41,208</td><td>302</td></tr>
+<tr><td>projects</td><td>38</td><td>9,540</td><td>96</td></tr>
+<tr><td>archive</td><td>1,017</td><td>212,744</td><td>8</td></tr>
+</tbody></table>
+<h2 id="code-as-rendered">Code, as the page renders it</h2>
+<p>Inline <code>siteCss(theme)</code> sits inside a sentence, so its background
+and padding have to agree with the line around it rather than push it apart.</p>
+<pre><code class="language-ts">export function siteCss(theme: string): string {
+  const palette = themes[theme] ?? themes.press;
+  return [reset(palette), typography(), rendered()].join("\\n");
+}
+</code></pre>
+<p>A line wider than the column scrolls inside its own block, and must not
+widen the page or the rail beside it.</p>
+<pre><code class="language-sh">OSP_PREVIEW=/tmp/preview npx vitest run shell.preview &amp;&amp; open /tmp/preview/notes/atomic-notes-in-practice.html  # deliberately too long for the column
+</code></pre>
+<p>Two things reach the HTML that no reader should see: the copy control
+Obsidian puts in every code block, and the note's own frontmatter. The
+stylesheet hides both, so nothing should appear between here and the end.</p>
+<pre><code class="language-txt">A block carrying Obsidian's copy control.</code><button class="copy-code-button">Copy</button></pre>
+<pre class="frontmatter language-yaml">status: draft
+client: Fabricated Holdings
+rate: 000</pre>
+<section class="footnotes"><ol>
+<li id="fn-1"><p>Which is the argument for the jump panel, not against
+folders.</p><a class="footnote-backref" href="#fnref-1">↩</a></li>
+</ol></section>
 `;
+
+/**
+ * The build runs these over the rendered DOM before the page is assembled;
+ * the preview is handed a string, so it runs them here. Without this the
+ * preview would show code blocks and tables the publisher never ships.
+ */
+function prepared(html: string): string {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  prepareCodeBlocks(root);
+  prepareTables(root);
+  return root.innerHTML;
+}
 
 const HEADINGS = [
   { level: 2, text: "Why notes decay", id: "why-notes-decay" },
@@ -88,6 +141,9 @@ const HEADINGS = [
   { level: 3, text: "Titles are the interface", id: "titles-are-the-interface" },
   { level: 2, text: "Links are the structure", id: "links-are-the-structure" },
   { level: 2, text: "What it looks like in practice", id: "what-it-looks-like" },
+  { level: 2, text: "Everything else a note carries", id: "what-a-note-carries" },
+  { level: 3, text: "A table of numbers", id: "a-table-of-numbers" },
+  { level: 2, text: "Code, as the page renders it", id: "code-as-rendered" },
 ];
 
 const URL = "notes/atomic-notes-in-practice.html";
@@ -174,7 +230,7 @@ function page(themeName: string): string {
         },
       ],
     },
-    content: CONTENT,
+    content: prepared(CONTENT),
     headings: HEADINGS,
     shell: {
       nav: buildNavTree(NOTES),
@@ -301,7 +357,7 @@ describe("the shell", () => {
       sitePage(
         "Reading this vault",
         "index.html",
-        `${CONTENT}\n${exploreContent(landing("index.html"))}`,
+        `${prepared(CONTENT)}\n${exploreContent(landing("index.html"))}`,
       ),
     );
     const method = TAGS.find((tag) => tag.name === "method") as (typeof TAGS)[number];

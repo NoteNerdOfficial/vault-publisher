@@ -91,6 +91,11 @@ const PATHS: Record<string, string> = {
   arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   hash: '<path d="M10 3 8 21M16 3l-2 18M3.5 9h17M2.5 15h17"/>',
+  // The line that runs on, turns, and comes back: the shape of a wrapped
+  // line rather than a generic arrow.
+  wrap: '<path d="M4 7h16M4 17h5"/><path d="M4 12h13.5a3 3 0 0 1 0 6H15"/><path d="m17 15-2.5 3 2.5 3"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/>',
+  check: '<path d="m4 12.5 5 5L20 6.5"/>',
 };
 
 export function icon(name: string, className = "osp-icon"): string {

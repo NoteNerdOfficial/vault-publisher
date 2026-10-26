@@ -378,6 +378,185 @@ export const CLIENT_SCRIPT = `(function () {
     if (callout) callout.classList.toggle("is-collapsed", !expanded);
   });
 
+  /* --- tasks that are neither done nor untouched -------------------- *
+     A browser draws an indeterminate checkbox as a dash, which is what
+     [/] and [-] mean. It is a property rather than an attribute, so the
+     markup cannot carry it and this is the only place it can be set.
+     ----------------------------------------------------------------- */
+
+  var partial = document.querySelectorAll("input[data-osp-task]");
+  for (var t = 0; t < partial.length; t++) partial[t].indeterminate = true;
+
+  /* --- code blocks, and anything else that scrolls sideways --------- *
+     Three jobs. The controls in a code block's bar ship hidden and are
+     revealed here, like the search field: a copy button that cannot copy is
+     worse than no copy button. Every sideways-scrolling region is measured,
+     so the stylesheet can fade the edge it can still move towards. And wrap
+     is remembered, because a reader who wants their lines wrapped wants that
+     on the next page too.
+     ----------------------------------------------------------------- */
+
+  var WRAP_KEY = "osp-code-wrap";
+  var apple = /Mac|iPhone|iPad|iPod/.test(navigator.platform || "");
+  var scrollers = document.querySelectorAll(".osp-scroller");
+
+  function measure(scroller) {
+    var figure = scroller.closest("[data-osp-code]");
+    var room = scroller.scrollWidth - scroller.clientWidth;
+    var over = room > 1;
+
+    if (figure) {
+      if (over || figure.getAttribute("data-osp-wrapped") === "on") {
+        figure.setAttribute("data-osp-overflow", "");
+      } else {
+        figure.removeAttribute("data-osp-overflow");
+      }
+    }
+
+    if (!over) {
+      scroller.removeAttribute("data-osp-at");
+      scroller.removeAttribute("tabindex");
+      scroller.removeAttribute("role");
+      scroller.removeAttribute("aria-label");
+      return;
+    }
+
+    /* A region that scrolls has to be reachable by keyboard, or its content
+       is readable with a mouse and gone without one. */
+    if (!scroller.hasAttribute("tabindex")) {
+      scroller.setAttribute("tabindex", "0");
+      scroller.setAttribute("role", "region");
+      var lang = figure ? figure.getAttribute("data-osp-lang") : null;
+      var what = figure
+        ? (lang ? lang + " code block, scrollable" : "Code block, scrollable")
+        : "Table, scrollable";
+      scroller.setAttribute("aria-label", what);
+    }
+
+    var at = "middle";
+    if (scroller.scrollLeft <= 1) at = "start";
+    else if (scroller.scrollLeft >= room - 1) at = "end";
+    scroller.setAttribute("data-osp-at", at);
+  }
+
+  function measureAll() {
+    for (var m = 0; m < scrollers.length; m++) measure(scrollers[m]);
+  }
+
+  function setWrap(figure, on) {
+    figure.setAttribute("data-osp-wrapped", on ? "on" : "off");
+    var button = figure.querySelector("[data-osp-wrap]");
+    if (button) button.setAttribute("aria-pressed", String(on));
+    var pre = figure.querySelector("pre");
+    if (pre) {
+      /* Wrapping leaves the block scrolled wherever it was, which in wrap
+         mode is nowhere the reader can get back from. */
+      if (on) pre.scrollLeft = 0;
+      measure(pre);
+    }
+  }
+
+  var wrapByDefault = false;
+  try { wrapByDefault = localStorage.getItem(WRAP_KEY) === "on"; } catch (e) {}
+
+  var blocks = document.querySelectorAll("[data-osp-code]");
+  for (var b = 0; b < blocks.length; b++) {
+    var tools = blocks[b].querySelector("[data-osp-code-tools]");
+    if (tools) tools.hidden = false;
+    if (wrapByDefault) setWrap(blocks[b], true);
+  }
+
+  for (var sc = 0; sc < scrollers.length; sc++) {
+    scrollers[sc].addEventListener("scroll", function (event) {
+      measure(event.currentTarget);
+    }, { passive: true });
+  }
+  measureAll();
+  window.addEventListener("resize", measureAll, { passive: true });
+
+  /* --- copy -------------------------------------------------------- */
+
+  function legacyCopy(text) {
+    /* A published vault is often read off a disk rather than a server, and
+       the clipboard API is not granted to every context a file:// page runs
+       in. This one is, and has been since long before it was deprecated. */
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(area);
+    return ok;
+  }
+
+  function copyText(text, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function () { done(true); },
+        function () { done(legacyCopy(text)); },
+      );
+      return;
+    }
+    done(legacyCopy(text));
+  }
+
+  function selectAll(el) {
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (e) {}
+  }
+
+  function say(button, text, hold) {
+    var label = button.querySelector(".osp-code-btn-label");
+    if (!label) return;
+    if (button.ospSaid) window.clearTimeout(button.ospSaid);
+    if (!button.ospWas) button.ospWas = label.textContent;
+    label.textContent = text;
+    button.ospSaid = window.setTimeout(function () {
+      label.textContent = button.ospWas;
+      button.removeAttribute("data-osp-copied");
+      button.ospSaid = null;
+    }, hold);
+  }
+
+  document.addEventListener("click", function (event) {
+    var wrapBtn = event.target.closest("[data-osp-wrap]");
+    if (wrapBtn) {
+      var figure = wrapBtn.closest("[data-osp-code]");
+      if (!figure) return;
+      var on = figure.getAttribute("data-osp-wrapped") !== "on";
+      setWrap(figure, on);
+      try { localStorage.setItem(WRAP_KEY, on ? "on" : "off"); } catch (e) {}
+      return;
+    }
+
+    var copyBtn = event.target.closest("[data-osp-copy]");
+    if (!copyBtn) return;
+    var block = copyBtn.closest("[data-osp-code]");
+    var code = block ? block.querySelector("pre code") : null;
+    if (!code) return;
+
+    copyText(code.textContent, function (ok) {
+      if (ok) {
+        copyBtn.setAttribute("data-osp-copied", "");
+        say(copyBtn, "Copied", 1600);
+        return;
+      }
+      /* Nothing left to do for them, so leave them able to do it: the block
+         is selected and the label says what to press. */
+      selectAll(code);
+      say(copyBtn, apple ? "Press ⌘C" : "Press Ctrl+C", 2800);
+    });
+  });
+
   /* --- the graph, as the rail's other state ------------------------ */
 
   var railPage = document.querySelector("[data-osp-rail-page]");

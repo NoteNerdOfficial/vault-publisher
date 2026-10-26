@@ -135,64 +135,334 @@ body {
 .markdown-rendered ul,
 .markdown-rendered ol { padding-left: 1.4rem; margin: 0 0 1.25rem; }
 .markdown-rendered li { margin: 0.3rem 0; }
+.markdown-rendered li::marker { color: var(--osp-text-muted); }
+.markdown-rendered ol > li::marker { font-variant-numeric: tabular-nums; }
+/* A list inside a list is part of the same thought: tighter, not another
+   block. */
+.markdown-rendered li > ul,
+.markdown-rendered li > ol { margin: 0.3rem 0 0; }
 
 .markdown-rendered blockquote {
   margin: 0 0 1.25rem;
-  padding-left: 1.25rem;
-  border-left: 2px solid var(--osp-border);
+  padding-left: 1.4rem;
+  border-left: var(--osp-rule) solid var(--osp-border);
   color: var(--osp-text-muted);
 }
+.markdown-rendered blockquote > :last-child { margin-bottom: 0; }
+
+/* --- code ------------------------------------------------------------ *
+ * Inline code is set in the surface colour with a hairline, so it reads as a
+ * token inside a sentence rather than a highlighted word.
+ *
+ * A block is a figure: a bar naming the language, over a region that scrolls
+ * on its own and says so at its edge. The two controls in the bar are the
+ * ones a reader reaches for -- wrap and copy -- and both ship hidden, so a
+ * page without scripting shows the language and nothing that cannot work.
+ * page.ts builds the markup; this only dresses it.
+ * --------------------------------------------------------------------- */
 
 .markdown-rendered code {
   font-family: var(--osp-font-mono);
   font-size: 0.875em;
+  font-variant-ligatures: none;
   background: var(--osp-surface);
-  padding: 0.15em 0.35em;
-  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--osp-border) 65%, transparent);
+  padding: 0.1em 0.33em;
+  border-radius: max(2px, calc(var(--osp-radius) / 2));
 }
+/* A link or a heading sets the colour; code inside one does not argue. */
+.markdown-rendered a code,
+.markdown-rendered h1 code,
+.markdown-rendered h2 code,
+.markdown-rendered h3 code,
+.markdown-rendered h4 code { color: inherit; font-size: 0.9em; }
+
+/* A <pre> that escaped the figure: a Dataview placeholder, a diagram that
+   never rendered. Still has to look like something. */
 .markdown-rendered pre {
   background: var(--osp-surface);
-  border: 1px solid var(--osp-border);
-  border-radius: 6px;
+  border: var(--osp-rule) solid var(--osp-border);
+  border-radius: max(5px, var(--osp-radius));
   padding: 1rem 1.1rem;
   overflow-x: auto;
   margin: 0 0 1.25rem;
   font-size: 0.875rem;
-  line-height: 1.55;
+  line-height: 1.6;
 }
-.markdown-rendered pre code { background: none; padding: 0; font-size: 1em; }
+.markdown-rendered pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 1em;
+}
 
-/* Obsidian ships a copy button inside every code block; it does nothing
-   here, and nothing in the page restores it. */
+.markdown-rendered .osp-code {
+  margin: 0 0 1.5rem;
+  border: var(--osp-rule) solid var(--osp-border);
+  border-radius: max(5px, var(--osp-radius));
+  background: var(--osp-surface);
+  /* The bar sits on the block's own corner radius. */
+  overflow: hidden;
+}
+
+.markdown-rendered .osp-code pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 0.9rem 1.05rem;
+  tab-size: 2;
+}
+
+.osp-code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 2.15rem;
+  padding: 0.25rem 0.35rem 0.25rem 1.05rem;
+  background: color-mix(in srgb, var(--osp-text) 3.5%, transparent);
+  border-bottom: var(--osp-rule) solid color-mix(in srgb, var(--osp-border) 70%, transparent);
+}
+
+.osp-code-lang {
+  font-family: var(--osp-font-mono);
+  font-size: var(--osp-ui-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--osp-text-muted);
+}
+
+/* Quiet by colour rather than by opacity: faded label text stops meeting
+   contrast, and a control nobody can read is not restraint. */
+.osp-code-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.osp-code-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-xs);
+  color: var(--osp-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: max(4px, calc(var(--osp-radius) - 2px));
+  padding: 0.32rem 0.5rem;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.osp-code-btn:hover { background: var(--osp-hover); color: var(--osp-text); }
+.osp-code-btn:active { background: var(--osp-press); }
+.osp-code-btn[aria-pressed="true"] { background: var(--osp-selected); color: var(--osp-text); }
+
+/* The wrap control is offered when there is something to wrap, and stays
+   while it is on -- turning it off is the way back. */
+.osp-code:not([data-osp-overflow]) [data-osp-wrap][aria-pressed="false"] { display: none; }
+
+.osp-code-icon-done { display: none; }
+.osp-code-btn[data-osp-copied] { color: var(--osp-accent); }
+.osp-code-btn[data-osp-copied] .osp-code-icon-copy { display: none; }
+.osp-code-btn[data-osp-copied] .osp-code-icon-done { display: inline; }
+
+.osp-code[data-osp-wrapped="on"] pre code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- syntax ---------------------------------------------------------- *
+ * Obsidian runs Prism over every fenced block and ships the token spans in
+ * the HTML. None of its colours are harvested, so until these rules existed
+ * a highlighted block published as plain text with the markup still in it.
+ *
+ * Five roles, not a syntax theme: what is not code (comments), what holds
+ * the code together (punctuation), what the language reserves (keywords),
+ * and the two kinds of literal a reader scans for. Each theme names its own
+ * five, so a block belongs to the page rather than to an editor.
+ * --------------------------------------------------------------------- */
+
+.osp-code .token.comment,
+.osp-code .token.prolog,
+.osp-code .token.doctype,
+.osp-code .token.cdata {
+  color: var(--osp-code-comment);
+  font-style: italic;
+}
+.osp-code .token.punctuation,
+.osp-code .token.operator { color: var(--osp-code-punct); }
+.osp-code .token.keyword,
+.osp-code .token.atrule,
+.osp-code .token.rule,
+.osp-code .token.important,
+.osp-code .token.boolean,
+.osp-code .token.constant {
+  color: var(--osp-code-keyword);
+}
+.osp-code .token.string,
+.osp-code .token.char,
+.osp-code .token.attr-value,
+.osp-code .token.regex,
+.osp-code .token.inserted {
+  color: var(--osp-code-string);
+}
+.osp-code .token.number,
+.osp-code .token.symbol,
+.osp-code .token.deleted {
+  color: var(--osp-code-number);
+}
+/* Names stay in the text colour: a block where everything is coloured is a
+   block where nothing stands out. Weight is enough to find a definition. */
+.osp-code .token.function,
+.osp-code .token.class-name,
+.osp-code .token.selector,
+.osp-code .token.tag { font-weight: 600; }
+.osp-code .token.attr-name,
+.osp-code .token.property,
+.osp-code .token.builtin,
+.osp-code .token.variable { color: var(--osp-text); }
+/* Prism marks the whole line; the colour it carries is not ours to keep. */
+.osp-code .token.italic { font-style: italic; }
+.osp-code .token.bold { font-weight: 700; }
+
+/* --- a region that scrolls, and says so ------------------------------ *
+ * A line wider than the column is the one piece of a page that can hide
+ * content with no sign of it. The edge it can scroll towards is faded, both
+ * edges in the middle, and neither once there is nothing more that way: the
+ * fade is state, not decoration. clientScript.ts keeps data-osp-at.
+ * --------------------------------------------------------------------- */
+
+.osp-scroller { --osp-fade: 2.25rem; }
+.osp-scroller[data-osp-at="start"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--osp-fade)), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--osp-fade)), transparent);
+}
+.osp-scroller[data-osp-at="middle"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--osp-fade),
+    #000 calc(100% - var(--osp-fade)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--osp-fade),
+    #000 calc(100% - var(--osp-fade)), transparent);
+}
+.osp-scroller[data-osp-at="end"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--osp-fade));
+  mask-image: linear-gradient(to right, transparent, #000 var(--osp-fade));
+}
+
+/* Obsidian's own copy button is removed in page.ts, not hidden. This is the
+   belt to that pair of braces. */
 .markdown-rendered .copy-code-button { display: none; }
 
 /* Frontmatter is rendered hidden by Obsidian, and must stay hidden. */
 .markdown-rendered .frontmatter,
 .markdown-rendered .frontmatter-container { display: none; }
 
-.markdown-rendered table {
+/* --- tables ---------------------------------------------------------- *
+ * The wrapper scrolls, not the table: a table told to display: block stops
+ * laying out as one, and a two-column table stops filling the measure.
+ * --------------------------------------------------------------------- */
+
+.markdown-rendered .osp-table-wrap {
+  margin: 0 0 1.5rem;
+  overflow-x: auto;
+}
+
+/* Every rule below is written through .osp-table-wrap, which prepareTables
+   puts around every table. Two classes, where a plugin's table CSS reaches
+   for one class and a chain of elements -- so a Dataview or Bases result is
+   styled by this page rather than by whoever generated it. */
+
+.markdown-rendered .osp-table-wrap table {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--osp-font-ui);
   font-size: 0.875rem;
-  margin: 0 0 1.5rem;
-  display: block;
-  overflow-x: auto;
+  margin: 0;
 }
-.markdown-rendered th,
-.markdown-rendered td {
+.markdown-rendered .osp-table-wrap th,
+.markdown-rendered .osp-table-wrap td {
   text-align: left;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--osp-border);
+  /* Padding on the trailing edge only, so the first column keeps the text
+     measure's own left edge and the table reads as part of the page. */
+  padding: 0.55rem 1.1rem 0.55rem 0;
   vertical-align: top;
 }
-.markdown-rendered th {
-  font-weight: 600;
-  font-size: 0.75rem;
-  letter-spacing: 0.04em;
+.markdown-rendered .osp-table-wrap th:last-child,
+.markdown-rendered .osp-table-wrap td:last-child { padding-right: 0; }
+.markdown-rendered .osp-table-wrap thead th {
+  font-weight: 650;
+  font-size: var(--osp-ui-xs);
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--osp-text-muted);
+  white-space: nowrap;
+  padding-top: 0;
+  border-bottom: var(--osp-rule) solid var(--osp-border);
 }
+.markdown-rendered .osp-table-wrap tbody td {
+  border-bottom: var(--osp-rule) solid var(--osp-faint);
+}
+.markdown-rendered .osp-table-wrap tbody tr:last-child td { border-bottom: 0; }
+.markdown-rendered .osp-table-wrap tbody tr:hover td {
+  background: var(--osp-hover);
+  transition: background 90ms ease;
+}
+
+/* A plugin builds its cells out of paragraphs, and a paragraph on this page
+   carries a paragraph's bottom margin. Left alone, every Dataview row is
+   twenty pixels taller than the text in it. */
+.markdown-rendered .osp-table-wrap td p { margin: 0 0 0.4rem; }
+.markdown-rendered .osp-table-wrap td p:last-child { margin-bottom: 0; }
+.markdown-rendered .osp-table-wrap td ul,
+.markdown-rendered .osp-table-wrap td ol { margin: 0; padding-left: 1.1rem; }
+
+/* A header cell holds a paragraph too, and under it Dataview puts the
+   number of results it found. Both belong on the header's one line. */
+.markdown-rendered .osp-table-wrap th p,
+.markdown-rendered .osp-table-wrap th span { display: inline; margin: 0; }
+.markdown-rendered .osp-table-wrap th .dataview.small-text {
+  margin-left: 0.3rem;
+  font-size: inherit;
+  color: var(--osp-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Numbers line up on their last digit and share one width, so a column can
+   be compared down rather than read across. prepareTables decides which
+   columns those are. */
+.markdown-rendered .osp-table-wrap th[data-osp-num],
+.markdown-rendered .osp-table-wrap td[data-osp-num] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding-left: 1.4rem;
+}
+
+/* Sized by its content, so a figure sits beside the row it belongs to
+   rather than at the far edge of the measure. prepareTables marks it. */
+.markdown-rendered .osp-table-wrap table[data-osp-figures] {
+  width: auto;
+  max-width: 100%;
+}
+
+/* --- room to breathe ------------------------------------------------- *
+ * Only blocks that are children of the page's own article lean out. One
+ * inside a callout or an embed stays where its container put it, or it
+ * hangs off the side of it.
+ *
+ * Anchored to .osp-article rather than .markdown-rendered, because an embed
+ * renders the embedded note into a container that carries
+ * markdown-rendered too: written the other way, a table inside an embed
+ * leaned 28px to the left and was clipped by the embed's own edge.
+ * --------------------------------------------------------------------- */
+
+.osp-article > .osp-code,
+.osp-article > .osp-table-wrap,
+.osp-article > .osp-base {
+  width: calc(100% + var(--osp-bleed) * 2);
+  margin-left: calc(var(--osp-bleed) * -1);
+}
+
 
 .markdown-rendered .callout {
   background: var(--osp-tint);
@@ -238,6 +508,17 @@ body {
 
 .markdown-rendered .task-list-item { list-style: none; }
 .markdown-rendered .task-list-item input { margin-right: 0.5rem; }
+.markdown-rendered .task-list-item.is-checked {
+  color: var(--osp-text-muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--osp-text-muted) 45%, transparent);
+}
+/* The strike belongs to the task, not to whatever hangs below it. */
+.markdown-rendered .task-list-item.is-checked ul,
+.markdown-rendered .task-list-item.is-checked ol {
+  color: var(--osp-text);
+  text-decoration: none;
+}
 
 .markdown-rendered mjx-container {
   max-width: 100%;
@@ -250,13 +531,171 @@ body {
   font-family: MJX-TEX-ZERO, MJX-TEX-N;
 }
 
-.markdown-rendered img { max-width: 100%; height: auto; border-radius: 4px; }
+.markdown-rendered img {
+  max-width: 100%;
+  height: auto;
+  border-radius: max(3px, var(--osp-radius));
+}
 
-/* Mermaid diagrams carry their own scoped styles and resolved colours; this
-   only handles placement. */
+/* --- the smaller marks ----------------------------------------------- *
+ * A divider, a highlight, a key, a deletion, an abbreviation. Each one ships
+ * with a browser default that belongs to no design system: <hr> is an inset
+ * 3D groove, <mark> is Canary yellow. Four rules buy all of them back.
+ * --------------------------------------------------------------------- */
+
+.markdown-rendered hr {
+  height: 0;
+  border: 0;
+  border-top: var(--osp-rule) solid var(--osp-border);
+  margin: 2.75rem 0;
+}
+
+.markdown-rendered mark {
+  background: color-mix(in srgb, var(--osp-accent) 18%, transparent);
+  color: inherit;
+  padding: 0.05em 0.2em;
+  border-radius: 2px;
+}
+
+.markdown-rendered kbd {
+  font-family: var(--osp-font-mono);
+  font-size: 0.8em;
+  padding: 0.12em 0.4em;
+  background: var(--osp-bg);
+  border: 1px solid var(--osp-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}
+
+.markdown-rendered del {
+  color: var(--osp-text-muted);
+  text-decoration-color: color-mix(in srgb, var(--osp-text-muted) 55%, transparent);
+}
+
+.markdown-rendered abbr[title] {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+/* Superscripts stretch the line they sit on unless they are taken out of
+   the leading. A note with footnotes is otherwise set in two rhythms. */
+.markdown-rendered sup,
+.markdown-rendered sub { line-height: 0; font-size: 0.75em; }
+
+/* --- footnotes ------------------------------------------------------- */
+
+/* Obsidian opens the section with its own <hr>, and the section already
+   carries a rule: published, that was two lines with a gap between them. */
+.markdown-rendered .footnotes > hr { display: none; }
+.markdown-rendered .footnotes {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: var(--osp-rule) solid var(--osp-border);
+  font-size: 0.9375rem;
+  color: var(--osp-text-muted);
+}
+.markdown-rendered .footnotes ol { padding-left: 1.1rem; }
+.markdown-rendered .footnotes li { margin: 0.5rem 0; }
+.markdown-rendered .footnotes p { margin: 0; display: inline; }
+.markdown-rendered .footnote-backref {
+  margin-left: 0.4rem;
+  text-decoration: none;
+  color: var(--osp-text-muted);
+}
+.markdown-rendered .footnote-backref:hover { color: var(--osp-link); }
+.markdown-rendered .footnote-ref a { text-decoration: none; }
+
+/* --- diagrams -------------------------------------------------------- *
+ * Mermaid ships its geometry and its palette together, scoped to the
+ * diagram's own id. The palette is taken out at build time, so what arrives
+ * here is shape, stroke width and dash pattern with no colour at all, and
+ * every rule below is the page deciding what a diagram looks like.
+ *
+ * Shape selectors are qualified by element -- rect.actor, not .actor --
+ * because Mermaid puts the same class on a box and on the text inside it,
+ * and a label painted with the box fill is a label nobody can read.
+ * --------------------------------------------------------------------- */
+
 .markdown-rendered .mermaid-wrapper,
 .markdown-rendered .mermaid { margin: 0 0 1.5rem; text-align: center; }
 .markdown-rendered .mermaid svg { max-width: 100%; height: auto; }
+
+.markdown-rendered .mermaid rect.actor,
+.markdown-rendered .mermaid rect.labelBox,
+.markdown-rendered .mermaid .node rect,
+.markdown-rendered .mermaid .node circle,
+.markdown-rendered .mermaid .node ellipse,
+.markdown-rendered .mermaid .node polygon,
+.markdown-rendered .mermaid .node path,
+.markdown-rendered .mermaid .classGroup rect,
+.markdown-rendered .mermaid .statediagram-state rect,
+.markdown-rendered .mermaid rect.entityBox {
+  fill: var(--osp-dgm-fill);
+  stroke: var(--osp-dgm-stroke);
+}
+
+.markdown-rendered .mermaid .edgePath .path,
+.markdown-rendered .mermaid .flowchart-link,
+.markdown-rendered .mermaid .relation,
+.markdown-rendered .mermaid .transition,
+.markdown-rendered .mermaid .messageLine0,
+.markdown-rendered .mermaid .messageLine1,
+.markdown-rendered .mermaid .loopLine,
+.markdown-rendered .mermaid .relationshipLine,
+.markdown-rendered .mermaid line {
+  stroke: var(--osp-dgm-line);
+  fill: none;
+}
+
+.markdown-rendered .mermaid .marker,
+.markdown-rendered .mermaid marker path,
+.markdown-rendered .mermaid defs path {
+  fill: var(--osp-dgm-line);
+  stroke: var(--osp-dgm-line);
+}
+
+/* A note and an activation are the two things in a diagram that are not
+   the diagram: they carry a little more of the accent to say so. */
+.markdown-rendered .mermaid rect.note,
+.markdown-rendered .mermaid .note rect {
+  fill: var(--osp-dgm-note);
+  stroke: var(--osp-dgm-stroke);
+}
+.markdown-rendered .mermaid .activation0,
+.markdown-rendered .mermaid .activation1,
+.markdown-rendered .mermaid .activation2 {
+  fill: var(--osp-dgm-cluster);
+  stroke: var(--osp-dgm-stroke);
+}
+.markdown-rendered .mermaid .cluster rect,
+.markdown-rendered .mermaid .statediagram-cluster rect {
+  fill: var(--osp-dgm-cluster);
+  stroke: var(--osp-border);
+}
+.markdown-rendered .mermaid .divider { stroke: var(--osp-border); }
+
+/* A label on an edge sits on top of the line, so it needs the page behind
+   it rather than a colour of its own. */
+.markdown-rendered .mermaid .edgeLabel rect,
+.markdown-rendered .mermaid rect.labelBkg,
+.markdown-rendered .mermaid .labelBkg {
+  fill: var(--osp-bg);
+  background: var(--osp-bg);
+}
+
+/* Last, and wider than the shapes: whatever a diagram writes, it writes in
+   the page's text colour. */
+.markdown-rendered .mermaid svg text,
+.markdown-rendered .mermaid svg tspan,
+.markdown-rendered .mermaid svg .label,
+.markdown-rendered .mermaid svg .nodeLabel,
+.markdown-rendered .mermaid svg .edgeLabel,
+.markdown-rendered .mermaid svg foreignObject div,
+.markdown-rendered .mermaid svg span {
+  fill: var(--osp-text);
+  color: var(--osp-text);
+}
 
 /* A guarded diagram means Mermaid was never allowed in the vault. It should
    not have been published, so make it unmissable rather than silent. */
@@ -272,14 +711,48 @@ body {
    interactive affordances that no longer work. */
 .markdown-rendered .bases-toolbar,
 .markdown-rendered .bases-view-settings { display: none; }
+
+/* A plugin builds its list rows out of paragraphs, and a paragraph is a
+   block: without this the task text lands under its checkbox rather than
+   beside it. The hover cursor goes with it -- nothing here is clickable. */
+.markdown-rendered .task-list-item p { display: inline; margin: 0; }
+.markdown-rendered .dataview.task-list-item,
+.markdown-rendered .dataview.task-list-item:hover { cursor: default; }
+
+/* A query that found nothing. Obsidian shows that as a 150px dashed box in
+   the middle of the note, which on a page that cannot be queried reads as a
+   broken element. Here it is one line, in the note's own voice, left where
+   the results would have been. */
+.markdown-rendered .dataview-error-box {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+.markdown-rendered .dataview-error-message {
+  text-align: left;
+  font-family: var(--osp-font-ui);
+  font-size: 0.875rem;
+  font-style: italic;
+  color: var(--osp-text-muted);
+}
 .markdown-rendered .internal-embed,
 .markdown-rendered .markdown-embed {
   display: block;
-  border-left: 2px solid var(--osp-border);
-  padding-left: 1.1rem;
+  border-left: var(--osp-rule) solid var(--osp-border);
+  padding-left: 1.4rem;
   margin: 0 0 1.25rem;
 }
 .markdown-rendered .markdown-embed-title { display: none; }
+
+/* An embedded picture is not a quotation. The rule above says "this came
+   from somewhere else", which is right for a note and noise beside an
+   image. */
+.markdown-rendered .internal-embed.image-embed,
+.markdown-rendered .internal-embed.media-embed {
+  border-left: 0;
+  padding-left: 0;
+}
 
 /* --- bases ----------------------------------------------------------- */
 
@@ -307,33 +780,11 @@ body {
   width: 100%;
   font-family: var(--osp-font-ui);
   font-size: 0.875rem;
-  /* The table, not the page, takes the overflow. */
-  display: block;
-  overflow-x: auto;
 }
 
-.markdown-rendered .osp-base-table thead th {
-  text-align: left;
-  font-weight: 600;
-  color: var(--osp-text-muted);
-  border-bottom: 1px solid var(--osp-border);
-  padding: 0.5rem 0.9rem 0.5rem 0;
-  white-space: nowrap;
-}
-
-.markdown-rendered .osp-base-table tbody td {
-  border-bottom: 1px solid var(--osp-border);
-  padding: 0.6rem 0.9rem 0.6rem 0;
-  vertical-align: top;
-}
-
-.markdown-rendered .osp-base-table tbody tr:last-child td { border-bottom: none; }
-
-/* Numbers read as a column when they line up on the same edge. */
-.markdown-rendered .osp-base-table td[data-property$="rating"],
-.markdown-rendered .osp-base-table td[data-property$="pages"] {
-  font-variant-numeric: tabular-nums;
-}
+/* A base table is a table: everything above it -- the head, the rules, the
+   numeric columns prepareTables found -- already applies. What is left is
+   the one thing a base has and a markdown table does not: a name. */
 
 .markdown-rendered .osp-base-cards {
   /* list-style and padding are reset explicitly: a <ul> inside
@@ -422,6 +873,21 @@ body {
   --osp-selected: color-mix(in srgb, var(--osp-accent) 15%, transparent);
   --osp-faint: color-mix(in srgb, var(--osp-border) 60%, transparent);
   --osp-tint: color-mix(in srgb, var(--osp-accent) 8%, transparent);
+  /* How far a block may lean out of the text measure. Prose keeps the
+     measure; a table or a code block has no reason to be 66 characters
+     wide, and the room beside it is doing nothing. Zero until the window is
+     wide enough to spare it. */
+  --osp-bleed: 0rem;
+
+  /* Diagrams. Mermaid's own palette is removed from the SVG at build time
+     (neutralizeMermaidColours in page.ts), so these are the only colours a
+     diagram has. Mixed from the theme rather than named per theme: a
+     diagram is the page's furniture, not a picture with a palette. */
+  --osp-dgm-fill: color-mix(in srgb, var(--osp-accent) 9%, var(--osp-surface));
+  --osp-dgm-stroke: color-mix(in srgb, var(--osp-accent) 50%, var(--osp-border));
+  --osp-dgm-note: color-mix(in srgb, var(--osp-accent) 17%, var(--osp-surface));
+  --osp-dgm-cluster: color-mix(in srgb, var(--osp-text) 4%, transparent);
+  --osp-dgm-line: var(--osp-text-muted);
   --osp-ui-xs: 0.6875rem;
   --osp-ui-sm: 0.75rem;
   --osp-ui-md: 0.8125rem;
@@ -1047,6 +1513,19 @@ body {
 .osp-graph-dot.osp-graph-both { background: var(--osp-accent); opacity: 1; }
 .osp-graph-key { margin-top: 0.25rem; }
 
+/* --- wide ------------------------------------------------------------- *
+ * Past this, the column has room beside it that is doing nothing, and a
+ * table or a code block has no reason to be 66 characters wide. Declared
+ * after the shell's own :root, which sets the floor these raise.
+ * --------------------------------------------------------------------- */
+
+@media (min-width: 88rem) {
+  :root { --osp-bleed: 1.75rem; }
+}
+@media (min-width: 110rem) {
+  :root { --osp-bleed: 3.25rem; }
+}
+
 /* --- narrow ----------------------------------------------------------- *
  * The rail goes first and its contents reappear under the note, then the
  * panel. The note is what has to survive.
@@ -1108,6 +1587,15 @@ html { scroll-behavior: smooth; }
   .osp-bar, .osp-panel, .osp-rail, .osp-crumb, .osp-jump { display: none; }
   .osp-shell { display: block; }
   .osp-doc { padding: 0; }
+  /* Paper does not scroll: nothing may be left outside the edge of a block,
+     and no control may be printed that could not be pressed. */
+  .osp-code-tools { display: none; }
+  .osp-code pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .osp-scroller {
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 
 /* --- index ----------------------------------------------------------- */
