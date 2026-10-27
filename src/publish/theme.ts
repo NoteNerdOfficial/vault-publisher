@@ -366,6 +366,12 @@ body {
 .markdown-rendered .osp-table-wrap {
   margin: 0 0 1.5rem;
   overflow-x: auto;
+  /* Sized by the table, not by the column it sits in. A two-column table of
+     short strings stretched to the full measure strands its last column in
+     the middle of an empty row; worse, bled out past the measure it also
+     breaks the one left edge every other block on the page shares. */
+  width: fit-content;
+  max-width: 100%;
 }
 
 /* Every rule below is written through .osp-table-wrap, which prepareTables
@@ -374,7 +380,9 @@ body {
    styled by this page rather than by whoever generated it. */
 
 .markdown-rendered .osp-table-wrap table {
-  width: 100%;
+  /* auto, so the wrapper's fit-content has a natural width to measure. */
+  width: auto;
+  min-width: 0;
   border-collapse: collapse;
   font-family: var(--osp-font-ui);
   font-size: 0.875rem;
@@ -438,13 +446,6 @@ body {
   padding-left: 1.4rem;
 }
 
-/* Sized by its content, so a figure sits beside the row it belongs to
-   rather than at the far edge of the measure. prepareTables marks it. */
-.markdown-rendered .osp-table-wrap table[data-osp-figures] {
-  width: auto;
-  max-width: 100%;
-}
-
 /* --- room to breathe ------------------------------------------------- *
  * Only blocks that are children of the page's own article lean out. One
  * inside a callout or an embed stays where its container put it, or it
@@ -457,10 +458,20 @@ body {
  * --------------------------------------------------------------------- */
 
 .osp-article > .osp-code,
-.osp-article > .osp-table-wrap,
 .osp-article > .osp-base {
   width: calc(100% + var(--osp-bleed) * 2);
   margin-left: calc(var(--osp-bleed) * -1);
+}
+
+/* A table takes the room only if it has something to put in it, and takes
+   it on the right. Code and Bases are full-width whatever they contain, so
+   leaning them out evenly is free; a table's width is its content's, and a
+   narrow one pulled 28px left of the text reads as a mistake even though it
+   is centred on the measure. Growing rightwards keeps the left edge of the
+   page intact and still hands a wide table the room beside it. */
+.osp-article > .osp-table-wrap {
+  max-width: calc(100% + var(--osp-bleed) * 2);
+  margin-left: 0;
 }
 
 

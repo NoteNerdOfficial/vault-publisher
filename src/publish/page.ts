@@ -470,10 +470,6 @@ export function prepareTables(root: HTMLElement): number {
       const header = headRows.map((row) => cells(row)[column]).filter(Boolean) as Element[];
       if ([...column_cells, ...header].some(explicitlyAligned)) continue;
       for (const cell of [...column_cells, ...header]) cell.setAttribute("data-osp-num", "");
-      // A table of prose fills the measure; a table of figures is sized by
-      // its figures, so the numbers stay next to what they are counting
-      // instead of being pushed to the far edge of the column.
-      table.setAttribute("data-osp-figures", "");
     }
 
     const wrap = doc.createElement("div");
