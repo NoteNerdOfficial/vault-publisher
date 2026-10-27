@@ -366,10 +366,10 @@ body {
 .markdown-rendered .osp-table-wrap {
   margin: 0 0 1.5rem;
   overflow-x: auto;
-  /* Sized by the table, not by the column it sits in. A two-column table of
+  /* Sized by the table, not by the column it sits in: a two-column table of
      short strings stretched to the full measure strands its last column in
-     the middle of an empty row; worse, bled out past the measure it also
-     breaks the one left edge every other block on the page shares. */
+     the middle of an empty row. Past the measure it scrolls, which is the
+     only place a table is allowed to be wider than the text. */
   width: fit-content;
   max-width: 100%;
 }
@@ -445,35 +445,6 @@ body {
   font-variant-numeric: tabular-nums;
   padding-left: 1.4rem;
 }
-
-/* --- room to breathe ------------------------------------------------- *
- * Only blocks that are children of the page's own article lean out. One
- * inside a callout or an embed stays where its container put it, or it
- * hangs off the side of it.
- *
- * Anchored to .osp-article rather than .markdown-rendered, because an embed
- * renders the embedded note into a container that carries
- * markdown-rendered too: written the other way, a table inside an embed
- * leaned 28px to the left and was clipped by the embed's own edge.
- * --------------------------------------------------------------------- */
-
-.osp-article > .osp-code,
-.osp-article > .osp-base {
-  width: calc(100% + var(--osp-bleed) * 2);
-  margin-left: calc(var(--osp-bleed) * -1);
-}
-
-/* A table takes the room only if it has something to put in it, and takes
-   it on the right. Code and Bases are full-width whatever they contain, so
-   leaning them out evenly is free; a table's width is its content's, and a
-   narrow one pulled 28px left of the text reads as a mistake even though it
-   is centred on the measure. Growing rightwards keeps the left edge of the
-   page intact and still hands a wide table the room beside it. */
-.osp-article > .osp-table-wrap {
-  max-width: calc(100% + var(--osp-bleed) * 2);
-  margin-left: 0;
-}
-
 
 .markdown-rendered .callout {
   background: var(--osp-tint);
@@ -884,12 +855,6 @@ body {
   --osp-selected: color-mix(in srgb, var(--osp-accent) 15%, transparent);
   --osp-faint: color-mix(in srgb, var(--osp-border) 60%, transparent);
   --osp-tint: color-mix(in srgb, var(--osp-accent) 8%, transparent);
-  /* How far a block may lean out of the text measure. Prose keeps the
-     measure; a table or a code block has no reason to be 66 characters
-     wide, and the room beside it is doing nothing. Zero until the window is
-     wide enough to spare it. */
-  --osp-bleed: 0rem;
-
   /* Diagrams. Mermaid's own palette is removed from the SVG at build time
      (neutralizeMermaidColours in page.ts), so these are the only colours a
      diagram has. Mixed from the theme rather than named per theme: a
@@ -1523,19 +1488,6 @@ body {
 }
 .osp-graph-dot.osp-graph-both { background: var(--osp-accent); opacity: 1; }
 .osp-graph-key { margin-top: 0.25rem; }
-
-/* --- wide ------------------------------------------------------------- *
- * Past this, the column has room beside it that is doing nothing, and a
- * table or a code block has no reason to be 66 characters wide. Declared
- * after the shell's own :root, which sets the floor these raise.
- * --------------------------------------------------------------------- */
-
-@media (min-width: 88rem) {
-  :root { --osp-bleed: 1.75rem; }
-}
-@media (min-width: 110rem) {
-  :root { --osp-bleed: 3.25rem; }
-}
 
 /* --- narrow ----------------------------------------------------------- *
  * The rail goes first and its contents reappear under the note, then the
