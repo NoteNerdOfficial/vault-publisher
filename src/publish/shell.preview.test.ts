@@ -28,6 +28,7 @@ import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
 import { buildPage, prepareCodeBlocks, prepareTables } from "./page";
 import { folderSlug } from "./shell";
 import { siteCss } from "./theme";
+import { THEMES } from "./themes";
 
 const TODAY = new Date("2026-10-25T12:00:00Z");
 
@@ -341,8 +342,8 @@ describe("the shell", () => {
     mkdirSync(join(out, "assets"), { recursive: true });
     mkdirSync(join(out, "notes"), { recursive: true });
     mkdirSync(join(out, PATHS.tagPrefix), { recursive: true });
-    for (const theme of ["press", "grove", "ink"]) {
-      writeFileSync(join(out, `site-${theme}.css`), siteCss(theme));
+    for (const theme of THEMES) {
+      writeFileSync(join(out, `site-${theme.name}.css`), siteCss(theme.name));
     }
     writeFileSync(join(out, "assets/obsidian.css"), "/* stand-in for the harvested stylesheet */");
     writeFileSync(join(out, "assets/site.css"), siteCss("press"));
