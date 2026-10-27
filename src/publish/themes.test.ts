@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { THEMES, getTheme, themeTokensCss } from "./themes";
+import { DEFAULT_THEME, THEMES, getTheme, themeTokensCss } from "./themes";
 
 /** Relative luminance, per WCAG 2.1. */
 function luminance(hex: string): number {
@@ -112,8 +112,19 @@ describe("every theme", () => {
 
 describe("getTheme", () => {
   it("falls back to the default rather than throwing on an unknown name", () => {
-    expect(getTheme("no-such-theme").name).toBe("press");
-    expect(getTheme(undefined).name).toBe("press");
+    expect(getTheme("no-such-theme").name).toBe(DEFAULT_THEME);
+    expect(getTheme(undefined).name).toBe(DEFAULT_THEME);
+  });
+
+  // Sites built before a theme was retired still carry its name.
+  it("survives a name that used to be a theme", () => {
+    for (const retired of ["press", "grove", "ink"]) {
+      expect(getTheme(retired).name).toBe(DEFAULT_THEME);
+    }
+  });
+
+  it("names a default that exists", () => {
+    expect(THEMES.map((theme) => theme.name)).toContain(DEFAULT_THEME);
   });
 
   it("finds every theme by its own name", () => {

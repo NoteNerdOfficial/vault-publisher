@@ -525,13 +525,29 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     new Setting(root).setName("Theme").setHeading();
 
     const site = this.host.settings.site;
+
+    // A site can be configured for a theme that no longer ships. The build
+    // already falls back, so the honest thing is to show what will actually
+    // be used rather than an empty dropdown over a stale name.
+    const retired = site.theme !== undefined && getTheme(site.theme).name !== site.theme;
+    const chosen = getTheme(site.theme).name;
+
     const description = root.createDiv();
     description.style.cssText = "font-size:0.9em;opacity:0.75;margin:-0.5em 0 1.5em;";
 
-    const describe = () => {
-      const theme = THEMES.find((t) => t.name === site.theme) ?? THEMES[0];
-      description.setText(theme.description);
+    const describe = (name: string) => {
+      description.setText(getTheme(name).description);
     };
+
+    if (retired) {
+      const notice = root.createDiv();
+      notice.setText(
+        `This site was set to "${site.theme}", which is no longer one of the themes. It will build as ${getTheme(chosen).label} until you pick another.`,
+      );
+      notice.style.cssText =
+        "font-size:0.9em;margin:-0.5em 0 1em;padding:0.6em 0.8em;border-radius:6px;" +
+        "background:var(--background-modifier-error-hover);color:var(--text-normal);";
+    }
 
     const preview = root.createDiv();
     preview.style.cssText = "margin:0 0 1.5em;";
@@ -541,17 +557,17 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       .setDesc("Applied the next time the site is built.")
       .addDropdown((dropdown) => {
         for (const theme of THEMES) dropdown.addOption(theme.name, theme.label);
-        dropdown.setValue(site.theme ?? THEMES[0].name);
+        dropdown.setValue(chosen);
         dropdown.onChange(async (value) => {
           site.theme = value;
-          describe();
+          describe(value);
           this.renderThemePreview(preview, value);
           await this.host.saveSettings();
         });
       });
 
-    describe();
-    this.renderThemePreview(preview, site.theme ?? THEMES[0].name);
+    describe(chosen);
+    this.renderThemePreview(preview, chosen);
   }
 
   /**

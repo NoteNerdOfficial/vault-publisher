@@ -28,7 +28,7 @@ import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
 import { buildPage, prepareCodeBlocks, prepareTables } from "./page";
 import { folderSlug } from "./shell";
 import { siteCss } from "./theme";
-import { THEMES } from "./themes";
+import { DEFAULT_THEME, THEMES } from "./themes";
 
 const TODAY = new Date("2026-10-25T12:00:00Z");
 
@@ -291,7 +291,7 @@ function sitePage(
 
 describe("the shell", () => {
   it("renders every part a reader needs, and nothing a bot should index twice", () => {
-    const html = page("press");
+    const html = page(DEFAULT_THEME);
     expect(html).toContain('class="osp-shell"');
     expect(html).toContain("On this page");
     expect(html).toContain("Start here");
@@ -307,7 +307,7 @@ describe("the shell", () => {
   });
 
   it("puts the tags in the search palette, not in a list down the panel", () => {
-    const html = page("press");
+    const html = page(DEFAULT_THEME);
     const panel = html.slice(
       html.indexOf('class="osp-panel-body'),
       html.indexOf("data-osp-jump"),
@@ -320,7 +320,7 @@ describe("the shell", () => {
   });
 
   it("carries the trail and the way back above the note", () => {
-    const html = page("press");
+    const html = page(DEFAULT_THEME);
     expect(html).toContain('aria-label="Breadcrumb"');
     // Both arrows, and disabled until the script knows this tab can move.
     expect(html).toContain("data-osp-back disabled");
@@ -331,7 +331,7 @@ describe("the shell", () => {
   });
 
   it("gives the outline no instrument to watch", () => {
-    const html = page("press");
+    const html = page(DEFAULT_THEME);
     expect(html).toContain("data-osp-outline");
     expect(html).not.toContain("osp-spine");
   });
@@ -346,8 +346,8 @@ describe("the shell", () => {
       writeFileSync(join(out, `site-${theme.name}.css`), siteCss(theme.name));
     }
     writeFileSync(join(out, "assets/obsidian.css"), "/* stand-in for the harvested stylesheet */");
-    writeFileSync(join(out, "assets/site.css"), siteCss("press"));
-    writeFileSync(join(out, "notes/atomic-notes-in-practice.html"), page("press"));
+    writeFileSync(join(out, "assets/site.css"), siteCss(DEFAULT_THEME));
+    writeFileSync(join(out, "notes/atomic-notes-in-practice.html"), page(DEFAULT_THEME));
     writeFileSync(join(out, "index.html"), sitePage("A Vault, Published", "index.html", overviewContent(landing("index.html"))));
     writeFileSync(join(out, PATHS.browse), sitePage("Browse", PATHS.browse, browseContent(landing(PATHS.browse), folderSlug)));
     writeFileSync(join(out, PATHS.tags), sitePage("Tags", PATHS.tags, tagsIndexContent(landing(PATHS.tags))));
