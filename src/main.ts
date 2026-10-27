@@ -12,6 +12,7 @@ import {
   isScopeChosen,
 } from "./publish/buildSite";
 import { formatBytes } from "./publish/drift";
+import { pruneStale } from "./publish/prune";
 import { DEFAULT_THEME } from "./publish/themes";
 import {
   MANIFEST_PATH,
@@ -380,6 +381,7 @@ export default class VaultPublisherPlugin extends Plugin {
     }
 
     const adapter = this.app.vault.adapter;
+    const written = new Set<string>();
     for (const file of result.files) {
       const target = normalizePath(`${PREVIEW_FOLDER}/${file.path}`);
       const dir = target.slice(0, target.lastIndexOf("/"));
@@ -389,10 +391,21 @@ export default class VaultPublisherPlugin extends Plugin {
       } else {
         await adapter.writeBinary(target, file.content);
       }
+      written.add(target);
     }
 
+    // What the build stopped producing has to go, or a renamed note leaves a
+    // page behind that the next build serves with a current stylesheet.
+    const pruned = await pruneStale(adapter, PREVIEW_FOLDER, written);
+    for (const failure of pruned.failed) {
+      console.warn(`vault-publisher: could not remove ${failure.path}: ${failure.reason}`);
+    }
+
+    const removed = pruned.removed.length
+      ? `, removed ${pruned.removed.length} stale ${pruned.removed.length === 1 ? "file" : "files"}`
+      : "";
     new Notice(
-      `Built ${result.pages.length} pages in ${Math.round(result.totalMs)}ms -> ${PREVIEW_FOLDER}/`,
+      `Built ${result.pages.length} pages in ${Math.round(result.totalMs)}ms${removed} -> ${PREVIEW_FOLDER}/`,
     );
   }
 
