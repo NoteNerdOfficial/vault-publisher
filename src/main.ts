@@ -28,7 +28,7 @@ import {
   storageMode,
   tokenForStorage,
 } from "./platform/secrets";
-import { VaultPublisherSettingsTab } from "./ui/settingsTab";
+import { AutoRunMode, VaultPublisherSettingsTab } from "./ui/settingsTab";
 import {
   findLegacyFolder,
   hasStoredSettings,
@@ -44,10 +44,12 @@ import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
  * Spike plugin: renders a vault through Obsidian, builds a static site from
  * the result, and commits it to GitHub.
  *
- * `autoRun` exists so the whole loop can be driven from a shell during
- * development, by writing data.json and touching the build. Obsidian offers
- * no way to invoke a command from outside, and clicking through the UI for
- * every iteration would make the measurements no one can reproduce.
+ * `autoRun` runs one thing when the plugin loads. Its two useful settings,
+ * a preview build and a publish, are in the settings panel; the rest exist
+ * so the whole loop can be driven from a shell during development, by
+ * writing data.json and touching the build. Obsidian offers no way to invoke
+ * a command from outside, and clicking through the UI for every iteration
+ * would make the measurements no one can reproduce.
  */
 
 const INPUT_FOLDER = "spike-notes";
@@ -55,7 +57,7 @@ const OUTPUT_FOLDER = "_vault-publisher";
 const PREVIEW_FOLDER = "_site-preview";
 
 interface Settings {
-  autoRun: "none" | "spike" | "build" | "publish" | "diagnose" | "electron";
+  autoRun: AutoRunMode;
   /** Note the diagnose run samples, as a vault path. */
   diagnosePath?: string;
   site: SiteConfig;

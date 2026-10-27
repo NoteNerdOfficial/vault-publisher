@@ -29,6 +29,30 @@ import {
  * the user believes something that is not true.
  */
 
+/**
+ * What a plugin load does on its own, if anything.
+ *
+ * `build` and `publish` are the two a user would want. The rest are
+ * development instrumentation: Obsidian offers no way to invoke a command
+ * from outside, so a shell drives a run by writing data.json and touching
+ * the build. They are deliberately not offered in the settings UI, and
+ * shown there only when one is already selected, so the panel never
+ * misreports what the plugin is about to do.
+ */
+export type AutoRunMode =
+  | "none"
+  | "spike"
+  | "build"
+  | "publish"
+  | "diagnose"
+  | "electron";
+
+/** The modes a reader of the settings panel can choose between. */
+const OFFERED_MODES: { value: AutoRunMode; label: string }[] = [
+  { value: "build", label: "Build a preview" },
+  { value: "publish", label: "Publish to GitHub" },
+];
+
 export interface SettingsHost {
   /** Set by this tab so a running build can report what it is doing. */
   progress: ((step: string, done?: number, total?: number) => void) | null;
@@ -41,6 +65,7 @@ export interface SettingsHost {
   /** Replaces the token. Use this rather than assigning to settings. */
   setToken(value: string): void;
   settings: {
+    autoRun: AutoRunMode;
     site: {
       siteName: string;
       /** Folder path, `""` for the whole vault, `null` for unchosen. */
@@ -107,6 +132,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
     this.renderPublish(containerEl);
+    this.renderAutomation(containerEl);
   }
 
   /**
@@ -727,6 +753,68 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             }
           }),
       );
+  }
+
+  // -- 5. what happens without anyone pressing a button ---------------------
+
+  /**
+   * Whether a plugin load runs something by itself.
+   *
+   * Two controls rather than one dropdown with "Off" in it, because the
+   * question is really two: should anything happen on its own, and if so
+   * what. A single list puts "Off" and "Publish to GitHub" one row apart,
+   * which is a long way to slip.
+   */
+  private renderAutomation(root: HTMLElement): void {
+    new Setting(root).setName("On startup").setHeading();
+
+    const settings = this.host.settings;
+    const mode = settings.autoRun;
+    const offered = OFFERED_MODES.some((option) => option.value === mode);
+
+    new Setting(root)
+      .setName("Run automatically")
+      .setDesc(
+        "Off by default. Obsidian loads plugins before a sync has necessarily finished, so an automatic run can act on a half-updated vault.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(mode !== "none").onChange(async (on) => {
+          // Turning it on lands on the harmless one. Publishing on every
+          // start is a choice worth making deliberately, in the row below.
+          settings.autoRun = on ? "build" : "none";
+          await this.host.saveSettings();
+          this.display();
+        }),
+      );
+
+    if (mode === "none") return;
+
+    const what = new Setting(root)
+      .setName("What to run")
+      .setDesc(
+        mode === "publish"
+          ? "Every start will render the whole vault and commit it. A mistake reaches the live site without anyone pressing anything."
+          : "Renders the site into a folder in this vault. Nothing is sent to GitHub.",
+      )
+      .addDropdown((dropdown) => {
+        for (const option of OFFERED_MODES) {
+          dropdown.addOption(option.value, option.label);
+        }
+        // A development mode is not offered, but it is shown when it is what
+        // is set, so the panel never claims the plugin will do something
+        // other than what it will.
+        if (!offered) dropdown.addOption(mode, `${mode} (development mode)`);
+        dropdown.setValue(mode);
+        dropdown.onChange(async (value) => {
+          settings.autoRun = value as AutoRunMode;
+          await this.host.saveSettings();
+          this.display();
+        });
+      });
+
+    if (mode === "publish") {
+      what.descEl.style.color = "var(--text-warning)";
+    }
   }
 
   private setProgress(text: string): void {
