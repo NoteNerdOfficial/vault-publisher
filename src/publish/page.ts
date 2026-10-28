@@ -19,8 +19,10 @@ import {
   ShellInput,
   breadcrumb,
   commandBar,
+  inPageMenu,
   jumpPanel,
   contextRail,
+  statsHeader,
   icon,
   mentionsBelow,
   vaultPanel,
@@ -543,17 +545,31 @@ export function buildPage(options: {
   content: string;
   headings: Heading[];
   /**
+   * The note's own Markdown, for the reader who wants the text rather than
+   * the rendering. Run through `noteSource` first, which is where the
+   * decision about what a source view may show is made and explained.
+   *
+   * Absent for the pages the build invents, which have no source: they are
+   * assembled markup, and a "Markdown" view of them would be a view of this
+   * program's output rather than of anything anyone wrote.
+   */
+  source?: string;
+  /**
    * Everything around the note: the vault panel, the context rail, the graph.
    *
    * Optional, and its absence is not a degraded mode -- the index page and
    * the tests build pages without it, and what comes out is the note on its
    * own, which is a complete page.
    */
-  shell?: Omit<ShellInput, "url" | "title" | "root" | "headings" | "siteName">;
+  shell?: Omit<
+    ShellInput,
+    "url" | "title" | "root" | "headings" | "siteName" | "hasSource"
+  >;
 }): string {
   const { meta, content, headings } = options;
   const root = pathToRoot(meta.url);
   const description = meta.description ?? "";
+  const source = options.source?.trim() ?? "";
 
   const shell: ShellInput | null = options.shell
     ? {
@@ -563,6 +579,7 @@ export function buildPage(options: {
         title: meta.title,
         root,
         headings,
+        hasSource: source !== "",
       }
     : null;
 
@@ -574,6 +591,17 @@ export function buildPage(options: {
     `</article>` +
     (shell ? mentionsBelow(shell) : "");
 
+  // The stats lead the document rather than the article, so markdown mode
+  // keeps them: how long a note is and how many sections it has are facts
+  // about the note, not about which of its two renderings is on screen.
+  // Off above 56rem, where the rail's copy is beside the note already.
+  const doc =
+    `<div class="osp-doc">` +
+    (shell ? statsHeader(shell) : "") +
+    article +
+    sourcePane(source, meta.title) +
+    `</div>`;
+
   const body = shell
     ? `<div class="osp-shell">` +
       commandBar(shell) +
@@ -581,21 +609,22 @@ export function buildPage(options: {
       jumpPanel(shell) +
       `<main class="osp-main" id="osp-main">` +
       breadcrumb(shell) +
-      `<div class="osp-doc">${article}</div>` +
+      inPageMenu(shell) +
+      doc +
       `</main>` +
       contextRail(shell) +
       `</div>`
     : `<div class="osp-shell osp-shell-bare">` +
       `<main class="osp-main" id="osp-main">` +
-      `<div class="osp-doc">${article}</div>` +
+      doc +
       `</main>` +
       `</div>`;
 
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${source ? ` data-osp-source` : ""}>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>${escapeHtml(meta.title)} &middot; ${escapeHtml(meta.siteName)}</title>
 ${description ? `<meta name="description" content="${escapeHtml(description)}">` : ""}
 <meta property="og:title" content="${escapeHtml(meta.title)}">
@@ -612,6 +641,44 @@ ${body}
 </body>
 </html>
 `;
+}
+
+/**
+ * The note's Markdown, as the other thing this page can show.
+ *
+ * It sits in the document rather than being fetched, like everything else
+ * here: a published page makes no external requests, and a second file per
+ * note would double the site's object count for a view most readers never
+ * open.
+ *
+ * No `hidden` attribute on it. Which pane is showing is decided by a rule
+ * keyed to `data-osp-view`, an attribute only the script sets, so the
+ * default state of the page is the rendering and markdown mode is
+ * unreachable without scripting -- which is correct, because the control
+ * that reaches it is hidden then too. The cost is a page with no CSS at all
+ * showing both, one after the other. That is a fair reading of the document
+ * rather than a broken one.
+ *
+ * The copy button is the point of the view as much as the text is. Reading
+ * Markdown on screen is nobody's goal; taking it is.
+ */
+function sourcePane(source: string, title: string): string {
+  if (!source) return "";
+  return (
+    `<div class="osp-source markdown-rendered" data-osp-source-pane>` +
+    `<figure class="osp-code osp-source-block">` +
+    `<figcaption class="osp-code-bar">` +
+    `<span class="osp-code-lang">${escapeHtml(title)}.md</span>` +
+    `<div class="osp-code-tools">` +
+    `<button class="osp-code-btn" type="button" data-osp-copy ` +
+    `title="Copy this note's Markdown">` +
+    icon("copy", "osp-icon-sm osp-code-icon-copy") +
+    icon("check", "osp-icon-sm osp-code-icon-done") +
+    `<span class="osp-code-btn-label">Copy</span></button>` +
+    `</div></figcaption>` +
+    `<pre><code>${escapeHtml(source)}</code></pre>` +
+    `</figure></div>`
+  );
 }
 
 /**

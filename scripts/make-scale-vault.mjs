@@ -26,15 +26,28 @@
  * The vault is generated rather than committed: it is 300+ files of filler,
  * and a seed makes it reproducible without storing it.
  *
- * Usage: node scripts/make-scale-vault.mjs [count] [path]
+ * Usage: node scripts/make-scale-vault.mjs [count] <path>
+ *
+ * The path is required and has no default. This script begins by deleting
+ * the directory it is given, recursively and with force, so a default would
+ * be a guess at what to destroy -- and the guess it used to make was one
+ * person's own folder layout, written into committed source. Name the target
+ * or get an error; those are better odds than the alternative.
  */
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 const count = Number(process.argv[2] ?? 300);
-const root =
-  process.argv[3] ?? join(homedir(), "Documents/Obsidian/scale-vault");
+const root = process.argv[3] ?? process.env.VAULT_PUBLISHER_SCALE_VAULT;
+
+if (!root) {
+  console.error("No path given, and this script deletes the path it is given.");
+  console.error("");
+  console.error("  node scripts/make-scale-vault.mjs 300 /path/to/scale-vault");
+  console.error("");
+  console.error("Pick somewhere disposable: the directory is removed first.");
+  process.exit(1);
+}
 
 /** Deterministic PRNG, so two runs of this script produce the same vault. */
 let seed = 20261018;

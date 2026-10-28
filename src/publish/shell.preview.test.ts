@@ -27,6 +27,7 @@ import {
 import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
 import { buildPage, prepareCodeBlocks, prepareTables } from "./page";
 import { folderSlug } from "./shell";
+import { noteSource } from "./source";
 import { siteCss } from "./theme";
 import { DEFAULT_THEME, THEMES } from "./themes";
 
@@ -210,6 +211,41 @@ const RELATED = [
   },
 ];
 
+/**
+ * The note as it was written, frontmatter and all.
+ *
+ * Fed through `noteSource` by the page builder's caller in the real build,
+ * and through it here too, so the preview shows what a reader would actually
+ * be given rather than a tidied stand-in.
+ */
+const SOURCE = `---
+tags: [method, note-taking, evergreen]
+updated: 2026-10-24
+publish: true
+---
+
+# Atomic notes in practice
+
+A note is worth keeping when it says one thing, and says it well enough
+that the next person to need it -- usually you -- does not have to rebuild
+the argument from scratch.
+
+%% Still not sure about this section. Ask before publishing. %%
+
+## What counts as one thing
+
+| Shape | Holds up | Falls apart |
+| --- | --- | --- |
+| One claim | Linking, quoting, reuse | Nothing |
+| One source | Citation | Any second source |
+
+\`\`\`sh
+OSP_PREVIEW=/tmp/preview npx vitest run shell.preview
+\`\`\`
+
+See [[Linking your thinking]] for the other half of this.
+`;
+
 function page(themeName: string): string {
   const titles = new Map(NOTES.map((n) => [n.url, n.title]));
   return buildPage({
@@ -233,6 +269,7 @@ function page(themeName: string): string {
     },
     content: prepared(CONTENT),
     headings: HEADINGS,
+    source: noteSource(SOURCE),
     shell: {
       nav: buildNavTree(NOTES),
       pinned: NOTES.filter((n) => n.pinned),
@@ -298,10 +335,12 @@ describe("the shell", () => {
     expect(html).toContain("Recently updated");
     expect(html).toContain("14 notes changed together");
     expect(html).toContain('role="switch"');
-    expect(html).toContain("data-osp-graph");
-    // The rail's graph carries a way back, or the control in the bar strands
-    // the reader in it.
-    expect(html).toContain("data-osp-graph-back");
+    // The graph is the last section of the rail rather than a state the
+    // rail is put into, so there is no control for it and no way back from
+    // it -- it is simply there, under what links here.
+    expect(html).toContain("osp-rail-graph");
+    expect(html).not.toContain("data-osp-graph");
+    expect(html.indexOf("Linked from")).toBeLessThan(html.indexOf("Local graph"));
     // One <h1> per page.
     expect(html.match(/<h1/g)).toHaveLength(1);
   });
@@ -328,6 +367,42 @@ describe("the shell", () => {
     // Site, folder, note -- the folder links to its group on the browse page.
     expect(html).toContain("browse.html#folder-notes");
     expect(html).toContain('<span aria-current="page">Atomic notes in practice</span>');
+  });
+
+  it("offers both views of a note, and the width to read them at", () => {
+    const html = page(DEFAULT_THEME);
+    // The pane exists, so <html> says so and the boot script can restore
+    // markdown mode before the first paint.
+    expect(html).toContain("<html lang=\"en\" data-osp-source>");
+    expect(html).toContain('aria-label="View mode"');
+    expect(html).toContain('data-osp-view-mode="markdown"');
+    expect(html).toContain('aria-label="Content width"');
+    expect(html).toContain('data-osp-width-mode="full"');
+    // Both ship hidden: neither can do anything until the script runs.
+    expect(html).toContain("data-osp-views hidden");
+    expect(html).toContain("data-osp-widths hidden");
+  });
+
+  it("shows the note's markdown without the parts the rendering hides", () => {
+    const html = page(DEFAULT_THEME);
+    const pane = html.slice(html.indexOf("osp-source"));
+    expect(pane).toContain("A note is worth keeping");
+    expect(pane).toContain("[[Linking your thinking]]");
+    // The frontmatter `stripFrontmatter` takes out of the rendering does not
+    // come back in through the source view.
+    expect(html).not.toContain("publish: true");
+    // Nor does a comment the author wrote to themselves.
+    expect(html).not.toContain("Ask before publishing");
+  });
+
+  it("gives a page the build invented no markdown view", () => {
+    const html = sitePage("Browse", PATHS.browse, "<p>Everything.</p>");
+    expect(html).toContain("<html lang=\"en\">");
+    // The script still carries its selectors, but there is no pane to find.
+    expect(html).not.toContain('class="osp-source');
+    expect(html).not.toContain('aria-label="View mode"');
+    // The width control is about the page, not about having a source.
+    expect(html).toContain('aria-label="Content width"');
   });
 
   it("gives the outline no instrument to watch", () => {

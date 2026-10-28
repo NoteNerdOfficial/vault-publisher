@@ -321,6 +321,25 @@ export function getTheme(name: string | undefined): Theme {
   );
 }
 
+/**
+ * What focus and shadow mean once the page is dark.
+ *
+ * The focus edge keeps the accent's lightness and gives up most of its
+ * chroma, by mixing it into the muted text grey: enough hue left that the
+ * live field is still recognisably this site's, not enough to glow. Removing
+ * the colour outright was the other option and it reads as a disabled field
+ * -- the background barely moves on focus, so the edge is the whole signal.
+ *
+ * The shadow becomes real black. On a dark page a shadow can only deepen
+ * what is already dark, which is why the separation of a panel there is its
+ * border rather than its shadow -- and why every panel here has one.
+ */
+const DARK_INK = (indent = "  "): string =>
+  [
+    `${indent}--osp-focus: color-mix(in srgb, var(--osp-accent) 38%, var(--osp-text-muted));`,
+    `${indent}--osp-shadow: #000;`,
+  ].join("\n");
+
 function block(vars: Record<string, string>, indent = "  "): string {
   return Object.entries(vars)
     .map(([key, value]) => `${indent}${key}: ${value};`)
@@ -346,16 +365,37 @@ ${block(theme.base)}
 
   --osp-gutter: 1.5rem;
 
+  /* Two values a light palette gets for free and a dark one does not.
+
+     The edge a focused field draws is the accent, which on white is a
+     confident line and on near-black is a lit one: the same hue at the same
+     chroma against a background twenty times darker blooms, and the field
+     ends up the brightest object on the page.
+
+     A shadow is worse, because it is not a colour at all -- it is the
+     absence of light. Built out of the text colour it comes out near-black
+     on a white page, which is right by accident, and near-white on a dark
+     one, which is a halo. Same for the scrim the drawer sits over.
+
+     So both are named here rather than written into the rules, defaulted to
+     what light mode was already doing, and given a dark answer below. A
+     theme that wants its own can set either in its own block, which comes
+     after these. */
+  --osp-focus: var(--osp-accent);
+  --osp-shadow: var(--osp-text);
+
 ${block(theme.light)}
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+${DARK_INK("    ")}
 ${block(theme.dark, "    ")}
   }
 }
 
 :root[data-theme="dark"] {
+${DARK_INK()}
 ${block(theme.dark)}
 }
 `;

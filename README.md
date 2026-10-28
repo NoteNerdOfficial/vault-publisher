@@ -31,6 +31,7 @@ src/publish/    turning rendered HTML into a site
   normalize.ts    repairs markup that a browser would rearrange on reparse
   links.ts        wikilinks to relative URLs; unpublished targets degrade safely
   page.ts         document shell, heading ids, table of contents
+  source.ts       a note's markdown, minus what the rendering hides
   landing.ts      the pages no note wrote: homepage, browse, a page per tag
   theme.ts        the site's own stylesheet (placeholder; design work pending)
   harvestCss.ts   lifts layout-critical rules from the running app
@@ -53,15 +54,16 @@ docs/           the working plan
 ```sh
 npm install
 npm run build
-node scripts/deploy.mjs            # deploys to the test vault
+echo /path/to/vault > .vault-path  # once, per clone; gitignored
+node scripts/deploy.mjs            # deploys to that vault
 node scripts/deploy.mjs /path/to/vault
 ```
 
-The test vault lives outside this repo, at `~/Documents/Obsidian/spike-vault`, so plugin source is never mixed up with the notes used to exercise it. Override with `VAULT_PUBLISHER_VAULT` or a path argument.
+The test vault lives outside this repo, so plugin source is never mixed up with the notes used to exercise it. Which vault is yours is local to your clone: write it to `.vault-path`, set `VAULT_PUBLISHER_VAULT`, or pass a path argument, which wins over both. There is no default — the script would be guessing at a directory to write into.
 
 The plugin id is `vault-publisher`; it shipped during development as `site-publisher-spike`, and the first run under the new id imports the old settings and offers to delete the folder they came from.
 
-The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking, which is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and bump the manifest version to trigger a reload.
+The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking, which is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and the deploy is enough on its own: the script writes the `.hotreload` marker the watcher looks for, and the reload fires on the change to `main.js`. It reports whether anything is actually watching, because a copy into an unwatched folder looks exactly like a successful deploy.
 
 ## Known issues
 

@@ -71,6 +71,7 @@ import {
   tagUrls,
   tagsIndexContent,
 } from "./landing";
+import { noteSource } from "./source";
 import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
@@ -456,6 +457,8 @@ export async function buildSite(
     outgoing: Array<{ url: string; context: string }>;
     nav: NavNote;
     tags: string[];
+    /** The note's Markdown, as markdown mode is allowed to show it. */
+    source: string;
   }> = [];
   const driftSamples: DriftSample[] = [];
 
@@ -484,6 +487,10 @@ export async function buildSite(
         let outgoing: Array<{ url: string; context: string }> = [];
 
         const title = titleFor(app, file);
+        // Read before rendering rather than returned from it: `renderFile`
+        // does its own `cachedRead`, so this is a cache hit, and the render
+        // path stays about rendering.
+        const source = noteSource(await app.vault.cachedRead(file));
         let bases = emptyBasesStats();
         let privacy = emptyPrivacyReport();
         let assets = emptyAssetStats();
@@ -546,6 +553,7 @@ export async function buildSite(
           outgoing,
           nav: navNoteFor(app, file, url, title, config),
           tags: tagsFor(app, file),
+          source,
         });
 
         pages.push({
@@ -698,6 +706,7 @@ export async function buildSite(
             ? `${page.html}\n${exploreContent(landing(page.url))}`
             : page.html,
         headings: page.headings,
+        source: page.source,
         shell: {
           nav: navTree,
           pinned,

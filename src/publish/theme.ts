@@ -92,7 +92,7 @@ body {
 .markdown-rendered h6 {
   /* The bar and the crumb both stay on screen, so an anchor that scrolls a
      heading to the top of the viewport scrolls it underneath them. */
-  scroll-margin-top: calc(var(--osp-bar-h) + var(--osp-crumb-h) + 1.25rem);
+  scroll-margin-top: calc(var(--osp-bar-h) + var(--osp-crumb-h) + var(--osp-inpage-h) + 1.25rem);
 }
 .markdown-rendered h2 { font-size: 1.45rem; }
 .markdown-rendered h3 { font-size: 1.15rem; }
@@ -848,6 +848,10 @@ body {
 :root {
   --osp-bar-h: 3rem;
   --osp-crumb-h: 2.5rem;
+  /* The in-page menu exists only below 56rem. Zero everywhere else, because
+     every heading's scroll-margin is built from the sum of the sticky rows
+     above it and a term that is sometimes absent has to be a number. */
+  --osp-inpage-h: 0rem;
   --osp-panel-w: 17rem;
   --osp-rail-w: 19rem;
   --osp-hover: color-mix(in srgb, var(--osp-text) 6%, transparent);
@@ -894,6 +898,7 @@ body {
   grid-template-areas: "bar bar bar" "panel main rail";
   align-items: start;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .osp-icon { width: 16px; height: 16px; flex: none; stroke-width: 1.75; }
@@ -911,7 +916,9 @@ body {
   align-items: center;
   gap: 1rem;
   height: var(--osp-bar-h);
-  padding: 0 0.75rem;
+  /* Full-bleed and sticky, so on a notched phone held sideways this is the
+     row the cutout lands in. The insets are zero everywhere else. */
+  padding: 0 max(0.75rem, env(safe-area-inset-right)) 0 max(0.75rem, env(safe-area-inset-left));
   background: var(--osp-surface);
   border-bottom: var(--osp-rule) solid var(--osp-border);
 }
@@ -967,6 +974,45 @@ body {
 .osp-btn:active { background: var(--osp-press); }
 .osp-btn[aria-pressed="true"] { background: var(--osp-selected); color: var(--osp-text); }
 
+/* A button drawn as a square.
+   The three controls that wear this -- the menu, the drawer's light/dark,
+   the drawer's close -- are the only ones on screen when they appear, and a
+   bare glyph alone on a row reads as a mark rather than as something to
+   press. The box is the word they do not have room to carry. Square because
+   the content is one icon: a pill around a single glyph says the glyph is a
+   label, and it is not.
+
+   Only ever visible below 56rem, since all three are; it is written out here
+   rather than inside that query because what it describes is the shape of a
+   button, not a width. */
+.osp-btn-sq {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: var(--osp-rule) solid var(--osp-border);
+  border-radius: max(7px, calc(var(--osp-radius) + 1px));
+  background: var(--osp-surface);
+}
+.osp-btn-sq:hover { background: var(--osp-hover); border-color: var(--osp-accent); }
+/* After the hover rule, because a finger that is pressing is also hovering
+   and the press is the one that should be on screen. */
+.osp-btn-sq:active { background: var(--osp-press); }
+
+/* One icon, and it is the one you get by pressing.
+   The page the reader is looking at is already the answer to "which theme
+   is this" -- it is lit or it is not -- so an icon repeating it says
+   nothing, while an icon naming the other one says what the button does.
+   Light now draws the moon; dark now draws the sun.
+
+   Both ship in the markup so the swap is a rule rather than a script
+   rewriting an SVG, and the script already sets aria-checked on everything
+   carrying the toggle attribute. The attribute still reports the state, not
+   the destination, which is what a switch means and what a screen reader
+   will say -- the icon is the only part of this that points forwards. */
+.osp-theme-glyph { display: none; place-items: center; }
+.osp-theme-btn[aria-checked="false"] .osp-theme-moon,
+.osp-theme-btn[aria-checked="true"] .osp-theme-sun { display: grid; }
+
 /* --- theme switch ----------------------------------------------------- *
  * A switch, not a button that swaps its own icon: two states, both of them
  * visible, and the thumb says which one is on.
@@ -974,6 +1020,11 @@ body {
 
 .osp-switch {
   display: inline-flex;
+  /* The track is a fixed height inside this box, so without this it sits at
+     the top of whatever the button grows to -- which is exactly what a 44px
+     touch target does to it. */
+  align-items: center;
+  justify-content: center;
   padding: 0;
   background: none;
   border: 0;
@@ -1039,7 +1090,10 @@ body {
   color: var(--osp-text-muted);
   transition: border-color 140ms ease, background 140ms ease;
 }
-.osp-search:focus-within { border-color: var(--osp-accent); background: var(--osp-bg); }
+/* The one edge on the page that says "type here". It is the accent on a
+   light page and a desaturated cousin of it on a dark one -- see --osp-focus
+   in themes.ts for why the same value cannot do both. */
+.osp-search:focus-within { border-color: var(--osp-focus); background: var(--osp-bg); }
 .osp-search input {
   font: inherit;
   width: 100%;
@@ -1058,8 +1112,36 @@ body {
   font-family: var(--osp-font-mono);
   font-size: var(--osp-ui-xs);
 }
+
+/* The field's own clear. Off everywhere by default: it is drawn only in the
+   narrow layout, where the slash it stands in place of is no use and the
+   browser's built-in clear is either suppressed by the rule above or, on
+   iOS, never offered. A mouse has Escape and a visible cancel elsewhere.
+
+   The script owns the hidden attribute and the media query owns display,
+   so neither can show a button over an empty field: it takes the attribute
+   being off *and* the layout being the narrow one. */
+.osp-search-clear {
+  display: none;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 2rem;
+  margin-right: -0.35rem;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: max(4px, var(--osp-radius));
+  color: var(--osp-text-muted);
+  cursor: pointer;
+}
+.osp-search-clear:active { color: var(--osp-text); }
 /* The vault's search lives in the panel. The bar keeps one only for the
-   screens too narrow to show that panel. */
+   screens too narrow to show that panel -- and below 56rem not even that:
+   there the drawer holds the field, and the menu button that opens the
+   drawer is the one way in. A second control in the bar promising the same
+   field was two doors into one room. */
 .osp-bar-search { display: none; }
 
 /* --- vault panel ------------------------------------------------------ */
@@ -1069,13 +1151,39 @@ body {
   position: sticky;
   top: var(--osp-bar-h);
   height: calc(100vh - var(--osp-bar-h));
+  height: calc(100dvh - var(--osp-bar-h));
   display: flex;
   flex-direction: column;
   background: var(--osp-surface);
   border-right: var(--osp-rule) solid var(--osp-border);
   font-family: var(--osp-font-ui);
 }
-.osp-panel-head { flex: none; position: relative; padding: 0.75rem 0.65rem 0.5rem; }
+.osp-panel-head {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.75rem 0.65rem 0.5rem;
+}
+.osp-panel-head .osp-search { flex: 1; min-width: 0; }
+/* Off wherever the panel is a column: the bar's switch is right there. */
+.osp-panel-theme { display: none; flex: none; }
+
+/* The drawer's three parts. Off at every width that keeps the panel open,
+   which is why none of them carry a width of their own: the one media query
+   that opens the drawer turns all three on together. */
+.osp-panel-toggle,
+.osp-panel-close { display: none; flex: none; }
+.osp-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: color-mix(in srgb, var(--osp-shadow) 45%, transparent);
+  animation: osp-fade 200ms var(--osp-ease);
+}
+@keyframes osp-fade { from { opacity: 0; } }
 .osp-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0.5rem 2rem; }
 
 .osp-group-title {
@@ -1182,14 +1290,15 @@ body {
   z-index: 40;
   width: calc(var(--osp-panel-w) - 1rem);
   max-height: min(28rem, calc(100vh - var(--osp-bar-h) - 4.5rem));
+  max-height: min(28rem, calc(100dvh - var(--osp-bar-h) - 4.5rem));
   overflow-y: auto;
   padding: 0.5rem;
   background: var(--osp-bg);
   border: var(--osp-rule) solid var(--osp-border);
   border-radius: max(7px, var(--osp-radius));
   box-shadow:
-    0 1px 2px color-mix(in srgb, var(--osp-text) 10%, transparent),
-    0 16px 32px -12px color-mix(in srgb, var(--osp-text) 28%, transparent);
+    0 1px 2px color-mix(in srgb, var(--osp-shadow) 10%, transparent),
+    0 16px 32px -12px color-mix(in srgb, var(--osp-shadow) 28%, transparent);
   font-family: var(--osp-font-ui);
   animation: osp-drop 180ms var(--osp-ease);
 }
@@ -1325,6 +1434,120 @@ body {
 }
 .osp-crumb-sep { opacity: 0.4; }
 
+/* --- the two controls at the end of the crumb row --------------------- *
+ * Which view of the note to read, and how much of the window it gets. One
+ * shape for both, because they are the same kind of thing: a short named
+ * set with exactly one on. They sit at the far end so the trail keeps the
+ * left edge, which is where a reader looks to find out where they are.
+ * --------------------------------------------------------------------- */
+
+.osp-crumb-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  padding-left: 0.75rem;
+}
+
+.osp-seg {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.13rem;
+  border: var(--osp-rule) solid var(--osp-border);
+  border-radius: max(6px, calc(var(--osp-radius) + 1px));
+}
+
+.osp-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  /* Only ever visible where the button is wider than what is in it, which
+     is the icon-only case: a label and a glyph fill their own box, a glyph
+     on its own in a 44px touch target does not and would sit against the
+     left edge. */
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  border: 0;
+  border-radius: max(4px, calc(var(--osp-radius) - 1px));
+  background: transparent;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-xs);
+  line-height: 1.4;
+  color: var(--osp-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.osp-seg-btn:hover { color: var(--osp-text); background: var(--osp-hover); }
+.osp-seg-btn:active { background: var(--osp-press); }
+/* The same mark the code block's pressed tools carry, for the same reason:
+   one way of saying "this one is on" across the whole site. */
+.osp-seg-btn[aria-checked="true"] { background: var(--osp-selected); color: var(--osp-text); }
+.osp-seg-icon .osp-seg-btn { padding: 0.2rem 0.38rem; }
+
+/* --- content width ---------------------------------------------------- *
+ * The measure is right for prose and wrong for a nine-column Dataview
+ * table, which is content this publisher exists to carry. So the reader
+ * chooses, three ways.
+ *
+ * The --osp-measure token is the only lever pulled for the first two, because every
+ * width in this stylesheet is already written against it -- the article,
+ * the properties row, the mentions, the generated lists. Widening the
+ * article alone would leave the rest of the page at its old width, which is
+ * not a wide page but a misaligned one.
+ * --------------------------------------------------------------------- */
+
+:root[data-osp-width="wide"],
+:root[data-osp-width="full"] { --osp-measure: none; }
+
+/* Full takes the panels too, with the rules the narrow breakpoint already
+   uses: a window with the panels put away is the same page as a window too
+   small to hold them, and it should not be a second layout to maintain. */
+:root[data-osp-width="full"] .osp-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "bar" "main";
+}
+:root[data-osp-width="full"] .osp-panel,
+:root[data-osp-width="full"] .osp-rail { display: none; }
+:root[data-osp-width="full"] .osp-bar { grid-template-columns: auto minmax(0, 1fr) auto; }
+:root[data-osp-width="full"] .osp-bar-search { display: flex; }
+/* And the context the rail was holding goes under the note instead, rather
+   than off the page. */
+:root[data-osp-width="full"] .osp-mentions { display: block; }
+/* The rail is gone, so the note's own copy of the stats is the only one
+   left -- the same arrangement the narrow breakpoint arrives at. */
+:root[data-osp-width="full"] .osp-stats-top { display: flex; }
+:root[data-osp-width="full"] .osp-jump {
+  left: 1rem;
+  right: 1rem;
+  width: auto;
+  top: calc(var(--osp-bar-h) + 0.6rem);
+}
+
+/* --- read, or read the markdown --------------------------------------- *
+ * Two panes, one showing. Which one is an attribute on <html> that only the
+ * script sets, so a page without scripting is the rendering and the control
+ * that would switch it is hidden -- see sourcePane in page.ts.
+ * --------------------------------------------------------------------- */
+
+.osp-source { display: none; max-width: var(--osp-measure); }
+.osp-source .osp-code { margin: 0; }
+/* The bar's label is a file name here, not a language token: it keeps the
+   note's own capitals and reads as the file a reader could go and open. */
+.osp-source .osp-code-lang { text-transform: none; letter-spacing: 0.01em; }
+/* A note's source is one long line per paragraph, so the block wraps rather
+   than scrolls sideways. The reader came for the text, not its line breaks,
+   and a paragraph they have to drag a scrollbar through to read is not the
+   note back. */
+.osp-source pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+:root[data-osp-view="markdown"] .osp-source { display: block; }
+:root[data-osp-view="markdown"] .osp-article,
+:root[data-osp-view="markdown"] .osp-mentions,
+/* The outline's anchors point at headings that are not on screen. */
+:root[data-osp-view="markdown"] .osp-rail-outline { display: none; }
+
 .osp-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1399,6 +1622,7 @@ body {
   position: sticky;
   top: var(--osp-bar-h);
   height: calc(100vh - var(--osp-bar-h));
+  height: calc(100dvh - var(--osp-bar-h));
   overflow-y: auto;
   padding: 1.25rem 0.9rem 3rem;
   border-left: var(--osp-rule) solid var(--osp-border);
@@ -1412,7 +1636,10 @@ body {
   flex-wrap: wrap;
   gap: 0 0.4rem;
   margin: 0;
-  padding: 0 0.5rem 1.25rem;
+  /* No bottom padding: the gap under this line is the rail's own spacing
+     above the rule that follows it, and two of them would be one too many.
+     The copy at the head of a note sets its own, below. */
+  padding: 0 0.5rem;
   font-size: var(--osp-ui-xs);
   font-weight: 400;
   line-height: 1.5;
@@ -1420,10 +1647,41 @@ body {
 }
 .osp-stats span { font-size: inherit; font-weight: inherit; color: inherit; }
 
+/* The note's copy, which only a narrow screen shows. It is set against the
+   article's measure rather than the rail's gutter, so it starts on the same
+   left edge as the title underneath it. */
+.osp-stats-top {
+  display: none;
+  max-width: var(--osp-measure);
+  margin-inline: auto;
+  padding: 0 0 1rem;
+}
+
 /* Every section in the rail is introduced the same way, "On this page"
-   included -- it is a section, not a special case. What separates them is
-   space: a rule between every pair turned a margin into a form. */
-.osp-rail-section + .osp-rail-section { margin-top: 1.75rem; }
+   included -- it is a section, not a special case.
+
+   A rule between each pair, rather than space alone. Space was the earlier
+   answer and it reads well with two sections; by the time the rail carries
+   the stats, the outline, what links here, what is related and the graph,
+   five blocks of small grey type down one column need a line to say where
+   one ends and the next begins.
+
+   The rule is drawn on the section box, so it stops where the rail's own
+   padding does and never reaches either edge of the column: a divider that
+   runs into the panel's border is a second border. The section titles carry
+   half a rem of their own padding, so it runs a little wider than the words
+   above and below it, which is the proportion that reads as a divider
+   rather than as an underline.
+
+   Every child of the rail takes part, not only the sections, because the
+   stats line is a block in this column like any other -- it is spelled with
+   the universal selector for that reason, and the narrow layout has to undo
+   it where it hides a child. */
+.osp-rail > * + * {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: var(--osp-rule) solid var(--osp-faint);
+}
 .osp-rail-title {
   display: flex;
   align-items: baseline;
@@ -1466,9 +1724,76 @@ body {
 }
 .osp-outline .osp-lvl3 a { padding-left: 1.75rem; font-size: var(--osp-ui-sm); }
 
+/* --- the in-page menu ------------------------------------------------- *
+ * The outline as a pinned row, for the screens with no margin to put a rail
+ * in. Off entirely at every width where the rail is on screen, because
+ * there the same list is already standing beside the note.
+ * --------------------------------------------------------------------- */
+
+.osp-inpage { display: none; }
+
+.osp-inpage-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.6rem;
+  padding: 0 max(1.25rem, env(safe-area-inset-left));
+  list-style: none;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-md);
+  color: var(--osp-text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.osp-inpage-head::-webkit-details-marker { display: none; }
+.osp-inpage-head:active { background: var(--osp-hover); }
+
+/* Shut, the row's subject is the section being read and "On this page" is
+   the label on it. Open, the list underneath is the subject and naming a
+   single section would be naming one row of it. */
+.osp-inpage-label { flex: none; }
+.osp-inpage-now {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--osp-text);
+}
+/* The colon belongs to the label, not to the section: set on the row it
+   would be a flex item with the row's gap on either side of it, which reads
+   as a colon that has come loose from the word in front of it. */
+.osp-inpage:not([open]) .osp-inpage-label::after { content: ":"; }
+.osp-inpage[open] .osp-inpage-now { display: none; }
+
+.osp-inpage-chev {
+  margin-left: auto;
+  flex: none;
+  opacity: 0.7;
+  transition: transform 180ms var(--osp-ease);
+}
+.osp-inpage[open] .osp-inpage-chev { transform: rotate(180deg); }
+
+/* The list drops over the note rather than pushing it down the page: a
+   reader opening a table of contents has not asked for the thing they were
+   reading to move. */
+.osp-inpage-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 1;
+  max-height: calc(100dvh - var(--osp-bar-h) - var(--osp-crumb-h) - var(--osp-inpage-h));
+  overflow-y: auto;
+  padding: 0.35rem max(1.25rem, env(safe-area-inset-left)) 1.25rem
+    max(1.25rem, env(safe-area-inset-right));
+  background: var(--osp-bg);
+  border-bottom: var(--osp-rule) solid var(--osp-border);
+  box-shadow: 0 16px 24px -16px color-mix(in srgb, var(--osp-shadow) 35%, transparent);
+}
+.osp-inpage-body .osp-outline { margin-left: 0; }
+
 /* --- graph ------------------------------------------------------------ */
 
-.osp-rail-graphhead { padding: 0 0 0.5rem; }
 .osp-graph { width: 100%; height: auto; display: block; margin: 0.25rem 0 0.75rem; }
 .osp-graph-edge { stroke: var(--osp-border); stroke-width: 1; }
 .osp-graph-node circle {
@@ -1500,38 +1825,379 @@ body {
     grid-template-areas: "bar bar" "panel main";
   }
   .osp-rail { display: none; }
-  /* The control would toggle a panel that is not on screen. */
-  .osp-bar-actions [data-osp-graph] { display: none; }
   .osp-mentions { display: block; }
+  /* The rail took the stats with it; the note's own copy stands in. */
+  .osp-stats-top { display: flex; }
 }
 
 @media (max-width: 56rem) {
+  /* The rail stops being a column and becomes the end of the page. Its
+     contents are what the note is attached to -- its outline, what links
+     here, what it is near -- and on a phone that reads as a section after
+     the note rather than as furniture beside it. */
   .osp-shell {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "bar" "main";
+    grid-template-areas: "bar" "main" "rail";
   }
-  .osp-panel { display: none; }
-  .osp-bar {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+  .osp-rail {
+    display: block;
+    position: static;
+    height: auto;
+    overflow: visible;
+    border-left: 0;
+    border-top: var(--osp-rule) solid var(--osp-border);
+    padding: 1.75rem max(1.25rem, env(safe-area-inset-right)) 3.5rem
+      max(1.25rem, env(safe-area-inset-left));
+  }
+  /* The rail carries the mentions itself now, so the copy under the note
+     would be the second one on the page. */
+  .osp-mentions { display: none; }
+
+  /* The two children this width takes away are still siblings, so the rule
+     meant to sit between sections would be drawn above whichever section
+     now leads the list -- a line under the rail's own top edge, separating
+     nothing from nothing. Taken off whatever follows either of them; both
+     are named because the outline is absent on a note with no headings, and
+     then the stats are what the first section follows. */
+  .osp-rail > .osp-stats-rail + *,
+  .osp-rail > .osp-rail-outline + * {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+  /* And the stats go the other way: the rail is the foot of the page here,
+     which is the one place a reading time is no use. */
+  .osp-stats-top { display: flex; }
+  .osp-stats-rail { display: none; }
+
+  /* The menu takes the screen, rather than leaving a sliver of the note
+     down one side. On a phone that sliver is not a view of anything -- it
+     is four characters of a sentence -- and what it costs is the width the
+     tree needs most: a note four folders deep is a long name in a narrow
+     column, and the drawer was ellipsing the only part that identifies it.
+
+     Capped so that a tablet, which is also under 56rem, gets a menu rather
+     than a page of one. Above the cap the scrim comes back and with it the
+     tap-anywhere way out; below it, the close button and Escape are the two
+     ways out, which is why the button is the first thing focus lands on.
+
+     Fixed rather than a transformed grid child: it has to sit over the note
+     at full height, and the grid cell it came from is a row in the flow.
+
+     It comes in from the right, which is the side the button that opens it
+     is on. A drawer that flies out from the opposite edge to its handle
+     makes the reader's finger cross the screen to a panel that arrived
+     behind it, and the close button -- the last item in the drawer's top
+     row -- then lands at the far end from the menu button it replaced.
+     From the right, the close appears exactly where the menu was pressed,
+     which is the one piece of continuity a drawer can offer. */
+  .osp-panel {
+    display: flex;
+    position: fixed;
+    z-index: 60;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    left: auto;
+    width: min(100vw, 26rem);
+    height: auto;
+    padding-right: env(safe-area-inset-right);
+    border-right: 0;
+    border-left: var(--osp-rule) solid var(--osp-border);
+    box-shadow: 0 0 40px -8px color-mix(in srgb, var(--osp-shadow) 40%, transparent);
+    transform: translateX(102%);
+    visibility: hidden;
+    /* Visibility is stepped rather than interpolated, and which end of the
+       slide it steps at differs by direction: on the way in, at once, so
+       the drawer is focusable in the same tick the attribute is set -- a
+       field inside something still computing as hidden cannot take the
+       caret, and the whole point of the bar's search button is that it
+       lands there. On the way out, after the slide, or the panel would
+       vanish and then take a quarter second to leave. */
+    transition: transform 240ms var(--osp-ease), visibility 0s linear 240ms;
+  }
+  :root[data-osp-panel="open"] .osp-panel {
+    transform: none;
+    visibility: visible;
+    transition: transform 240ms var(--osp-ease), visibility 0s linear 0s;
+  }
+  /* The drawer's own top row, which is the bar it is covering: the field
+     first and at full width, then the two controls a reader should not have
+     to close the menu to reach. */
+  .osp-panel-head {
     gap: 0.5rem;
+    padding: 0.6rem max(0.75rem, env(safe-area-inset-right)) 0.6rem 0.75rem;
+    border-bottom: var(--osp-rule) solid var(--osp-faint);
   }
-  .osp-bar-search { display: flex; }
-  .osp-bar-search kbd { display: none; }
-  .osp-brand-name { display: none; }
+  /* The field in the drawer is the whole of the search here, and there is
+     no key to press to empty it. */
+  .osp-search-clear:not([hidden]) { display: inline-flex; }
+  .osp-panel-theme { display: block; }
+  .osp-panel-close { display: inline-flex; }
+  .osp-panel-toggle { display: inline-flex; }
+  .osp-scrim { display: block; }
+  .osp-panel-body { padding-left: 0.4rem; padding-right: 0.4rem; }
+
+  /* Name, then menu. Two things, one at each end.
+     The field that used to hold the middle of this row is in the drawer, so
+     the site gets its name back: on a page reached from a link somewhere
+     else, the one thing the bar should say is whose site this is. And the
+     menu goes to the right, where the hand holding the phone already is. */
+  .osp-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.4rem;
+    /* The same gutter the crumb and the outline row use, so the three rows
+       stack against one left edge and one right edge. The bar used to sit
+       at 0.75rem and make the difference up out of the brand's own padding,
+       which lined the *name* up with the rows below while leaving the menu
+       button's box eight pixels proud of the view control under it -- two
+       drawn boxes, one above the other, not quite on the same line. */
+    padding-left: max(1.25rem, env(safe-area-inset-left));
+    padding-right: max(1.25rem, env(safe-area-inset-right));
+  }
+  /* The name takes the whole left column so the menu is pushed to the far
+     edge, but it is set against the start of it: a touch pointer gives the
+     brand a 44px floor and centres what is in it, which in a column that
+     now takes the free space would float the name into the middle. */
+  /* The name takes the whole left column so the menu is pushed to the far
+     edge, but it is set against the start of it: a touch pointer gives the
+     brand a 44px floor and centres what is in it, which in a column that
+     now takes the free space would float the name into the middle. */
+  .osp-brand { grid-column: 1; justify-self: start; padding-left: 0; padding-right: 0; }
+  .osp-panel-toggle { grid-column: 2; }
+  /* Both of its children are already off at this width -- the graph toggles
+     a rail that is not on screen, and light/dark has moved into the drawer
+     -- so what is left is an empty box taking a grid cell. */
+  .osp-bar-actions { display: none; }
+  .osp-bar-search { display: none; }
   .osp-doc { padding: 1.5rem 1.25rem 4rem; }
   .osp-crumb { padding-left: 1.25rem; padding-right: 1.25rem; }
-  /* The panel is gone, so the overlay answers to the field in the bar. */
+
+  /* The outline leaves the rail and becomes the row under the crumb. */
+  .osp-inpage {
+    display: block;
+    position: sticky;
+    /* Plus the rule, because the crumb above is a row of 44px controls with
+       a hairline under them, and border-box sizing cannot make those 45 pixels
+       into 44. A pin set to the token alone lands one pixel high and the
+       first thing it covers is that hairline -- which is the one part of
+       the crumb that carries information, since it appears only once the
+       title has scrolled away. */
+    top: calc(var(--osp-bar-h) + var(--osp-crumb-h) + var(--osp-rule));
+    z-index: 15;
+    background: var(--osp-bg);
+    border-bottom: var(--osp-rule) solid var(--osp-faint);
+  }
+  :root { --osp-inpage-h: 2.6rem; }
+  /* It is the same list, so only one copy of it may be on the page. */
+  .osp-rail-outline { display: none; }
+  /* In markdown mode its anchors point at headings that are not on screen,
+     the same reason the rail's copy goes with them. */
+  :root[data-osp-view="markdown"] .osp-inpage { display: none; }
+  :root[data-osp-view="markdown"] { --osp-inpage-h: 0rem; }
+
+  /* The field this answers to is in the drawer, so the overlay belongs over
+     the drawer -- the same panel under the same field as on a desktop,
+     which is the whole of that experience worth carrying across. */
   .osp-jump {
-    left: 1rem;
-    right: 1rem;
-    width: auto;
-    top: calc(var(--osp-bar-h) + 0.6rem);
+    right: max(0.75rem, env(safe-area-inset-right));
+    left: auto;
+    width: calc(min(100vw, 26rem) - 1.5rem);
+    top: 3.9rem;
+    max-height: calc(100dvh - 4.75rem);
+    z-index: 70;
   }
   /* The trail is a long way to say where a note is on a narrow screen, and
      the mark in the bar already leads home: the note's own name is the part
      that has to fit. */
   .osp-crumb-trail li:not(:last-child) { display: none; }
   .osp-crumb-trail li:last-child .osp-crumb-sep { display: none; }
+  /* What is left of the trail is the note's own name, which is text rather
+     than a link: the padding that keeps a hover highlight off the words is
+     four pixels nothing presses, and it was pushing the title out of line
+     with the row above and the row below. */
+  .osp-crumb-trail [aria-current="page"] { padding-left: 0; }
+  /* Both panels are already gone and the measure is already the column, so
+     all three width settings would land on the same page. The view control
+     stays: that one still has two things to show. */
+  .osp-crumb-tools [data-osp-widths] { display: none; }
+
+  /* The view control: the desktop's control with the words taken off.
+     It used to be redrawn here -- track removed, the pressed tint painted
+     on an inset of the button -- on the argument that a bordered segment
+     was the loudest thing on a 390px screen. What that bought in quiet it
+     spent on recognition: two icons sitting loose in a row, one of them
+     faintly tinted, do not read as a pair of alternatives at all. A reader
+     who has seen this site on a laptop knows the segmented track, and the
+     same object in the same place is worth more than a few pixels of ink.
+
+     So the only difference from the desktop control is the one the width
+     actually forces: the labels go, and the icons stand in for them. The
+     names survive on title and aria-label, which is where they already
+     were for the width control beside it. */
+  .osp-seg-btn span { display: none; }
+  /* Back and forward are the phone's own, by gesture or by its chrome, and
+     this row has one note title and two controls to fit across 390px. The
+     browser's affordance is better than ours and costs no room. */
+  .osp-crumb-nav { display: none; }
+  /* Held sideways, a notched phone eats the left or right edge of both. */
+  .osp-doc {
+    padding-left: max(1.25rem, env(safe-area-inset-left));
+    padding-right: max(1.25rem, env(safe-area-inset-right));
+  }
+  .osp-crumb {
+    padding-left: max(1.25rem, env(safe-area-inset-left));
+    padding-right: max(1.25rem, env(safe-area-inset-right));
+  }
+}
+
+/* --- touch ------------------------------------------------------------ *
+ * Keyed to the pointer, not to the width: a 380px browser window on a
+ * desktop still has a mouse, and a tablet at 1024px does not. What changes
+ * is everything a finger makes untrue -- targets sized for a cursor, labels
+ * that live in a tooltip nothing can hover, hints naming keys there is no
+ * keyboard for, and a text field small enough that iOS zooms the page to
+ * meet it and never zooms back.
+ * --------------------------------------------------------------------- */
+
+@media (pointer: coarse) {
+  /* Taller controls make a taller crumb row, and this variable is what
+     every heading's scroll-margin is built from. Left at the pointer-sized
+     value, an anchor jump lands the heading just under the sticky edge --
+     two pixels, which is enough to read as the link having missed. */
+  :root { --osp-crumb-h: 3.9rem; }
+
+  /* 44px is the floor, and it is a floor on the hit area rather than on the
+     ink: the controls keep their drawn size and grow the box around it. */
+  .osp-seg-btn,
+  .osp-crumb-step,
+  .osp-code-btn,
+  .osp-btn,
+  .osp-callout-toggle {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* The three squares grow with everything else, but as squares: a floor on
+     one side alone would make them oblong. */
+  .osp-btn-sq { width: 44px; height: 44px; }
+
+  .osp-row,
+  .osp-tree summary,
+  .osp-mention {
+    min-height: 44px;
+  }
+
+  /* The mark is the way home, and on these screens the name beside it is
+     gone, so the square is the whole target. */
+  .osp-brand { min-height: 44px; min-width: 44px; justify-content: center; }
+
+  .osp-switch { min-height: 44px; min-width: 44px; }
+
+  /* Icons alone, as on every other control in this row. The names live on
+     aria-label rather than in a tooltip no finger can ask for, so the
+     buttons are still named to a screen reader. */
+  .osp-seg-icon .osp-seg-btn { min-width: 44px; }
+
+  /* Under 16px, Safari zooms the page to the field on focus and leaves it
+     there. On these screens the field in the bar is the whole navigation.
+
+     The input stretches to fill the box rather than sitting inside it on a
+     cushion of padding: the padding is not a tap target, so a 44px-tall
+     field that only listens across the middle 29 is still a miss. */
+  /* The bar has to hold a 44px field with room left over, or the field
+     becomes the bar. */
+  :root { --osp-bar-h: 3.5rem; }
+
+  /* 16px on the whole field, not just the input: at 13px Safari zooms the
+     page to meet it and never zooms back, and setting it on the input alone
+     left a 16px value sitting in a box scaled for 13 -- the icon, the
+     placeholder and the text all disagreeing by two points. */
+  .osp-search {
+    font-size: 1rem;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .osp-search input { align-self: stretch; min-height: 2.75rem; }
+
+  /* And the glyphs at either end come up to meet it.
+     16px text beside a 14px icon reads as text that is too big rather than
+     as an icon that is too small, so the obvious fix is to shrink the
+     words -- but the 16 above is not a design choice, it is the number
+     below which iOS zooms the page to a focused field and leaves it there.
+     The glyphs carry no such rule, so they are the side that moves.
+
+     Scoped to the field rather than set on the icon class: at this size
+     these two sit beside sixteen-point text, and every other osp-icon-sm on
+     a touch screen still sits beside the UI scale. */
+  .osp-search .osp-icon-sm { width: 16px; height: 16px; }
+
+  /* Keys nobody has. */
+  .osp-jump-hint,
+  .osp-search kbd { display: none; }
+
+  /* The grey box iOS paints over a tap belongs to no theme. The controls
+     all carry a pressed state of their own, which is the honest feedback. */
+  a, button, summary, [role="radio"], [role="switch"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* --- narrow and touched ----------------------------------------------- *
+ * Where the two previous blocks meet: a phone. The coarse-pointer rules
+ * grew every control to 44px, which is right, and grew the crumb row to
+ * 62px along with them, which is not -- the row holds one note title and
+ * one two-state control, and the height it needs is the height of the
+ * control. Padding was the difference, so the padding goes and the row
+ * becomes exactly its tallest child.
+ * --------------------------------------------------------------------- */
+
+@media (max-width: 56rem) and (pointer: coarse) {
+  /* Exactly what the row is: the view control's own height, plus the air
+     above and below it. The row is a min-height and the in-page menu is
+     pinned at the same number, so a value short of the content would put
+     the outline row over the last few pixels of the crumb rather than
+     under it.
+
+     The track is 2rem of button and the 0.13rem of padding and the rule
+     that draw it -- shorter than a 44px button would make it, which is the
+     one place this stylesheet spends a touch target on appearance. Grown to
+     the floor, the track filled the row edge to edge and read as a second
+     bar rather than as a control sitting in one; the width, which is what a
+     thumb actually aims at here, keeps its 44. */
+  :root { --osp-crumb-h: calc(2rem + 0.26rem + var(--osp-rule) * 2 + 0.6rem); }
+  .osp-crumb { padding-top: 0.3rem; padding-bottom: 0.3rem; }
+  .osp-crumb-tools .osp-seg-btn { min-height: 2rem; }
+  /* The gap is the track's own now; the row only has to stand clear of the
+     note's title. */
+  .osp-crumb-tools { gap: 0; padding-left: 0.5rem; }
+  .osp-inpage-head { min-height: 2.75rem; }
+  :root { --osp-inpage-h: 2.75rem; }
+  :root[data-osp-view="markdown"] { --osp-inpage-h: 0rem; }
+  /* A row of links in a drawer the size of the screen: the whole width is
+     the target, and the text inside it is read at the size the note is. */
+  .osp-panel .osp-row { padding-left: 0.6rem; padding-right: 0.6rem; }
+  .osp-inpage-body .osp-outline a { min-height: 44px; display: flex; align-items: center; }
+
+}
+
+/* A phone held sideways has 390px of height, and 110 of it was chrome the
+   reader could not scroll past: a bar, a trail and two controls standing
+   between them and a quarter of the page. The bar stays -- it holds the
+   search and the way home, and it is the smaller half. The trail gives up
+   its sticky position, which costs a reader who scrolls back up a moment
+   and gives every reader a quarter of their screen. */
+@media (max-height: 30rem) and (orientation: landscape) {
+  .osp-crumb { position: static; }
+  /* The outline row goes the same way and for the same arithmetic. Pinned,
+     it would hold 44px of a 390px screen for the whole of a note -- and it
+     is the row a reader can most afford to scroll back for, because unlike
+     the trail it answers a question they have already answered by being
+     where they are. */
+  .osp-inpage { position: static; }
+  /* Nothing sticky below the bar any more, so a heading only has to clear
+     the bar. */
+  :root { --osp-crumb-h: 0rem; --osp-inpage-h: 0rem; }
 }
 
 /* An outline link jumps rather than teleports, so the reader keeps their
@@ -1547,7 +2213,10 @@ html { scroll-behavior: smooth; }
 }
 
 @media print {
-  .osp-bar, .osp-panel, .osp-rail, .osp-crumb, .osp-jump { display: none; }
+  .osp-bar, .osp-panel, .osp-rail, .osp-crumb, .osp-jump, .osp-inpage { display: none; }
+  /* Paper gets the note, whichever view the screen was showing. */
+  .osp-source { display: none !important; }
+  .osp-article { display: block !important; }
   .osp-shell { display: block; }
   .osp-doc { padding: 0; }
   /* Paper does not scroll: nothing may be left outside the edge of a block,

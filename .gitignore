@@ -18,6 +18,11 @@ AGENTS.md
 **/_spike-output/
 **/_site-preview/
 
+# Which vault `npm run deploy` copies into. One line, a path, local to this
+# clone: the vault's name is the owner's business and does not belong in
+# committed source. Created by hand; see CLAUDE.md.
+.vault-path
+
 # A vault folder opened by mistake leaves one of these behind.
 /.obsidian/
 

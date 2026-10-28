@@ -8,9 +8,9 @@
  * *files* become pages, while a query decides what goes *inside* a page, and
  * it runs against the whole vault.
  *
- * The demo site built from the spike vault does exactly this. It publishes
- * `spike-notes/` only, and its Dataview tables list every book in
- * `library/`, which is not published.
+ * The test vault this was found in does exactly this. It publishes one
+ * folder of notes, and its Dataview tables list every book in a second
+ * folder that is not published.
  *
  * Two kinds of leak, found two ways:
  *

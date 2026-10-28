@@ -4,8 +4,8 @@
  * Everything here is an enhancement of markup that already works: the tree is
  * `<details>`, the outline is anchors, the batch rows open on their own. What
  * the script adds is the search field (hidden until it can do something), the
- * outline's active mark, the theme switch, the graph panel and the crumb's way
- * back. A reader with scripting off loses those and keeps the site.
+ * outline's active mark, the theme switch and the crumb's way back. A reader
+ * with scripting off loses those and keeps the site.
  *
  * It is inlined rather than fetched, like the stylesheet: a published page
  * makes no external requests.
@@ -15,8 +15,24 @@
  * Runs in `<head>`, before the first paint, so a reader who chose dark does
  * not get a white flash on every navigation. Kept to one statement for the
  * same reason.
+ *
+ * It carries the width and the view as well, and for a sharper reason than
+ * the theme: those two change the page's layout. Applied after first paint
+ * they would not be a flash of the wrong colour but a column visibly
+ * resizing, or a note appearing and being replaced by its source, on every
+ * navigation.
+ *
+ * Markdown is only restored on a page that has a source pane. A reader who
+ * chose it and then followed a link to the browse page should see the browse
+ * page, not an empty view of nothing, and should still be in markdown mode
+ * when they reach the next note.
  */
-export const THEME_BOOT = `try{var t=localStorage.getItem("osp-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}`;
+export const THEME_BOOT =
+  `try{var r=document.documentElement,t=localStorage.getItem("osp-theme");` +
+  `if(t)r.setAttribute("data-theme",t);` +
+  `var w=localStorage.getItem("osp-width");if(w)r.setAttribute("data-osp-width",w);` +
+  `if(localStorage.getItem("osp-view")==="markdown"&&r.hasAttribute("data-osp-source"))` +
+  `r.setAttribute("data-osp-view","markdown")}catch(e){}`;
 
 export const CLIENT_SCRIPT = `(function () {
   var root = document.documentElement;
@@ -53,6 +69,156 @@ export const CLIENT_SCRIPT = `(function () {
   });
 
   paintSwitches();
+
+  /* --- view and width ---------------------------------------------- *
+     Two settings about the page rather than the site: which of its two
+     views to read, and how much of the window it gets. Both live as an
+     attribute on <html> and are applied in <head> before the first paint,
+     so all this has to do is reveal the controls, keep them in step with
+     the attribute, and make them behave like the radiogroups they claim to
+     be -- arrows move the choice, and only the current one is in the tab
+     order, which is what a radiogroup means to a screen reader.
+
+     They ship hidden for the usual reason: until this runs, pressing one
+     would do nothing.
+     ------------------------------------------------------------------ */
+
+  function segmented(groupSelector, modeAttribute, stateAttribute, key) {
+    var group = document.querySelector(groupSelector);
+    if (!group) return;
+    var buttons = group.querySelectorAll("[" + modeAttribute + "]");
+    if (!buttons.length) return;
+
+    function modeOf(button) {
+      return button.getAttribute(modeAttribute);
+    }
+
+    function paint(value) {
+      for (var i = 0; i < buttons.length; i++) {
+        var on = modeOf(buttons[i]) === value;
+        buttons[i].setAttribute("aria-checked", String(on));
+        buttons[i].tabIndex = on ? 0 : -1;
+      }
+    }
+
+    function choose(value, focus) {
+      root.setAttribute(stateAttribute, value);
+      try { localStorage.setItem(key, value); } catch (e) {}
+      paint(value);
+      if (!focus) return;
+      for (var i = 0; i < buttons.length; i++) {
+        if (modeOf(buttons[i]) === value) buttons[i].focus();
+      }
+    }
+
+    function step(by) {
+      var at = 0;
+      for (var i = 0; i < buttons.length; i++) {
+        if (buttons[i].getAttribute("aria-checked") === "true") at = i;
+      }
+      choose(modeOf(buttons[(at + by + buttons.length) % buttons.length]), true);
+    }
+
+    group.addEventListener("click", function (event) {
+      var button = event.target.closest("[" + modeAttribute + "]");
+      if (button) choose(modeOf(button), false);
+    });
+
+    group.addEventListener("keydown", function (event) {
+      var key_ = event.key;
+      if (key_ === "ArrowRight" || key_ === "ArrowDown") step(1);
+      else if (key_ === "ArrowLeft" || key_ === "ArrowUp") step(-1);
+      else if (key_ === "Home") choose(modeOf(buttons[0]), true);
+      else if (key_ === "End") choose(modeOf(buttons[buttons.length - 1]), true);
+      else return;
+      event.preventDefault();
+    });
+
+    paint(root.getAttribute(stateAttribute) || modeOf(buttons[0]));
+    group.hidden = false;
+  }
+
+  segmented("[data-osp-views]", "data-osp-view-mode", "data-osp-view", "osp-view");
+  segmented("[data-osp-widths]", "data-osp-width-mode", "data-osp-width", "osp-width");
+
+  /* --- the vault panel, as a drawer --------------------------------- *
+     Wide enough and the panel is simply there, and none of this runs
+     against it. Narrow enough and it is off the left edge until asked
+     for. The state is an attribute on <html> so the stylesheet decides
+     what "open" looks like at each width, and this only has to decide
+     when.
+
+     Not remembered between pages on purpose: a drawer is a question
+     asked and answered, and one that reopened itself on every note
+     would be a panel that does not close.
+     ------------------------------------------------------------------ */
+
+  var panelToggle = document.querySelector("[data-osp-panel-toggle]");
+  var panel = document.getElementById("osp-panel");
+  var scrim = document.querySelector("[data-osp-scrim]");
+  var inpage = document.querySelector("[data-osp-inpage]");
+
+  function panelOpen() {
+    return root.getAttribute("data-osp-panel") === "open";
+  }
+
+  function showPanel(on) {
+    if (on) root.setAttribute("data-osp-panel", "open");
+    else root.removeAttribute("data-osp-panel");
+    if (panelToggle) panelToggle.setAttribute("aria-expanded", String(on));
+    if (scrim) scrim.hidden = !on;
+    /* The overlay belongs to the field in the drawer, so it cannot outlive
+       the drawer: left open, it would be a list of notes floating over the
+       note the reader just went back to. */
+    if (!on && typeof openJump === "function") openJump(false);
+    /* The outline row is pinned under a drawer that now covers it. */
+    if (on && inpage) inpage.open = false;
+    /* The page behind must not scroll under an open drawer: a reader who
+       swipes to dismiss it and scrolls the article instead has lost their
+       place to a control they were trying to put away. */
+    document.body.style.overflow = on ? "hidden" : "";
+    if (on) {
+      /* A shut drawer is hidden, and nothing inside something hidden can
+         take focus. The attribute above has been set but the style it
+         selects has not been recomputed yet, so reading a box off the panel
+         forces that recompute before the focus call below. */
+      if (panel) panel.getBoundingClientRect();
+
+      var close = panel ? panel.querySelector("[data-osp-panel-close]") : null;
+      if (close) close.focus();
+    } else if (panelToggle && visible(panelToggle)) {
+      panelToggle.focus();
+    }
+  }
+
+  if (panelToggle && panel) {
+    panelToggle.hidden = false;
+    panelToggle.addEventListener("click", function () {
+      showPanel(!panelOpen());
+    });
+
+    var panelClose = panel.querySelector("[data-osp-panel-close]");
+    if (panelClose) {
+      panelClose.addEventListener("click", function () { showPanel(false); });
+    }
+    if (scrim) scrim.addEventListener("click", function () { showPanel(false); });
+
+    /* Following a link is answering the question the drawer was asking. */
+    panel.addEventListener("click", function (event) {
+      if (event.target.closest("a")) showPanel(false);
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && panelOpen()) showPanel(false);
+    });
+
+    /* A drawer left open across a resize would be a panel stuck over a
+       layout that has room for it. */
+    window.addEventListener("resize", function () {
+      if (panelOpen() && !visible(scrim)) showPanel(false);
+    }, { passive: true });
+
+  }
 
   /* --- search ------------------------------------------------------ */
 
@@ -204,11 +370,22 @@ export const CLIENT_SCRIPT = `(function () {
     select(0);
   }
 
+  /* The clear button is shown by what is in the field rather than by what
+     the field is doing, so every path that empties it -- typing it empty,
+     Escape, the button itself -- lands here and the button cannot be left
+     standing over an empty box. */
+  function paintClear(input) {
+    var field = input.closest("[data-osp-search]");
+    var button = field ? field.querySelector("[data-osp-search-clear]") : null;
+    if (button) button.hidden = !input.value;
+  }
+
   for (var n = 0; n < inputs.length; n++) {
     inputs[n].addEventListener("focus", function () { openJump(true); });
     inputs[n].addEventListener("input", function (event) {
       openJump(true);
       search(event.target.value);
+      paintClear(event.target);
     });
     inputs[n].addEventListener("keydown", function (event) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -226,8 +403,29 @@ export const CLIENT_SCRIPT = `(function () {
         return;
       }
       if (event.key !== "Escape") return;
-      if (event.target.value) { event.target.value = ""; search(""); }
-      else { openJump(false); event.target.blur(); }
+      if (event.target.value) {
+        event.target.value = "";
+        search("");
+        paintClear(event.target);
+      } else { openJump(false); event.target.blur(); }
+    });
+  }
+
+  /* Pressing it is the same gesture as selecting the field and deleting
+     what is in it, so it ends the same way: an empty field with the caret
+     still in it and the recency list back underneath. Anything else would
+     be a control that clears the search and then takes the search away. */
+  var clears = document.querySelectorAll("[data-osp-search-clear]");
+  for (var c = 0; c < clears.length; c++) {
+    clears[c].addEventListener("click", function () {
+      var field = this.closest("[data-osp-search]");
+      var input = field ? field.querySelector("[data-osp-search-input]") : null;
+      if (!input) return;
+      input.value = "";
+      search("");
+      paintClear(input);
+      openJump(true);
+      input.focus();
     });
   }
 
@@ -237,13 +435,31 @@ export const CLIENT_SCRIPT = `(function () {
     openJump(false);
   });
 
-  /* A slash opens the field that is actually on screen. The bar keeps one for
-     narrow screens where the panel is gone, and on a wide screen that one is
-     styled away -- so the first field in the document is the wrong answer. */
+  /* A slash opens the field that is actually on screen.
+     Which one that is depends on the width. Wide, the panel is a column and
+     its field is the one; narrow, the panel is a drawer and the field is
+     inside it, so the slash has to open the drawer before it can reach it --
+     a closed drawer is translated off the edge rather than taken out of the
+     layout, so asking the element whether it is on screen gets the wrong
+     answer, and the toggle being on screen is the reliable way to tell which
+     of the two arrangements this is. */
   document.addEventListener("keydown", function (event) {
     if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
     var active = document.activeElement;
     if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
+
+    if (panelToggle && panel && visible(panelToggle)) {
+      event.preventDefault();
+      if (!panelOpen()) showPanel(true, true);
+      var drawerField = panel.querySelector("[data-osp-search-input]");
+      if (drawerField) {
+        drawerField.focus();
+        drawerField.select();
+        openJump(true);
+      }
+      return;
+    }
+
     for (var i = 0; i < fields.length; i++) {
       if (!visible(fields[i])) continue;
       var field = fields[i].querySelector("[data-osp-search-input]");
@@ -255,6 +471,37 @@ export const CLIENT_SCRIPT = `(function () {
       return;
     }
   });
+
+  /* --- the in-page menu -------------------------------------------- *
+     The outline, pinned under the crumb on the screens with no rail to put
+     it in. It opens and closes on its own -- it is a <details> -- so all
+     this adds is the two things markup cannot know: which section is being
+     read, and that a reader who has picked one is finished with the list.
+     ------------------------------------------------------------------ */
+
+  var inpageNow = document.querySelector("[data-osp-inpage-now]");
+
+  if (inpage) {
+    inpage.addEventListener("click", function (event) {
+      if (event.target.closest("a")) inpage.open = false;
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && inpage.open) {
+        inpage.open = false;
+        var head = inpage.querySelector("summary");
+        if (head) head.focus();
+      }
+    });
+
+    /* Tapping the note is as much a way of dismissing this as tapping the
+       row again, and on a phone it is the one that needs no aim. */
+    document.addEventListener("pointerdown", function (event) {
+      if (!inpage.open) return;
+      if (event.target.closest("[data-osp-inpage]")) return;
+      inpage.open = false;
+    });
+  }
 
   /* --- the crumb: where you are, and the way back ------------------ */
 
@@ -333,9 +580,26 @@ export const CLIENT_SCRIPT = `(function () {
     if (crumb) crumb.classList.toggle("osp-scrolled", window.scrollY > 8);
     if (!targets.length) return;
 
+    /* A heading counts as reached once it has passed a line near the top of
+       the window -- except that the last screenful of a page has no scroll
+       left to push anything past it. A note whose final section is short
+       (a footnote, a closing line) can be scrolled to its very end with
+       that heading still sitting halfway down the window, so the mark stops
+       short and the section the reader is actually in never lights up.
+
+       So in the final stretch the line travels down the window instead of
+       the page travelling up past it: with a screenful to go it is still at
+       140, and at the bottom it is the foot of the window, which is where
+       the last heading necessarily is. The two meet exactly, so the mark
+       keeps moving at one pace rather than snapping at the end. */
+    var line = 140;
+    var remaining =
+      document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    if (remaining < window.innerHeight - line) line = window.innerHeight - remaining;
+
     var active = targets[0];
     for (var i = 0; i < targets.length; i++) {
-      if (targets[i].heading.getBoundingClientRect().top < 140) active = targets[i];
+      if (targets[i].heading.getBoundingClientRect().top < line) active = targets[i];
     }
     for (var j = 0; j < targets.length; j++) {
       var on = targets[j] === active;
@@ -344,9 +608,21 @@ export const CLIENT_SCRIPT = `(function () {
       else targets[j].link.removeAttribute("aria-current");
     }
 
+    /* Shut, the in-page row says where in the note the reader is, which is
+       the question a long page on a small screen stops answering first. */
+    if (inpageNow && active) {
+      var name = active.link.textContent;
+      if (inpageNow.textContent !== name) inpageNow.textContent = name;
+    }
+
     /* A long outline scrolls on its own, so the active row is kept in sight
-       -- but only when it has left, or the rail twitches on every frame. */
-    if (rail && active) {
+       -- but only when it has left, or the rail twitches on every frame.
+
+       And only when the rail is a scrolling box at all. Below 56rem it is
+       not: it sits under the note as part of the page, and scrolling a row
+       of it into view would scroll the document, dragging the reader out of
+       the article they were reading and down to its own table of contents. */
+    if (rail && active && rail.scrollHeight > rail.clientHeight) {
       var box = active.link.getBoundingClientRect();
       var frame = rail.getBoundingClientRect();
       if (box.top < frame.top + 8 || box.bottom > frame.bottom - 8) {
@@ -515,7 +791,7 @@ export const CLIENT_SCRIPT = `(function () {
   }
 
   function say(button, text, hold) {
-    var label = button.querySelector(".osp-code-btn-label");
+    var label = button.querySelector(".osp-code-btn-label, [data-osp-copy-label]");
     if (!label) return;
     if (button.ospSaid) window.clearTimeout(button.ospSaid);
     if (!button.ospWas) button.ospWas = label.textContent;
@@ -540,7 +816,9 @@ export const CLIENT_SCRIPT = `(function () {
 
     var copyBtn = event.target.closest("[data-osp-copy]");
     if (!copyBtn) return;
-    var block = copyBtn.closest("[data-osp-code]");
+    /* A code block and the note's own source are the same job: the button
+       sits above a <pre>, and what it copies is that block's text. */
+    var block = copyBtn.closest("[data-osp-code], [data-osp-source-pane]");
     var code = block ? block.querySelector("pre code") : null;
     if (!code) return;
 
@@ -556,31 +834,4 @@ export const CLIENT_SCRIPT = `(function () {
       say(copyBtn, apple ? "Press ⌘C" : "Press Ctrl+C", 2800);
     });
   });
-
-  /* --- the graph, as the rail's other state ------------------------ */
-
-  var railPage = document.querySelector("[data-osp-rail-page]");
-  var railGraph = document.querySelector("[data-osp-rail-graph]");
-  var graphButton = document.querySelector("[data-osp-graph]");
-
-  function showGraph(on) {
-    if (!railPage || !railGraph) return;
-    railPage.hidden = on;
-    railGraph.hidden = !on;
-    if (graphButton) graphButton.setAttribute("aria-pressed", String(on));
-    if (on) {
-      var backButton = railGraph.querySelector("[data-osp-graph-back]");
-      if (backButton) backButton.focus();
-    } else if (graphButton) {
-      graphButton.focus();
-    }
-  }
-
-  if (graphButton) {
-    graphButton.addEventListener("click", function () {
-      showGraph(railGraph ? railGraph.hidden : false);
-    });
-  }
-  var graphBack = document.querySelector("[data-osp-graph-back]");
-  if (graphBack) graphBack.addEventListener("click", function () { showGraph(false); });
 })();`;
