@@ -79,6 +79,11 @@ export interface SettingsHost {
       failOnTruncatedBase?: boolean;
       customDomain?: string;
     };
+    commentOverlay: {
+      enabled: boolean;
+      reviewer: string;
+      reviewFolder: string;
+    };
     github: {
       apiBase: string;
       owner: string;
@@ -93,6 +98,14 @@ export interface SettingsHost {
   verifyToken(): Promise<string>;
   publish(): Promise<void>;
   buildToPreview(): Promise<void>;
+  /** Turns exported review comments into a note in the vault. */
+  importReview(): Promise<void>;
+  /** Serves the built preview locally and opens it in the browser. */
+  openPreview(): Promise<void>;
+  /** Where the review server is listening, or null while it is not running. */
+  readonly reviewServerAddress: { url: string; port: number } | null;
+  /** Stops the review server. */
+  stopReviewServer(): Promise<void>;
 }
 
 export class VaultPublisherSettingsTab extends PluginSettingTab {
@@ -131,6 +144,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     this.renderConnection(containerEl);
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
+    this.renderReview(containerEl);
     this.renderPublish(containerEl);
     this.renderAutomation(containerEl);
   }
@@ -685,7 +699,145 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     }
   }
 
-  // -- 4. publish ----------------------------------------------------------
+  // -- 4. review -----------------------------------------------------------
+
+  /**
+   * The review overlay.
+   *
+   * One toggle, and the detail only once it is on. This is an optional way of
+   * working rather than part of setup, so it stays out of the first-run
+   * checklist and out of the way of someone who only wants to publish.
+   *
+   * The description says "preview" twice on purpose. The overlay never
+   * reaches a published page -- it cannot, since only `buildToPreview` can
+   * ask for it -- and someone who believed otherwise would either think
+   * their readers can comment, or worry that their vault's folder names are
+   * on the internet. Both are worth one extra sentence.
+   */
+  private renderReview(root: HTMLElement): void {
+    const overlay = this.host.settings.commentOverlay;
+
+    new Setting(root).setName("Review").setHeading();
+
+    new Setting(root)
+      .setName("Add a review overlay to previews")
+      .setDesc(
+        "Puts a comment layer on preview builds, so you can pin notes to a " +
+          "paragraph while reading the built site. It is never added to a " +
+          "published site, and your readers never see it.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(overlay.enabled).onChange(async (value) => {
+          overlay.enabled = value;
+          await this.host.saveSettings();
+          this.display();
+        }),
+      );
+
+    if (!overlay.enabled) return;
+
+    const note = root.createDiv();
+    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
+    note.setText(
+      "Build a preview, then open it below. Comments you leave are saved " +
+        "straight into the review folder in this vault, and are there again " +
+        "the next time you open the preview \u2014 in any browser.",
+    );
+
+    const running = this.host.reviewServerAddress;
+
+    new Setting(root)
+      .setName("Open preview in browser")
+      .setDesc(
+        "Serves the built preview from this computer so the overlay can read " +
+          "and write the vault. Nothing outside this machine can reach it.",
+      )
+      .addButton((button) =>
+        button
+          .setButtonText(running ? "Open again" : "Open")
+          .setCta()
+          .onClick(async () => {
+            button.setDisabled(true);
+            try {
+              await this.host.openPreview();
+            } finally {
+              button.setDisabled(false);
+              this.display();
+            }
+          }),
+      );
+
+    // Said plainly, because a listening socket the user did not know about is
+    // exactly the sort of thing a plugin should not keep to itself.
+    const state = root.createDiv();
+    state.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
+    state.setText(
+      running
+        ? `Serving on ${running.url.split("?")[0]} \u2014 reachable only from this computer. It stops when you close Obsidian or disable the plugin.`
+        : "Not running. It starts when you open a preview, and stops when you close Obsidian.",
+    );
+
+    if (running) {
+      new Setting(root)
+        .setName("Stop serving")
+        .setDesc("Closes the local server. Comments already saved stay in the vault.")
+        .addButton((button) =>
+          button.setButtonText("Stop").onClick(async () => {
+            await this.host.stopReviewServer();
+            this.display();
+          }),
+        );
+    }
+
+    new Setting(root)
+      .setName("Your name")
+      .setDesc("Shown against the comments you leave. Optional.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Alex")
+          .setValue(overlay.reviewer)
+          .onChange(async (value) => {
+            overlay.reviewer = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Review folder")
+      .setDesc(
+        "Where to drop an exported comment-overlay.json, and where the " +
+          "imported review note is written.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("_vault-publisher/review")
+          .setValue(overlay.reviewFolder)
+          .onChange(async (value) => {
+            overlay.reviewFolder =
+              value.trim().replace(/^\/+|\/+$/g, "") || "_vault-publisher/review";
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Import review comments")
+      .setDesc(
+        "Reads every export in the review folder and writes one note, with a " +
+          "task per comment, linked to the note it is about.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Import").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.host.importReview();
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
+  }
+
+  // -- 5. publish ----------------------------------------------------------
 
   private renderPublish(root: HTMLElement): void {
     new Setting(root).setName("Publish").setHeading();
@@ -755,7 +907,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       );
   }
 
-  // -- 5. what happens without anyone pressing a button ---------------------
+  // -- 6. what happens without anyone pressing a button ---------------------
 
   /**
    * Whether a plugin load runs something by itself.

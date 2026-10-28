@@ -30,6 +30,15 @@ import {
 } from "./platform/secrets";
 import { AutoRunMode, VaultPublisherSettingsTab } from "./ui/settingsTab";
 import {
+  ReviewImportError,
+  parseExport,
+  reviewNote,
+  reviewNoteName,
+  splitReviewInputs,
+} from "./overlay/importReview";
+import { OverlayComment } from "./overlay/types";
+import { ReviewServer, ReviewServerAddress, ReviewStore } from "./overlay/server";
+import {
   findLegacyFolder,
   hasStoredSettings,
   migrateLegacySettings,
@@ -55,12 +64,36 @@ import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
 const INPUT_FOLDER = "spike-notes";
 const OUTPUT_FOLDER = "_vault-publisher";
 const PREVIEW_FOLDER = "_site-preview";
+/**
+ * The live comments file, inside the review folder.
+ *
+ * Distinct from the `*.json` someone may still drop there by hand: this one
+ * is written continuously by the review server and must never be renamed out
+ * from under it, which is why `importReview` treats it separately.
+ */
+const LIVE_COMMENTS = "comments.json";
 
 interface Settings {
   autoRun: AutoRunMode;
   /** Note the diagnose run samples, as a vault path. */
   diagnosePath?: string;
   site: SiteConfig;
+  /**
+   * The review overlay.
+   *
+   * Deliberately not inside `site`. `publish()` hands `settings.site`
+   * straight to `buildSite`, so a flag living there could reach a published
+   * page the moment anyone set it; a flag living here cannot, because the
+   * only code that turns it into a `SiteConfig` field is `buildToPreview`.
+   * The structure is the guarantee, not the care of whoever edits this next.
+   */
+  commentOverlay: {
+    enabled: boolean;
+    /** Prefills the comment author in the overlay. */
+    reviewer: string;
+    /** Vault folder exports are dropped into, for the import command. */
+    reviewFolder: string;
+  };
   github: {
     apiBase: string;
     owner: string;
@@ -85,6 +118,11 @@ const DEFAULT_SETTINGS: Settings = {
     updatedProperty: "updated",
     pinnedProperty: "pinned",
     theme: DEFAULT_THEME,
+  },
+  commentOverlay: {
+    enabled: false,
+    reviewer: "",
+    reviewFolder: `${OUTPUT_FOLDER}/review`,
   },
   github: {
     apiBase: GITHUB_COM_API,
@@ -114,6 +152,15 @@ export default class VaultPublisherPlugin extends Plugin {
    */
   progress: ((step: string, done?: number, total?: number) => void) | null = null;
 
+  /**
+   * The local server that serves the preview and holds its comments.
+   *
+   * Started on demand rather than on load: it is a listening socket, and one
+   * that can write inside the vault, so it exists only while someone is
+   * actually reviewing.
+   */
+  private reviewServer: ReviewServer | null = null;
+
   async onload(): Promise<void> {
     await this.loadSettings();
 
@@ -132,6 +179,16 @@ export default class VaultPublisherPlugin extends Plugin {
       name: "Publish site to GitHub",
       callback: () => void this.publish(),
     });
+    this.addCommand({
+      id: "import-review-comments",
+      name: "Import review comments",
+      callback: () => void this.importReview(),
+    });
+    this.addCommand({
+      id: "open-review-preview",
+      name: "Open preview in browser",
+      callback: () => void this.openPreview(),
+    });
 
     // Rendering before the workspace is ready gives Dataview no index to
     // query and Bases no file list, which looks like a rendering failure but
@@ -141,6 +198,19 @@ export default class VaultPublisherPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       void this.runAuto();
     });
+  }
+
+  /**
+   * Closes the listening socket when the plugin goes away.
+   *
+   * Without this a disable-and-enable -- which is what hot reload does on
+   * every build -- would leave the old server holding its port, and the next
+   * one would come up on a different one while the browser tab kept talking
+   * to a server whose store belongs to a plugin instance that no longer
+   * exists.
+   */
+  onunload(): void {
+    void this.stopReviewServer();
   }
 
   /**
@@ -218,6 +288,10 @@ export default class VaultPublisherPlugin extends Plugin {
       ...DEFAULT_SETTINGS,
       ...stored,
       site: { ...DEFAULT_SETTINGS.site, ...stored?.site },
+      commentOverlay: {
+        ...DEFAULT_SETTINGS.commentOverlay,
+        ...stored?.commentOverlay,
+      },
       github: { ...DEFAULT_SETTINGS.github, ...stored?.github },
     };
     // The token lives encrypted on disk and in the clear only in memory, so
@@ -318,7 +392,7 @@ export default class VaultPublisherPlugin extends Plugin {
 
   // -- build ---------------------------------------------------------------
 
-  private async build(): Promise<BuildResult> {
+  private async build(overrides?: Partial<SiteConfig>): Promise<BuildResult> {
     // Chromium defers work in a window nobody is looking at, and publishing
     // is exactly when someone goes to do something else. Measured
     // backgrounded: a 50ms wait took 3,485ms. It is not only our waits that
@@ -330,7 +404,10 @@ export default class VaultPublisherPlugin extends Plugin {
     // is restored afterwards even if it throws.
     const restoreThrottling = suspendBackgroundThrottling();
     try {
-      const result = await buildSite(this.app, this.settings.site, (done, total, path) => {
+      const config: SiteConfig = overrides
+        ? { ...this.settings.site, ...overrides }
+        : this.settings.site;
+      const result = await buildSite(this.app, config, (done, total, path) => {
         this.progress?.(`Rendering ${path}`, done, total);
         if (done % 25 === 0) new Notice(`Rendering ${done + 1}/${total}`, 1000);
       });
@@ -370,7 +447,12 @@ export default class VaultPublisherPlugin extends Plugin {
     }
 
     new Notice("Building site...");
-    const result = await this.build();
+    const overlay = this.settings.commentOverlay;
+    const result = await this.build({
+      reviewOverlay: overlay.enabled
+        ? { reviewer: overlay.reviewer }
+        : undefined,
+    });
 
     // A preview is how someone checks a filter, so an empty one is a result
     // rather than a fault. It still has to say so: an empty preview folder
@@ -508,6 +590,182 @@ export default class VaultPublisherPlugin extends Plugin {
       result.finalHtml,
     );
     new Notice(`Diagnose written to ${OUTPUT_FOLDER}/diagnose.md`);
+  }
+
+  // -- review --------------------------------------------------------------
+
+  /** Everything the review server may touch, and nothing else. */
+  private reviewStore(): ReviewStore {
+    const adapter = this.app.vault.adapter;
+    const folder = () => normalizePath(this.settings.commentOverlay.reviewFolder);
+    const commentsPath = () => normalizePath(`${folder()}/${LIVE_COMMENTS}`);
+
+    return {
+      readComments: async () => {
+        const path = commentsPath();
+        return (await adapter.exists(path)) ? adapter.read(path) : null;
+      },
+      writeComments: async (body: string) => {
+        const dir = folder();
+        if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
+        await adapter.write(commentsPath(), body);
+      },
+      readPreview: async (path: string) => {
+        // Every file read as bytes, text included: one path through here
+        // means no chance of classifying a file wrongly and serving a page
+        // as binary or an image as UTF-8.
+        const target = normalizePath(`${PREVIEW_FOLDER}/${path}`);
+        if (!(await adapter.exists(target))) return null;
+        return adapter.readBinary(target);
+      },
+    };
+  }
+
+  /** Starts the review server if it is not already up. */
+  async startReviewServer(): Promise<ReviewServerAddress> {
+    if (!this.reviewServer) {
+      this.reviewServer = new ReviewServer({ store: this.reviewStore() });
+    }
+    return this.reviewServer.start();
+  }
+
+  async stopReviewServer(): Promise<void> {
+    const server = this.reviewServer;
+    this.reviewServer = null;
+    if (server) await server.stop();
+  }
+
+  /** Where the server is listening, or null while it is not running. */
+  get reviewServerAddress(): ReviewServerAddress | null {
+    return this.reviewServer?.listening ?? null;
+  }
+
+  /**
+   * Opens the built preview in the real browser, through the local server.
+   *
+   * Through the server rather than as a file, because that is what lets the
+   * overlay read and write the vault: same origin, so no CORS, and a page
+   * that can ask the plugin for the comments instead of only remembering its
+   * own.
+   */
+  async openPreview(): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    if (!(await adapter.exists(normalizePath(`${PREVIEW_FOLDER}/index.html`)))) {
+      new Notice(
+        "Vault Publisher: build a preview first (Build site to preview folder).",
+        8000,
+      );
+      return;
+    }
+
+    try {
+      const address = await this.startReviewServer();
+      openExternal(address.url);
+      new Notice(`Vault Publisher: preview at ${address.url.split("?")[0]}`, 6000);
+    } catch (error) {
+      new Notice(
+        `Vault Publisher: could not start the review server: ${error instanceof Error ? error.message : String(error)}`,
+        10000,
+      );
+    }
+  }
+
+  /**
+   * Turns exported review comments into a note in the vault.
+   *
+   * Reads every `*.json` in the review folder rather than asking for one
+   * through a file picker. The folder is a path the settings already name, it
+   * needs no Electron dialog, and dropping a download into a folder is a step
+   * someone can repeat without being walked through it. Imported files are
+   * renamed rather than deleted: an import that produced the wrong note
+   * should be recoverable from the file that produced it.
+   */
+  async importReview(): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    const folder = normalizePath(this.settings.commentOverlay.reviewFolder);
+
+    if (!(await adapter.exists(folder))) {
+      await adapter.mkdir(folder);
+      new Notice(
+        `Vault Publisher: put an exported comment-overlay.json in ${folder}, then run this again.`,
+        10000,
+      );
+      return;
+    }
+
+    const listing = await adapter.list(folder);
+    // The live file the review server writes, and the one-off exports anyone
+    // may still drop here by hand. Both are read; only the drops are renamed,
+    // because renaming the live one would take the running review with it.
+    const { live, drops } = splitReviewInputs(listing.files, LIVE_COMMENTS);
+    const inputs = [...live, ...drops];
+
+    if (!inputs.length) {
+      new Notice(
+        `Vault Publisher: no exports found in ${folder}. Export from the overlay first.`,
+        8000,
+      );
+      return;
+    }
+
+    const comments: OverlayComment[] = [];
+    let site = "";
+    try {
+      for (const path of inputs) {
+        const data = parseExport(await adapter.read(path));
+        comments.push(...data.comments);
+        if (!site && data.site) site = data.site;
+      }
+    } catch (error) {
+      // A rejected file stops the whole import, deliberately: a half-written
+      // review note is worse than none, because it looks finished.
+      new Notice(
+        `Vault Publisher: ${error instanceof ReviewImportError ? error.message : String(error)}`,
+        12000,
+      );
+      return;
+    }
+
+    if (!comments.length) {
+      new Notice("Vault Publisher: those exports hold no comments.", 8000);
+      return;
+    }
+
+    // The live file and a hand-dropped export of it hold the same comments,
+    // so importing both would put every one of them in the note twice.
+    const seen = new Set<string>();
+    const unique = comments.filter((comment) => {
+      if (seen.has(comment.id)) return false;
+      seen.add(comment.id);
+      return true;
+    });
+
+    // Two reviews in a day is the normal case -- export, import, fix some of
+    // it, go round again -- so the second one must not overwrite the first.
+    const existing = new Set(listing.files);
+    const now = new Date();
+    const name = reviewNoteName(now, (candidate) =>
+      existing.has(normalizePath(`${folder}/${candidate}`)),
+    );
+    const target = normalizePath(`${folder}/${name}`);
+    await adapter.write(target, reviewNote({ comments: unique, site, now }));
+
+    for (const path of drops) {
+      // Renaming rather than deleting, and tolerating a failure: the note is
+      // written by this point, and a file that could not be renamed would
+      // only be imported twice, which is a duplicate rather than a loss.
+      try {
+        await adapter.rename(path, path.replace(/\.json$/, ".imported.json"));
+      } catch {
+        // Leave it; the note above is what mattered.
+      }
+    }
+
+    const notes = new Set(unique.map((comment) => comment.sourcePath)).size;
+    new Notice(
+      `Vault Publisher: imported ${unique.length} comment(s) on ${notes} note(s) into ${target}`,
+      8000,
+    );
   }
 
   // -- publish -------------------------------------------------------------
@@ -1037,4 +1295,28 @@ function buildReport(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Opens a URL in the user's own browser rather than an Electron window.
+ *
+ * `window.open` here would draw the preview inside Obsidian, which defeats
+ * the point: the preview exists to be looked at the way a reader will look
+ * at it. Electron's shell is reached the same guarded way `secrets.ts`
+ * reaches `safeStorage`, since it is the same undocumented bridge.
+ */
+function openExternal(url: string): void {
+  try {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const req: ((id: string) => any) | undefined =
+      (globalThis as any).require ?? (window as any).require;
+    const shell = req?.("electron")?.shell;
+    if (shell?.openExternal) {
+      void shell.openExternal(url);
+      return;
+    }
+  } catch {
+    // Fall through: a window is better than nothing.
+  }
+  window.open(url, "_blank");
 }

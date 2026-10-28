@@ -72,6 +72,7 @@ import {
   tagsIndexContent,
 } from "./landing";
 import { noteSource } from "./source";
+import { stampBlockIds } from "../overlay/anchor";
 import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
 import { PublishFile } from "../github/client";
@@ -159,6 +160,24 @@ export interface SiteConfig {
    * minimum. Turn this on to go back to refusing.
    */
   failOnTruncatedBase?: boolean;
+  /**
+   * Add the review overlay to every note page, and stamp block anchors.
+   *
+   * A preview-only setting, and the only one here whose default being wrong
+   * would leak rather than merely annoy: the overlay carries each page's
+   * vault path so an imported comment can find the note it is about, and a
+   * published page carrying that would hand a reader the vault's folder
+   * structure.
+   *
+   * So `publish()` does not thread this through at all rather than passing it
+   * as false, `buildToPreview()` is the only caller that sets it, and
+   * `page.test.ts` holds the test that a page built without it carries no
+   * trace of either the overlay or the path.
+   */
+  reviewOverlay?: {
+    /** Prefills the comment author in the overlay. */
+    reviewer?: string;
+  };
   /**
    * Largest single attachment to publish, in bytes. Defaults to 25 MiB.
    *
@@ -459,6 +478,8 @@ export async function buildSite(
     tags: string[];
     /** The note's Markdown, as markdown mode is allowed to show it. */
     source: string;
+    /** Vault path, for the review overlay. Never reaches a published page. */
+    sourcePath: string;
   }> = [];
   const driftSamples: DriftSample[] = [];
 
@@ -534,6 +555,10 @@ export async function buildSite(
             // that is about to change.
             stabilizeIds(container);
             stripDebugAttributes(container);
+            // Last of all, and only in a preview: the anchors are derived
+            // from each block's final text, so nothing may rewrite the text
+            // after this runs.
+            if (config.reviewOverlay) stampBlockIds(container);
           },
         });
 
@@ -554,6 +579,7 @@ export async function buildSite(
           nav: navNoteFor(app, file, url, title, config),
           tags: tagsFor(app, file),
           source,
+          sourcePath: file.path,
         });
 
         pages.push({
@@ -707,6 +733,15 @@ export async function buildSite(
             : page.html,
         headings: page.headings,
         source: page.source,
+        // Only in a preview, and only here: the generated pages below have no
+        // note behind them, so a comment on one could not be filed against
+        // anything.
+        overlay: config.reviewOverlay
+          ? {
+              sourcePath: page.sourcePath,
+              reviewer: config.reviewOverlay.reviewer,
+            }
+          : undefined,
         shell: {
           nav: navTree,
           pinned,

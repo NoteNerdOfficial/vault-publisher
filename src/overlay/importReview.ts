@@ -1,0 +1,263 @@
+/**
+ * Turning an exported review into a note in the vault.
+ *
+ * This is the half of the overlay that only an Obsidian plugin can do. A
+ * comment widget can collect feedback on a page; a publisher running inside
+ * the vault that produced the page can put that feedback back where the
+ * writing happens. The loop closes here.
+ *
+ * Two decisions worth stating.
+ *
+ * **It writes one review note, not into the annotated notes.** Appending a
+ * comment to the note it is about would mean mutating a reviewer's prose from
+ * an imported file, and a malformed import would then be destructive rather
+ * than merely wrong. The review note links to each note instead. Worth
+ * offering the other way round later, as something someone asks for
+ * explicitly.
+ *
+ * **Comments become tasks.** A review is something you work through, not
+ * something you read, and a checkbox is how that is spelled in a vault. A
+ * resolved comment arrives already ticked, so the list is a true picture of
+ * what is left.
+ */
+
+import {
+  BLOCK_TEXT_LIMIT,
+  OVERLAY_SCHEMA_VERSION,
+  OverlayComment,
+  OverlayExport,
+} from "./types";
+
+/** Thrown with a message meant for a Notice, not a stack trace. */
+export class ReviewImportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewImportError";
+  }
+}
+
+/**
+ * Reads an export file.
+ *
+ * Every field is checked and the optional ones are defaulted, because the
+ * input is a file a person may have hand-edited, truncated or concatenated.
+ * A bad one has to be rejected with something a reader can act on, rather
+ * than half-importing and leaving the vault in a state nobody chose.
+ */
+export function parseExport(raw: string): OverlayExport {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return fail("it is not valid JSON");
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return fail("the top level is not an object");
+  }
+
+  const data = parsed as Record<string, unknown>;
+
+  // A missing version is treated as the first one, which is what a file
+  // written before the field existed would be.
+  const version = data.version ?? OVERLAY_SCHEMA_VERSION;
+  if (typeof version !== "number" || version > OVERLAY_SCHEMA_VERSION) {
+    return fail(
+      `it was written by a newer version (${String(version)}; this one reads ${OVERLAY_SCHEMA_VERSION})`,
+    );
+  }
+
+  if (!Array.isArray(data.comments)) return fail("it has no comments array");
+
+  return {
+    version: OVERLAY_SCHEMA_VERSION,
+    site: typeof data.site === "string" ? data.site : "",
+    exportedAt: typeof data.exportedAt === "string" ? data.exportedAt : "",
+    comments: data.comments.map(readComment),
+  };
+}
+
+function fail(why: string): never {
+  throw new ReviewImportError(`That file is not a review export: ${why}.`);
+}
+
+function readComment(value: unknown, index: number): OverlayComment {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ReviewImportError(`Comment ${index + 1} is not an object.`);
+  }
+  const row = value as Record<string, unknown>;
+
+  if (typeof row.sourcePath !== "string" || !row.sourcePath) {
+    throw new ReviewImportError(`Comment ${index + 1} names no note.`);
+  }
+  if (typeof row.text !== "string" || !row.text.trim()) {
+    throw new ReviewImportError(`Comment ${index + 1} has no text.`);
+  }
+
+  return {
+    id: typeof row.id === "string" && row.id ? row.id : `imported-${index}`,
+    page: typeof row.page === "string" ? row.page : "",
+    sourcePath: row.sourcePath,
+    block: typeof row.block === "string" ? row.block : null,
+    blockText:
+      typeof row.blockText === "string"
+        ? row.blockText.slice(0, BLOCK_TEXT_LIMIT)
+        : "",
+    author: typeof row.author === "string" && row.author ? row.author : "Anonymous",
+    text: row.text,
+    createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
+    resolved: row.resolved === true,
+  };
+}
+
+/** Vault path to the name a wikilink uses: the basename, without extension. */
+export function noteName(sourcePath: string): string {
+  const base = sourcePath.slice(sourcePath.lastIndexOf("/") + 1);
+  return base.replace(/\.md$/i, "");
+}
+
+/** Comments grouped by the note they are about, each group in time order. */
+export function groupByNote(
+  comments: OverlayComment[],
+): Array<{ sourcePath: string; comments: OverlayComment[] }> {
+  const groups = new Map<string, OverlayComment[]>();
+  for (const comment of comments) {
+    const row = groups.get(comment.sourcePath) ?? [];
+    row.push(comment);
+    groups.set(comment.sourcePath, row);
+  }
+
+  return [...groups.entries()]
+    .map(([sourcePath, rows]) => ({
+      sourcePath,
+      comments: [...rows].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    }))
+    .sort((a, b) => a.sourcePath.localeCompare(b.sourcePath));
+}
+
+/**
+ * Escapes the characters that would turn a comment into Markdown.
+ *
+ * A reviewer writing "- [ ] do this" or "# heading" means those literally,
+ * and a comment that silently became a nested task or a section break would
+ * misreport what they said. Only the leading characters matter, since that is
+ * where Markdown's block syntax is read.
+ */
+export function flattenForList(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/^(\s*)([-*+>#]|\d+\.)/, "$1\\$2"))
+    .join("\n");
+}
+
+export interface ReviewNoteInput {
+  comments: OverlayComment[];
+  /** Site name from the export, for the one line of provenance. */
+  site: string;
+  /** Now, injectable so a test is reproducible. */
+  now: Date;
+}
+
+/**
+ * The review note.
+ *
+ * One section per annotated note, one task per comment, the block's own text
+ * quoted beneath it. The quote is what makes an orphan useful: when a comment
+ * has no anchor any more it is because the text it was about was rewritten,
+ * and the old text is the only way to tell what the objection referred to.
+ */
+export function reviewNote(input: ReviewNoteInput): string {
+  const { comments, site, now } = input;
+  const day = isoDay(now);
+  const groups = groupByNote(comments);
+  const open = comments.filter((comment) => !comment.resolved).length;
+
+  const lines: string[] = [];
+  lines.push("---");
+  lines.push(`created: ${day}`);
+  lines.push("tags:");
+  lines.push("  - review");
+  lines.push("---");
+  lines.push("");
+  lines.push(`# Review ${day}`);
+  lines.push("");
+  lines.push(
+    `${count(comments.length, "comment")} on ${count(groups.length, "note")}` +
+      `, ${open} still open` +
+      (site ? `, from ${site}` : "") +
+      ".",
+  );
+  lines.push("");
+
+  for (const group of groups) {
+    lines.push(`## [[${noteName(group.sourcePath)}]]`);
+    lines.push("");
+    for (const comment of group.comments) {
+      const box = comment.resolved ? "x" : " ";
+      const body = flattenForList(comment.text.trim())
+        .split("\n")
+        .map((line, index) => (index === 0 ? line : `      ${line}`))
+        .join("\n");
+      lines.push(`- [${box}] ${body}`);
+      if (comment.blockText) {
+        lines.push(`      > ${comment.blockText}`);
+      }
+      lines.push(`      ${attribution(comment)}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function attribution(comment: OverlayComment): string {
+  const parts = [comment.author];
+  if (comment.createdAt) parts.push(isoDay(new Date(comment.createdAt)));
+  // Said plainly rather than left for someone to work out from a missing pin.
+  if (!comment.block) parts.push("about the page");
+  return `*${parts.join(", ")}*`;
+}
+
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+function isoDay(date: Date): string {
+  const valid = Number.isNaN(date.getTime()) ? new Date(0) : date;
+  return valid.toISOString().slice(0, 10);
+}
+
+/** Filename for a review note, unique within the day it was imported. */
+export function reviewNoteName(now: Date, taken: (name: string) => boolean): string {
+  const base = `Review ${isoDay(now)}`;
+  if (!taken(`${base}.md`)) return `${base}.md`;
+  for (let n = 2; n < 100; n++) {
+    if (!taken(`${base} ${n}.md`)) return `${base} ${n}.md`;
+  }
+  return `${base} ${Date.now()}.md`;
+}
+
+/**
+ * Sorts the review folder's files into the live store and one-off drops.
+ *
+ * The distinction matters more than it looks. The live file is the one the
+ * review server is writing to as someone works; renaming it -- which is what
+ * an import does to everything it consumes -- would pull the store out from
+ * under a review in progress, and the next comment would land in a new, empty
+ * file with everything before it gone. So the live file is read and left
+ * exactly where it is, and only the hand-dropped exports are renamed.
+ */
+export function splitReviewInputs(
+  files: string[],
+  liveName: string,
+): { live: string[]; drops: string[] } {
+  const candidates = files.filter(
+    (path) => path.endsWith(".json") && !path.endsWith(".imported.json"),
+  );
+  const isLive = (path: string) => path.split("/").pop() === liveName;
+  return {
+    live: candidates.filter(isLive),
+    drops: candidates.filter((path) => !isLive(path)),
+  };
+}

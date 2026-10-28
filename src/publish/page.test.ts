@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPage,
   neutralizeMermaidColours,
   prepareCodeBlocks,
   prepareCollapsibleCallouts,
@@ -256,5 +257,70 @@ describe("neutralizeMermaidColours", () => {
 
     expect(neutralizeMermaidColours(root)).toBe(0);
     expect(root.querySelector("path")?.getAttribute("fill")).toBe("#123456");
+  });
+});
+
+describe("buildPage and the review overlay", () => {
+  const meta = {
+    title: "Q3 planning",
+    url: "notes/q3-planning.html",
+    siteName: "Handbook",
+  };
+
+  /**
+   * The test the overlay exists behind.
+   *
+   * `osp-source-path` carries a vault path, which is exactly what must not
+   * reach a reader: it describes the folder structure of a vault whose whole
+   * point is that only some of it was published. A publish does not pass
+   * `overlay` at all, and this asserts that a page built that way carries no
+   * trace of it -- not the meta, not the script, not the stylesheet.
+   *
+   * If this ever fails, the overlay is leaking into published output. Do not
+   * weaken it to get a build through.
+   */
+  it("carries no trace of the overlay when it was not asked for", () => {
+    const html = buildPage({
+      meta,
+      content: `<p>Body.</p>`,
+      headings: [],
+    });
+
+    expect(html).not.toContain("osp-review");
+    expect(html).not.toContain("Q3 planning.md");
+    expect(html).not.toContain("osp-overlay");
+  });
+
+  it("carries the source path only when the overlay was asked for", () => {
+    const html = buildPage({
+      meta,
+      content: `<p>Body.</p>`,
+      headings: [],
+      overlay: { sourcePath: "notes/Q3 planning.md" },
+    });
+
+    expect(html).toContain(`<meta name="osp-review"`);
+    expect(html).toContain("notes/Q3 planning.md");
+    // The payload is one JSON blob, so the page it was built for and the site
+    // it belongs to travel with the vault path rather than as more tags.
+    expect(html).toContain("notes/q3-planning.html");
+    expect(html).toContain("Handbook");
+  });
+
+  // A vault path can hold quotes and angle brackets as legitimately as any
+  // other filename, and this one goes into an attribute.
+  it("escapes a source path that would break out of the attribute", () => {
+    const html = buildPage({
+      meta,
+      content: `<p>Body.</p>`,
+      headings: [],
+      overlay: { sourcePath: `notes/He said "hi" <x>.md` },
+    });
+
+    // JSON escapes the quotes to \" and escapeHtml then turns each " into
+    // &quot;, so neither layer can be the one that lets it out.
+    expect(html).not.toContain(`content="{"`);
+    expect(html).not.toContain("<x>");
+    expect(html).toContain("&quot;");
   });
 });

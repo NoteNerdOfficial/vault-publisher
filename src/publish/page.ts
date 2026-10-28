@@ -15,6 +15,7 @@
 import { slugifyFragment } from "./links";
 import { encodeUrlPath } from "./urls";
 import { CLIENT_SCRIPT, THEME_BOOT } from "./clientScript";
+import { overlayBundle } from "../overlay/overlayScript";
 import {
   ShellInput,
   breadcrumb,
@@ -565,11 +566,30 @@ export function buildPage(options: {
     ShellInput,
     "url" | "title" | "root" | "headings" | "siteName" | "hasSource"
   >;
+  /**
+   * Present only in a preview build, and only on a page a note produced.
+   *
+   * Its presence is what turns the review overlay on for this page, and
+   * `sourcePath` is what lets an imported comment find the note it is about.
+   *
+   * It must never be set on a publish. A published page carrying the vault
+   * path it was built from would hand a reader the vault's folder structure,
+   * which is the class of leak `privacy.ts` exists to prevent -- so the
+   * publish path does not pass this through rather than passing it as false,
+   * and `page.test.ts` asserts a page built without it carries no trace.
+   */
+  overlay?: {
+    /** Vault path of the note this page was built from. */
+    sourcePath: string;
+    /** Prefills the comment author, from settings. */
+    reviewer?: string;
+  };
 }): string {
   const { meta, content, headings } = options;
   const root = pathToRoot(meta.url);
   const description = meta.description ?? "";
   const source = options.source?.trim() ?? "";
+  const overlay = options.overlay;
 
   const shell: ShellInput | null = options.shell
     ? {
@@ -632,12 +652,14 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}">`
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}">` : ""}
 <link rel="stylesheet" href="${root}assets/obsidian.css">
 <link rel="stylesheet" href="${root}assets/site.css">
+${overlay ? `<meta name="osp-review" content="${escapeHtml(JSON.stringify({ sourcePath: overlay.sourcePath, page: meta.url, site: meta.siteName, reviewer: overlay.reviewer ?? "" }))}">` : ""}
 <script>${THEME_BOOT}</script>
 </head>
 <body>
 <a class="osp-skip-link" href="#osp-main">Skip to content</a>
 ${body}
 <script>${CLIENT_SCRIPT}</script>
+${overlay ? `<script>${overlayBundle()}</script>` : ""}
 </body>
 </html>
 `;
