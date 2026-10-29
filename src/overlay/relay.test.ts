@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_RELAY_LABELS,
+  RelaySettings,
   applyExternals,
   externalFor,
-  issueFor,
+  issueDraft,
   issueKey,
   issueTitle,
+  jiraSite,
   pendingComments,
   relayable,
   resolveTarget,
   splitLabels,
+  toAdf,
+  toMarkdown,
+  toText,
 } from "./relay";
 import { OverlayComment, OverlayExternalIssue } from "./types";
 
@@ -50,6 +55,38 @@ const TARGET = {
   labels: ["review"],
 };
 
+const JIRA = {
+  provider: "jira" as const,
+  site: "https://acme.atlassian.net",
+  project: "ENG",
+  issueType: "Task",
+  email: "someone@example.com",
+  labels: ["review"],
+};
+
+const ASANA = {
+  provider: "asana" as const,
+  project: "1201234567890123",
+  workspace: "",
+};
+
+/** The settings as the panel holds them, with one tracker filled in. */
+function settings(over: Partial<RelaySettings> = {}): RelaySettings {
+  return {
+    provider: "none",
+    labels: DEFAULT_RELAY_LABELS,
+    github: { owner: "", repo: "" },
+    jira: { site: "", project: "", issueType: "", email: "" },
+    asana: { project: "", workspace: "" },
+    ...over,
+  };
+}
+
+/** The markdown body, which is the one every assertion here reads. */
+function body(draft: { blocks: Parameters<typeof toMarkdown>[0] }): string {
+  return toMarkdown(draft.blocks);
+}
+
 const FILED: OverlayExternalIssue = {
   provider: "github",
   key: "owner/repo#41",
@@ -59,20 +96,17 @@ const FILED: OverlayExternalIssue = {
 
 describe("the repository to file in", () => {
   it("is nothing at all while the tracker is off", () => {
-    expect(
-      resolveTarget(
-        { provider: "none", owner: "o", repo: "r", labels: "" },
-        { owner: "o", repo: "r" },
-      ),
-    ).toBe("No tracker is set up.");
+    expect(resolveTarget(settings(), { owner: "o", repo: "r" })).toBe(
+      "No tracker is set up.",
+    );
   });
 
   // The usual case: one repository, named once, under GitHub.
   it("falls back to the repository the site publishes to", () => {
-    const target = resolveTarget(
-      { provider: "github", owner: "", repo: "", labels: DEFAULT_RELAY_LABELS },
-      { owner: "pub", repo: "site" },
-    );
+    const target = resolveTarget(settings({ provider: "github" }), {
+      owner: "pub",
+      repo: "site",
+    });
 
     expect(target).toEqual({
       provider: "github",
@@ -84,7 +118,7 @@ describe("the repository to file in", () => {
 
   it("prefers a repository named for issues", () => {
     const target = resolveTarget(
-      { provider: "github", owner: "team", repo: "work", labels: "" },
+      settings({ provider: "github", github: { owner: "team", repo: "work" }, labels: "" }),
       { owner: "pub", repo: "site" },
     );
 
@@ -95,11 +129,83 @@ describe("the repository to file in", () => {
   // is a setting nobody finds.
   it("says what is missing when there is no repository anywhere", () => {
     expect(
+      resolveTarget(settings({ provider: "github" }), { owner: "", repo: "" }),
+    ).toContain("Name the repository");
+  });
+
+  it("takes a Jira site however it was pasted in", () => {
+    const target = resolveTarget(
+      settings({
+        provider: "jira",
+        jira: {
+          site: "acme.atlassian.net/jira/software/projects/ENG/",
+          project: "eng",
+          issueType: "",
+          email: "someone@example.com",
+        },
+      }),
+      { owner: "", repo: "" },
+    );
+
+    expect(target).toMatchObject({
+      provider: "jira",
+      site: "https://acme.atlassian.net",
+      // Upper-cased, because that is how a key is written everywhere else.
+      project: "ENG",
+      // Every Jira project has this one; a blank field is not a choice.
+      issueType: "Task",
+    });
+  });
+
+  it("normalises a site on its own, and refuses what is not one", () => {
+    expect(jiraSite(" https://acme.atlassian.net/ ")).toBe("https://acme.atlassian.net");
+    expect(jiraSite("acme.atlassian.net")).toBe("https://acme.atlassian.net");
+    expect(jiraSite("")).toBe("");
+    expect(jiraSite("   ")).toBe("");
+  });
+
+  // Each of these is a field somebody has to fill in, and a sentence is the
+  // only thing that tells them which.
+  it.each([
+    [
+      "a Jira with no site",
+      settings({
+        provider: "jira",
+        jira: { site: "", project: "ENG", issueType: "", email: "a@b.c" },
+      }),
+      "Jira site",
+    ],
+    [
+      "a Jira with no project",
+      settings({
+        provider: "jira",
+        jira: { site: "acme.atlassian.net", project: "", issueType: "", email: "a@b.c" },
+      }),
+      "project key",
+    ],
+    [
+      "a Jira with no account",
+      settings({
+        provider: "jira",
+        jira: { site: "acme.atlassian.net", project: "ENG", issueType: "", email: "" },
+      }),
+      "email address",
+    ],
+    ["an Asana with no project", settings({ provider: "asana" }), "Asana project"],
+  ])("says what is missing for %s", (_why, given, said) => {
+    const target = resolveTarget(given, { owner: "", repo: "" });
+
+    expect(typeof target).toBe("string");
+    expect(target).toContain(said);
+  });
+
+  it("takes an Asana project, and leaves the workspace optional", () => {
+    expect(
       resolveTarget(
-        { provider: "github", owner: "", repo: "", labels: "" },
+        settings({ provider: "asana", asana: { project: "1201", workspace: "" } }),
         { owner: "", repo: "" },
       ),
-    ).toContain("Name the repository");
+    ).toEqual({ provider: "asana", project: "1201", workspace: "" });
   });
 
   it("reads labels as a list, trimmed and without repeats", () => {
@@ -162,25 +268,25 @@ describe("the issue a comment becomes", () => {
   });
 
   it("repeats the whole comment in the body, so nothing is lost to the title", () => {
-    const draft = issueFor(
+    const draft = issueDraft(
       comment({ text: "Needs a citation.\n\nSee the style guide." }),
       TARGET,
       { site: "Handbook" },
     );
 
-    expect(draft.body).toContain("Needs a citation.\n\nSee the style guide.");
+    expect(body(draft)).toContain("Needs a citation.\n\nSee the style guide.");
   });
 
   // Without this an issue says "this paragraph is wrong" about a paragraph
   // the reader cannot see.
   it("quotes the block the comment was left on", () => {
-    expect(issueFor(comment(), TARGET, { site: "Handbook" }).body).toContain(
+    expect(body(issueDraft(comment(), TARGET, { site: "Handbook" }))).toContain(
       "> The second paragraph.",
     );
   });
 
   it("carries the replies, since they are the argument about the comment", () => {
-    const draft = issueFor(
+    const draft = issueDraft(
       comment({
         replies: [
           { id: "r1", author: "Sam", text: "Agreed.", createdAt: "" },
@@ -191,53 +297,53 @@ describe("the issue a comment becomes", () => {
       { site: "Handbook" },
     );
 
-    expect(draft.body).toContain("**Replies**");
-    expect(draft.body).toContain("- **Sam**: Agreed.");
-    expect(draft.body).toContain("- **Anonymous**: Which one?");
+    expect(body(draft)).toContain("**Replies**");
+    expect(body(draft)).toContain("- **Sam**: Agreed.");
+    expect(body(draft)).toContain("- **Anonymous**: Which one?");
   });
 
   it("says where the review happened and which note it was about", () => {
-    const draft = issueFor(comment(), TARGET, { site: "Handbook" });
+    const draft = issueDraft(comment(), TARGET, { site: "Handbook" });
 
-    expect(draft.body).toContain("From a review of Handbook");
-    expect(draft.body).toContain("- Note: `notes/Plan.md`");
-    expect(draft.body).toContain("- Page: `notes/plan.html`");
-    expect(draft.body).toContain("- Reviewer, 2026-10-28");
+    expect(body(draft)).toContain("From a review of Handbook");
+    expect(body(draft)).toContain("- **Note**: `notes/Plan.md`");
+    expect(body(draft)).toContain("- **Page**: `notes/plan.html`");
+    expect(body(draft)).toContain("- Reviewer, 2026-10-28");
   });
 
   it("says when a comment was about the page rather than a block", () => {
-    const draft = issueFor(comment({ block: null, blockText: "" }), TARGET, {
+    const draft = issueDraft(comment({ block: null, blockText: "" }), TARGET, {
       site: "Handbook",
     });
 
-    expect(draft.body).toContain("about the page as a whole");
-    expect(draft.body).not.toContain(">");
+    expect(body(draft)).toContain("about the page as a whole");
+    expect(body(draft)).not.toContain(">");
   });
 
   // A name alone does not say whether anyone read the page.
   it("says which tool filed a comment, when one did", () => {
-    const draft = issueFor(comment({ agent: "Claude Code" }), TARGET, { site: "" });
+    const draft = issueDraft(comment({ agent: "Claude Code" }), TARGET, { site: "" });
 
-    expect(draft.body).toContain("- Reviewer (via Claude Code), 2026-10-28");
-    expect(draft.body).toContain("From a review of the site");
+    expect(body(draft)).toContain("- Reviewer (via Claude Code), 2026-10-28");
+    expect(body(draft)).toContain("From a review of the site");
   });
 
   it("labels it with the settings' labels", () => {
-    expect(issueFor(comment(), TARGET, { site: "" }).labels).toEqual(["review"]);
+    expect(issueDraft(comment(), TARGET, { site: "" }).labels).toEqual(["review"]);
   });
 
   // Normal priority is what a comment left without a thought about it means,
   // so it must not arrive carrying a claim about one.
   it("adds a label for a priority, and only for a stated one", () => {
-    expect(issueFor(comment({ priority: "high" }), TARGET, { site: "" }).labels).toEqual([
+    expect(issueDraft(comment({ priority: "high" }), TARGET, { site: "" }).labels).toEqual([
       "review",
       "priority: high",
     ]);
-    expect(issueFor(comment({ priority: "low" }), TARGET, { site: "" }).labels).toEqual([
+    expect(issueDraft(comment({ priority: "low" }), TARGET, { site: "" }).labels).toEqual([
       "review",
       "priority: low",
     ]);
-    expect(issueFor(comment({ priority: "normal" }), TARGET, { site: "" }).labels).toEqual(
+    expect(issueDraft(comment({ priority: "normal" }), TARGET, { site: "" }).labels).toEqual(
       ["review"],
     );
   });
@@ -245,7 +351,7 @@ describe("the issue a comment becomes", () => {
   it("does not repeat a label the settings already name", () => {
     const target = { ...TARGET, labels: ["review", "priority: high"] };
 
-    expect(issueFor(comment({ priority: "high" }), target, { site: "" }).labels).toEqual([
+    expect(issueDraft(comment({ priority: "high" }), target, { site: "" }).labels).toEqual([
       "review",
       "priority: high",
     ]);
@@ -257,12 +363,25 @@ describe("the record written back onto the comment", () => {
     expect(issueKey("owner", "repo", 41)).toBe("owner/repo#41");
 
     const external = externalFor(
-      TARGET,
-      { number: 41, html_url: "https://github.com/owner/repo/issues/41" },
+      "github",
+      { key: "owner/repo#41", url: "https://github.com/owner/repo/issues/41" },
       new Date("2026-10-29T10:00:00.000Z"),
     );
 
     expect(external).toEqual(FILED);
+  });
+
+  // Each tracker names its own things, and the record says which one so the
+  // panel can show a key that is short enough to read.
+  it("keeps the tracker the issue went to", () => {
+    const now = new Date("2026-10-29T10:00:00.000Z");
+
+    expect(
+      externalFor("jira", { key: "ENG-14", url: "https://acme.atlassian.net/browse/ENG-14" }, now),
+    ).toMatchObject({ provider: "jira", key: "ENG-14" });
+    expect(
+      externalFor("asana", { key: "Asana task 1201", url: "https://app.asana.com/0/0/1201" }, now),
+    ).toMatchObject({ provider: "asana", key: "Asana task 1201" });
   });
 
   it("goes onto the right comment and leaves the rest of the file alone", () => {
@@ -297,5 +416,91 @@ describe("the record written back onto the comment", () => {
     ["a document with no comments", `{"version":4}`],
   ])("refuses %s", (_why, raw) => {
     expect(applyExternals(raw, new Map([["a", FILED]]))).toBeNull();
+  });
+});
+
+/**
+ * One body, three trackers.
+ *
+ * The blocks exist because GitHub takes Markdown, Jira takes a JSON document
+ * and Asana takes plain text, and one string sent to all three arrives in two
+ * of them with its punctuation showing. These are the two renderers that are
+ * not Markdown; the Markdown one is read by every test above.
+ */
+describe("the body each tracker is sent", () => {
+  const withReply = comment({
+    text: "Needs a citation.",
+    replies: [{ id: "r1", author: "Sam", text: "Agreed.", createdAt: "" }],
+  });
+
+  it("gives Jira a document rather than a string", () => {
+    const doc = toAdf(issueDraft(withReply, JIRA, { site: "Handbook" }).blocks) as {
+      type: string;
+      version: number;
+      content: Array<Record<string, unknown>>;
+    };
+
+    expect(doc.type).toBe("doc");
+    expect(doc.version).toBe(1);
+    expect(doc.content.map((node) => node.type)).toEqual([
+      "paragraph",
+      "blockquote",
+      "heading",
+      "bulletList",
+      "rule",
+      "paragraph",
+      "bulletList",
+    ]);
+
+    // The one thing Markdown would have smuggled in: a lead is a mark on a
+    // text node, not a pair of asterisks somebody has to read past.
+    const list = JSON.stringify(doc.content[3]);
+    expect(list).toContain('"strong"');
+    expect(list).toContain("Sam");
+    expect(list).not.toContain("**");
+  });
+
+  it("marks a path as code for Jira, rather than wrapping it in backticks", () => {
+    const doc = JSON.stringify(toAdf(issueDraft(comment(), JIRA, { site: "" }).blocks));
+
+    expect(doc).toContain('"code"');
+    expect(doc).toContain("notes/Plan.md");
+    expect(doc).not.toContain("`");
+  });
+
+  // An empty text node is not valid ADF, and Jira refuses the whole document
+  // over one.
+  it("never gives Jira an empty text node", () => {
+    const doc = JSON.stringify(toAdf([{ kind: "text", text: "" }]));
+
+    expect(doc).toContain('"paragraph"');
+    expect(doc).not.toContain('"text":""');
+  });
+
+  it("gives Asana plain text, with none of the punctuation Markdown needs", () => {
+    const notes = toText(issueDraft(withReply, ASANA, { site: "Handbook" }).blocks);
+
+    expect(notes).toContain("Needs a citation.");
+    expect(notes).toContain('"The second paragraph."');
+    expect(notes).toContain("Replies:");
+    expect(notes).toContain("• Sam: Agreed.");
+    expect(notes).not.toContain("**");
+    expect(notes).not.toContain("---");
+    expect(notes).not.toContain("`");
+  });
+
+  // Asana has no labels, so a priority has nowhere else to be true.
+  it("writes the priority into an Asana task, and labels nothing", () => {
+    const draft = issueDraft(comment({ priority: "high" }), ASANA, { site: "" });
+
+    expect(draft.labels).toEqual([]);
+    expect(toText(draft.blocks)).toContain("• Priority: High");
+  });
+
+  it("leaves it to the labels on a tracker that has them", () => {
+    const draft = issueDraft(comment({ priority: "high" }), JIRA, { site: "" });
+
+    expect(draft.labels).toEqual(["review", "priority: high"]);
+    expect(toMarkdown(draft.blocks)).not.toContain("Priority");
   });
 });

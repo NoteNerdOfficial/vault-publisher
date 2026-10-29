@@ -44,15 +44,25 @@ import {
   ReviewStore,
 } from "./overlay/server";
 import {
+  DEFAULT_JIRA_ISSUE_TYPE,
   DEFAULT_RELAY_LABELS,
+  IssueDraft,
   RelayProvider,
   RelayTarget,
+  TRACKER_NAME,
   applyExternals,
   externalFor,
-  issueFor,
+  issueDraft,
+  issueKey,
   pendingComments,
   resolveTarget,
+  toAdf,
+  toMarkdown,
+  toText,
 } from "./overlay/relay";
+import { AsanaClient } from "./tracker/asana";
+import { JiraClient } from "./tracker/jira";
+import { FiledIssue, TrackerError } from "./tracker/request";
 import {
   findLegacyFolder,
   hasStoredSettings,
@@ -119,12 +129,38 @@ interface Settings {
    */
   relay: {
     provider: RelayProvider;
-    /** Blank means the repository the site publishes to. */
-    owner: string;
-    /** Blank means the repository the site publishes to. */
-    repo: string;
     /** Comma-separated labels every filed issue carries. */
     labels: string;
+    github: {
+      /** Blank means the repository the site publishes to. */
+      owner: string;
+      /** Blank means the repository the site publishes to. */
+      repo: string;
+    };
+    jira: {
+      /** Site root, e.g. https://acme.atlassian.net */
+      site: string;
+      /** Project key, e.g. ENG */
+      project: string;
+      /** Issue type name. Blank means Task. */
+      issueType: string;
+      /** The account the API token belongs to. */
+      email: string;
+    };
+    asana: {
+      /** Project gid tasks are created in. */
+      project: string;
+      /** Workspace gid. Optional. */
+      workspace: string;
+    };
+    /**
+     * The Jira API token or the Asana token, encrypted on disk.
+     *
+     * GitHub is not in here: it files with the token the publish already
+     * uses, since it is the same kind of credential for the same account and
+     * usually the same repository. The other two have nothing to borrow.
+     */
+    token: string;
   };
   github: {
     apiBase: string;
@@ -158,9 +194,11 @@ const DEFAULT_SETTINGS: Settings = {
   },
   relay: {
     provider: "none",
-    owner: "",
-    repo: "",
     labels: DEFAULT_RELAY_LABELS,
+    github: { owner: "", repo: "" },
+    jira: { site: "", project: "", issueType: DEFAULT_JIRA_ISSUE_TYPE, email: "" },
+    asana: { project: "", workspace: "" },
+    token: "",
   },
   github: {
     apiBase: GITHUB_COM_API,
@@ -335,7 +373,16 @@ export default class VaultPublisherPlugin extends Plugin {
         ...DEFAULT_SETTINGS.commentOverlay,
         ...stored?.commentOverlay,
       },
-      relay: { ...DEFAULT_SETTINGS.relay, ...stored?.relay },
+      relay: {
+        ...DEFAULT_SETTINGS.relay,
+        ...stored?.relay,
+        // One level deeper than the rest, because each tracker keeps its own
+        // fields: a spread of the outer object alone would hand back a Jira
+        // block with no project in it the first time somebody picks Jira.
+        github: { ...DEFAULT_SETTINGS.relay.github, ...stored?.relay?.github },
+        jira: { ...DEFAULT_SETTINGS.relay.jira, ...stored?.relay?.jira },
+        asana: { ...DEFAULT_SETTINGS.relay.asana, ...stored?.relay?.asana },
+      },
       github: { ...DEFAULT_SETTINGS.github, ...stored?.github },
     };
     // The token lives encrypted on disk and in the clear only in memory, so
@@ -344,6 +391,11 @@ export default class VaultPublisherPlugin extends Plugin {
     this.settings.github.token = revealed.token;
     this.tokenState = revealed.state;
     this.sealedToken = revealed.sealed;
+
+    const relay = revealToken(this.settings.relay.token);
+    this.settings.relay.token = relay.token;
+    this.relayTokenState = relay.state;
+    this.sealedRelayToken = relay.sealed;
 
     // Write straight away, so the next load finds our own data and the
     // migration does not run again -- including after a deliberate reset.
@@ -383,6 +435,19 @@ export default class VaultPublisherPlugin extends Plugin {
     this.sealedToken = "";
   }
 
+  /** Whether the stored tracker token could be read. */
+  relayTokenState: TokenState = "none";
+
+  /** The tracker token exactly as it sits on disk. */
+  sealedRelayToken = "";
+
+  /** Replaces the tracker token, on the same terms as `setToken`. */
+  setRelayToken(value: string): void {
+    this.settings.relay.token = value;
+    this.relayTokenState = value ? "ready" : "none";
+    this.sealedRelayToken = "";
+  }
+
   /**
    * Deletes the folder the plugin used to live in.
    *
@@ -413,10 +478,15 @@ export default class VaultPublisherPlugin extends Plugin {
       this.settings.github.token,
       this.sealedToken,
     );
+    const relayToken = tokenForStorage(
+      this.settings.relay.token,
+      this.sealedRelayToken,
+    );
 
     await this.saveData({
       ...this.settings,
       github: { ...this.settings.github, token },
+      relay: { ...this.settings.relay, token: relayToken },
     });
   }
 
@@ -500,7 +570,8 @@ export default class VaultPublisherPlugin extends Plugin {
       reviewOverlay: overlay.enabled
         ? {
             reviewer: overlay.reviewer,
-            tracker: typeof target === "string" ? undefined : "GitHub",
+            tracker:
+              typeof target === "string" ? undefined : TRACKER_NAME[target.provider],
           }
         : undefined,
     });
@@ -829,34 +900,91 @@ export default class VaultPublisherPlugin extends Plugin {
   // -- the tracker ---------------------------------------------------------
 
   /**
-   * The repository to file in, and a client for it -- or a sentence saying
-   * what is missing.
+   * Where to file and what it will be called, or a sentence saying what is
+   * missing before anything can be.
    *
-   * The token is the publish token. One credential rather than two: it is a
-   * GitHub PAT either way, the repository is usually the same repository, and
-   * a second encrypted field to lose would buy nothing. The cost is that
-   * filing issues needs that token to carry issue write as well, which the
-   * settings panel says.
+   * GitHub files with the publish token: one credential rather than two,
+   * since it is a GitHub token either way and usually the same repository.
+   * The cost is that it has to be allowed to open issues as well, which the
+   * settings panel says. Jira and Asana have nothing to borrow, so they keep
+   * a token of their own.
    */
-  private relayClient(): { target: RelayTarget; client: GitHubClient } | string {
+  private relayReady(): { target: RelayTarget; where: string } | string {
     const target = resolveTarget(this.settings.relay, this.settings.github);
     if (typeof target === "string") return target;
 
-    if (!this.settings.github.token) {
+    const missing = this.missingCredential(target);
+    if (missing) return missing;
+
+    return { target, where: describeTarget(target) };
+  }
+
+  /** The sentence to show when the tracker has no usable credential. */
+  private missingCredential(target: RelayTarget): string | null {
+    if (target.provider === "github") {
+      if (this.settings.github.token) return null;
       return this.tokenState === "none"
         ? "Add a GitHub token in settings before filing issues."
         : "The stored GitHub token could not be read. Restart Obsidian, or paste it again.";
     }
 
-    return {
-      target,
-      client: new GitHubClient({
+    if (this.settings.relay.token) return null;
+    const name = TRACKER_NAME[target.provider];
+    return this.relayTokenState === "none"
+      ? `Add your ${name} token in settings before filing anything.`
+      : `The stored ${name} token could not be read. Restart Obsidian, or paste it again.`;
+  }
+
+  /**
+   * Files one draft, in whichever tracker the target names.
+   *
+   * The body is rendered here rather than upstream: each tracker takes a
+   * different document, and the draft is the one shape all three are made
+   * from.
+   */
+  private async fileIssue(
+    target: RelayTarget,
+    draft: IssueDraft,
+  ): Promise<FiledIssue> {
+    if (target.provider === "github") {
+      const client = new GitHubClient({
         apiBase: this.settings.github.apiBase,
         token: this.settings.github.token,
         owner: target.owner,
         repo: target.repo,
-      }),
-    };
+      });
+      const issue = await client.createIssue({
+        title: draft.title,
+        body: toMarkdown(draft.blocks),
+        labels: draft.labels,
+      });
+      return {
+        key: issueKey(target.owner, target.repo, issue.number),
+        url: issue.html_url,
+      };
+    }
+
+    if (target.provider === "jira") {
+      const client = new JiraClient({
+        site: target.site,
+        project: target.project,
+        issueType: target.issueType,
+        email: target.email,
+        token: this.settings.relay.token,
+      });
+      return client.createIssue({
+        summary: draft.title,
+        description: toAdf(draft.blocks),
+        labels: draft.labels,
+      });
+    }
+
+    const client = new AsanaClient({
+      token: this.settings.relay.token,
+      project: target.project,
+      workspace: target.workspace,
+    });
+    return client.createTask({ name: draft.title, notes: toText(draft.blocks) });
   }
 
   /**
@@ -869,7 +997,7 @@ export default class VaultPublisherPlugin extends Plugin {
    * not something an undo exists for.
    */
   async relayComment(id: string): Promise<RelayOutcome> {
-    const ready = this.relayClient();
+    const ready = this.relayReady();
     if (typeof ready === "string") return { ok: false, error: ready };
 
     const store = this.reviewStore();
@@ -896,12 +1024,13 @@ export default class VaultPublisherPlugin extends Plugin {
 
     let external: OverlayExternalIssue;
     try {
-      const issue = await ready.client.createIssue(
-        issueFor(comment, ready.target, { site: document.site }),
+      const filed = await this.fileIssue(
+        ready.target,
+        issueDraft(comment, ready.target, { site: document.site }),
       );
-      external = externalFor(ready.target, issue, new Date());
+      external = externalFor(ready.target.provider, filed, new Date());
     } catch (error) {
-      return { ok: false, error: relayFailure(error, ready.target) };
+      return { ok: false, error: relayFailure(error, ready.where) };
     }
 
     // The issue exists now, so this is reported as a success whatever the
@@ -920,7 +1049,7 @@ export default class VaultPublisherPlugin extends Plugin {
    * thirty-first would be the one that explained why.
    */
   async relayOpenComments(): Promise<void> {
-    const ready = this.relayClient();
+    const ready = this.relayReady();
     if (typeof ready === "string") {
       new Notice(`Vault Publisher: ${ready}`, 8000);
       return;
@@ -953,19 +1082,20 @@ export default class VaultPublisherPlugin extends Plugin {
       return;
     }
 
-    const where = `${ready.target.owner}/${ready.target.repo}`;
+    const where = ready.where;
     const filed = new Map<string, OverlayExternalIssue>();
     let refusal: string | null = null;
 
     for (const comment of pending) {
       this.progress?.(`Filing in ${where}`, filed.size, pending.length);
       try {
-        const issue = await ready.client.createIssue(
-          issueFor(comment, ready.target, { site: document.site }),
+        const issue = await this.fileIssue(
+          ready.target,
+          issueDraft(comment, ready.target, { site: document.site }),
         );
-        filed.set(comment.id, externalFor(ready.target, issue, new Date()));
+        filed.set(comment.id, externalFor(ready.target.provider, issue, new Date()));
       } catch (error) {
-        refusal = relayFailure(error, ready.target);
+        refusal = relayFailure(error, where);
         break;
       }
     }
@@ -1571,18 +1701,30 @@ function openExternal(url: string): void {
  * true and tells nobody what to do about it. The three statuses worth
  * translating are the three that are nearly always a setting.
  */
-function relayFailure(error: unknown, target: RelayTarget): string {
-  const where = `${target.owner}/${target.repo}`;
-  if (error instanceof GitHubError) {
-    if (error.status === 401) return "GitHub rejected the token.";
-    if (error.status === 403) {
-      return `the token is not allowed to open issues in ${where}`;
-    }
-    if (error.status === 404) {
-      return `${where} is not there, or the token cannot see it`;
-    }
-    if (error.status === 410) return `issues are turned off in ${where}`;
-    return error.message;
-  }
+function relayFailure(error: unknown, where: string): string {
+  const status =
+    error instanceof GitHubError || error instanceof TrackerError
+      ? error.status
+      : null;
+
+  if (status === 401) return `the token was rejected by ${where}`;
+  if (status === 403) return `the token is not allowed to file in ${where}`;
+  if (status === 404) return `${where} is not there, or the token cannot see it`;
+  if (status === 410) return `issues are turned off in ${where}`;
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The target in the words somebody would use for it. */
+function describeTarget(target: RelayTarget): string {
+  if (target.provider === "github") return `${target.owner}/${target.repo}`;
+  if (target.provider === "jira") return `${target.project} on ${hostOf(target.site)}`;
+  return `Asana project ${target.project}`;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }

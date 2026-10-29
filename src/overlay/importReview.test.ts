@@ -157,6 +157,24 @@ describe("parseExport", () => {
     });
   });
 
+  it("keeps which tracker the issue went to", () => {
+    const data = parseExport(
+      `{"comments":[` +
+        `{"sourcePath":"a.md","text":"Fix.","external":{"provider":"jira","key":"ENG-14","url":"https://acme.atlassian.net/browse/ENG-14"}},` +
+        `{"sourcePath":"a.md","text":"Fix.","external":{"provider":"asana","key":"Asana task 1","url":"https://app.asana.com/0/0/1"}},` +
+        `{"sourcePath":"a.md","text":"Fix.","external":{"provider":"what","key":"k","url":"https://x/1"}}` +
+        `]}`,
+    );
+
+    expect(data.comments.map((row) => row.external?.provider)).toEqual([
+      "jira",
+      "asana",
+      // Not a tracker this knows. Read as the one it started with rather
+      // than refused: the link still goes where it goes.
+      "github",
+    ]);
+  });
+
   it.each([
     ["no key", `{"url":"https://x/1"}`],
     ["no address", `{"key":"o/r#1"}`],

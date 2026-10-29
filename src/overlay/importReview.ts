@@ -158,7 +158,8 @@ function readExternal(value: unknown): OverlayExternalIssue | null {
   if (typeof row.key !== "string" || !row.key) return null;
   if (typeof row.url !== "string" || !/^https?:\/\//.test(row.url)) return null;
   return {
-    provider: "github",
+    provider:
+      row.provider === "jira" || row.provider === "asana" ? row.provider : "github",
     key: row.key,
     url: row.url,
     filedAt: typeof row.filedAt === "string" ? row.filedAt : "",

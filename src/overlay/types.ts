@@ -58,9 +58,12 @@ export type OverlayPriority = "high" | "normal" | "low";
  * writes it back unchanged; it has no credentials and no way to invent one.
  */
 export interface OverlayExternalIssue {
-  /** Which tracker. One for now, named rather than assumed. */
-  provider: "github";
-  /** How a person refers to it, e.g. `owner/repo#41`. */
+  /** Which tracker it went to. */
+  provider: "github" | "jira" | "asana";
+  /**
+   * How a person refers to it: `owner/repo#41`, `ENG-14`, or, for a tracker
+   * whose things have no short name, whatever it does call them.
+   */
   key: string;
   url: string;
   /** ISO 8601. */

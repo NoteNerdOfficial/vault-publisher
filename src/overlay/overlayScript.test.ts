@@ -1674,3 +1674,88 @@ describe("filing a comment in a tracker", () => {
     expect(shadow.querySelector("a.co-tag[data-ext]")?.textContent).toBe("#41");
   });
 });
+
+/**
+ * One overlay, three trackers.
+ *
+ * The page is told a name and nothing else -- not the project, not the
+ * endpoint, not the credential -- so what is worth testing here is that the
+ * name is all it uses, and that a key written by any of them reads as that
+ * tracker spells it.
+ */
+describe("a comment filed somewhere other than GitHub", () => {
+  function stubQuiet() {
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve({ comments: [] }) } as Response),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers to send to whichever tracker the plugin named", () => {
+    stubQuiet();
+    mountPage({ tracker: "Jira" });
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
+    click(shadow.querySelector(".co-pin"));
+    click(shadow.querySelector('.co-pop-btn[title="More"]'));
+
+    expect(
+      Array.from(shadow.querySelectorAll(".co-pop-menu-item")).map((i) => i.textContent),
+    ).toEqual(["Send to Jira", "Edit", "Delete"]);
+  });
+
+  // A Jira key is already short enough to read in a row, so it is shown as
+  // it is written everywhere else.
+  it("shows a Jira key as a Jira key", () => {
+    stubQuiet();
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          id: "filed",
+          external: {
+            provider: "jira",
+            key: "ENG-14",
+            url: "https://acme.atlassian.net/browse/ENG-14",
+            filedAt: "",
+          },
+        }),
+      ]),
+    );
+    mountPage({ tracker: "Jira" });
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector("a.co-tag[data-ext]")?.textContent).toBe("ENG-14");
+  });
+
+  // An Asana task has no short name: what identifies it is sixteen digits,
+  // which in a row of a panel is a number nobody reads and a name nobody can.
+  it("says only where an Asana task went, and which one in its tooltip", () => {
+    stubQuiet();
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          id: "filed",
+          external: {
+            provider: "asana",
+            key: "Asana task 1201234567890123",
+            url: "https://app.asana.com/0/1201/1209",
+            filedAt: "",
+          },
+        }),
+      ]),
+    );
+    mountPage({ tracker: "Asana" });
+    const shadow = run();
+    mode(shadow, "review");
+
+    const chip = shadow.querySelector("a.co-tag[data-ext]") as HTMLAnchorElement;
+    expect(chip.textContent).toBe("Asana");
+    expect(chip.getAttribute("title")).toBe("Filed as Asana task 1201234567890123");
+  });
+});

@@ -254,7 +254,15 @@ export class ReviewServer {
     this.server = null;
     this.address = null;
     if (!server) return;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+    // `close` stops it accepting and then waits for the connections it
+    // already has, and a browser holds one open between requests. So a stop
+    // with a preview tab open waited on a socket that was not going to end
+    // by itself -- the plugin's unload hung, and in the tests the process
+    // would not exit. Stopping has to mean stopping.
+    server.closeAllConnections?.();
+    await closed;
   }
 
   private authorized(request: IncomingMessage, token: string): boolean {

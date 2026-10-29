@@ -186,6 +186,9 @@ export const OVERLAY_SCRIPT = `(function () {
    * address has to be http -- a stored "javascript:" would otherwise be a
    * script the overlay invites the reviewer to run on their own page.
    */
+  /* The trackers a record may name. Anything else is read as GitHub. */
+  var PROVIDERS = { github: true, jira: true, asana: true };
+
   function extOf(value) {
     if (!value || typeof value !== "object") return null;
     if (typeof value.key !== "string" || !value.key) return null;
@@ -194,17 +197,25 @@ export const OVERLAY_SCRIPT = `(function () {
       return null;
     }
     return {
-      provider: typeof value.provider === "string" ? value.provider : "github",
+      provider: PROVIDERS[value.provider] ? value.provider : "github",
       key: value.key,
       url: value.url,
       filedAt: typeof value.filedAt === "string" ? value.filedAt : "",
     };
   }
 
-  /* "owner/repo#41" to "#41": the part that is short enough for a pill. */
-  function issueMark(key) {
-    var hash = key.indexOf("#");
-    return hash === -1 ? key : key.slice(hash);
+  /*
+   * What the pill says.
+   *
+   * A GitHub issue is spoken as "#41" and a Jira issue as its key, both of
+   * which are short enough to sit in a row of a panel. An Asana task has no
+   * short name at all -- what identifies it is sixteen digits -- so the pill
+   * says where it went and the tooltip says which one.
+   */
+  function issueMark(ext) {
+    if (ext.provider === "asana") return "Asana";
+    var hash = ext.key.indexOf("#");
+    return hash === -1 ? ext.key : ext.key.slice(hash);
   }
 
   function readAll() {
@@ -1227,7 +1238,7 @@ export const OVERLAY_SCRIPT = `(function () {
      * differently, and the number is how it is referred to everywhere else.
      */
     if (comment.external) {
-      var filed = el("a", "co-tag", issueMark(comment.external.key));
+      var filed = el("a", "co-tag", issueMark(comment.external));
       filed.setAttribute("data-ext", "");
       filed.setAttribute("href", comment.external.url);
       filed.setAttribute("target", "_blank");

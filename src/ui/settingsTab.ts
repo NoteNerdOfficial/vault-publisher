@@ -65,6 +65,10 @@ export interface SettingsHost {
   tokenState: TokenState;
   /** Replaces the token. Use this rather than assigning to settings. */
   setToken(value: string): void;
+  /** Whether the stored tracker token could be read. */
+  relayTokenState: TokenState;
+  /** Replaces the tracker token, on the same terms as `setToken`. */
+  setRelayToken(value: string): void;
   settings: {
     autoRun: AutoRunMode;
     site: {
@@ -87,9 +91,11 @@ export interface SettingsHost {
     };
     relay: {
       provider: RelayProvider;
-      owner: string;
-      repo: string;
       labels: string;
+      github: { owner: string; repo: string };
+      jira: { site: string; project: string; issueType: string; email: string };
+      asana: { project: string; workspace: string };
+      token: string;
     };
     github: {
       apiBase: string;
@@ -874,15 +880,77 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       .addDropdown((dropdown) => {
         dropdown.addOption("none", "Off");
         dropdown.addOption("github", "GitHub Issues");
-        dropdown.setValue(relay.provider === "github" ? "github" : "none");
+        dropdown.addOption("jira", "Jira");
+        dropdown.addOption("asana", "Asana");
+        dropdown.setValue(relay.provider);
         dropdown.onChange(async (value) => {
-          relay.provider = value === "github" ? "github" : "none";
+          relay.provider = value as RelayProvider;
           await this.host.saveSettings();
           this.display();
         });
       });
 
-    if (relay.provider !== "github") return;
+    if (relay.provider === "none") return;
+
+    if (relay.provider === "github") this.renderGitHubRelay(root);
+    if (relay.provider === "jira") this.renderJiraRelay(root);
+    if (relay.provider === "asana") this.renderAsanaRelay(root);
+
+    if (relay.provider !== "asana") {
+      new Setting(root)
+        .setName("Labels")
+        .setDesc(
+          "Put on every issue filed from a comment, separated by commas. A " +
+            "high or low priority adds its own label as well." +
+            (relay.provider === "jira"
+              ? " A Jira label cannot hold a space, so \"priority: high\" is " +
+                "sent as \"priority-high\"."
+              : ""),
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("review")
+            .setValue(relay.labels)
+            .onChange(async (value) => {
+              relay.labels = value;
+              await this.host.saveSettings();
+            }),
+        );
+    }
+
+    // Said here rather than found out from an absence: the Send action is
+    // baked into the preview, so a preview built before the tracker was
+    // turned on does not have one in it.
+    this.note(
+      root,
+      relay.provider === "github" && !(relay.github.owner || github.owner)
+        ? "Name a repository above, or set one under GitHub. Rebuild the " +
+            "preview after turning this on, so the Send action is in it."
+        : "Rebuild the preview after turning this on, so the Send action is " +
+            "in it. The command and the button below work either way.",
+    );
+
+    new Setting(root)
+      .setName("Send every open comment")
+      .setDesc(
+        "Files each open comment that has not been filed yet, and records " +
+          "the issue on it so it is never filed twice.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Send").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.host.relayOpenComments();
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
+  }
+
+  private renderGitHubRelay(root: HTMLElement): void {
+    const relay = this.host.settings.relay.github;
+    const github = this.host.settings.github;
 
     new Setting(root)
       .setName("Repository owner")
@@ -910,52 +978,166 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }),
       );
 
+    // No second token: it is a GitHub token either way, and usually the same
+    // repository. What it costs is that the publish token has to be allowed
+    // to open issues, which nobody would guess.
+    this.note(
+      root,
+      `Issues are filed with the token under GitHub, which has to be allowed ` +
+        `to open issues in ${relay.owner || github.owner || "the repository"}/` +
+        `${relay.repo || github.repo || "\u2026"}.`,
+    );
+  }
+
+  private renderJiraRelay(root: HTMLElement): void {
+    const jira = this.host.settings.relay.jira;
+
     new Setting(root)
-      .setName("Labels")
-      .setDesc(
-        "Put on every issue filed from a comment, separated by commas. A " +
-          "high or low priority adds its own label as well.",
-      )
+      .setName("Jira site")
+      .setDesc("The address you open Jira at.")
       .addText((text) =>
         text
-          .setPlaceholder("review")
-          .setValue(relay.labels)
+          .setPlaceholder("acme.atlassian.net")
+          .setValue(jira.site)
           .onChange(async (value) => {
-            relay.labels = value;
+            jira.site = value.trim();
             await this.host.saveSettings();
           }),
       );
 
-    const target = `${relay.owner || github.owner}/${relay.repo || github.repo}`;
-    const note = root.createDiv();
-    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
-    // Both of these are things someone would otherwise find out from a
-    // failure: a token that cannot open issues, and a preview built before
-    // the tracker was turned on, which has no Send action in it.
-    note.setText(
-      (target === "/"
-        ? "Name a repository above, or set one under GitHub. "
-        : `Issues go to ${target}, using the token under GitHub — which has to be allowed to open issues there. `) +
-        "Rebuild the preview after turning this on, so the Send action is in it.",
-    );
+    new Setting(root)
+      .setName("Project key")
+      .setDesc("The short code in front of every issue number, such as ENG.")
+      .addText((text) =>
+        text
+          .setPlaceholder("ENG")
+          .setValue(jira.project)
+          .onChange(async (value) => {
+            jira.project = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
 
     new Setting(root)
-      .setName("Send every open comment")
-      .setDesc(
-        "Files each open comment that has not been filed yet, and records " +
-          "the issue on it so it is never filed twice.",
-      )
-      .addButton((button) =>
-        button.setButtonText("Send").onClick(async () => {
-          button.setDisabled(true);
-          try {
-            await this.host.relayOpenComments();
-          } finally {
-            button.setDisabled(false);
-          }
-        }),
+      .setName("Issue type")
+      .setDesc("What a comment arrives as. Task unless your project says otherwise.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Task")
+          .setValue(jira.issueType)
+          .onChange(async (value) => {
+            jira.issueType = value.trim();
+            await this.host.saveSettings();
+          }),
       );
+
+    new Setting(root)
+      .setName("Atlassian account email")
+      .setDesc("The account the API token belongs to. Jira needs both.")
+      .addText((text) =>
+        text
+          .setPlaceholder("you@example.com")
+          .setValue(jira.email)
+          .onChange(async (value) => {
+            jira.email = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    this.renderRelayToken(
+      root,
+      "API token",
+      "Made at id.atlassian.com, under Security. It is not your password.",
+    );
   }
+
+  private renderAsanaRelay(root: HTMLElement): void {
+    const asana = this.host.settings.relay.asana;
+
+    new Setting(root)
+      .setName("Project")
+      .setDesc(
+        "The number in the project's own URL: app.asana.com/0/<project>/list.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("1201234567890123")
+          .setValue(asana.project)
+          .onChange(async (value) => {
+            asana.project = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Workspace")
+      .setDesc("Optional. The project already says which workspace it is in.")
+      .addText((text) =>
+        text
+          .setPlaceholder("optional")
+          .setValue(asana.workspace)
+          .onChange(async (value) => {
+            asana.workspace = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    this.renderRelayToken(
+      root,
+      "Personal access token",
+      "Made in Asana under Settings, Apps, Developer apps.",
+    );
+
+    // Asana has no labels and no priority everyone has, so the one place the
+    // priority can be true is the task's own body.
+    this.note(
+      root,
+      "Asana has no labels, so a high or low priority is written into the " +
+        "task instead.",
+    );
+  }
+
+  /**
+   * The tracker's own credential.
+   *
+   * Shown as dots once set, exactly like the GitHub one: a field that looks
+   * empty invites a save that empties it, which is how a token gets destroyed
+   * by opening settings and changing something else.
+   */
+  private renderRelayToken(root: HTMLElement, name: string, how: string): void {
+    new Setting(root)
+      .setName(name)
+      .setDesc(`${how} ${describeStorage()}`)
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.inputEl.autocomplete = "off";
+        text
+          .setValue(this.host.settings.relay.token ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : "")
+          .onChange(async (value) => {
+            if (value.includes("\u2022")) return;
+            this.host.setRelayToken(value.trim());
+            await this.host.saveSettings();
+          });
+      });
+
+    const trouble = describeTokenState(this.host.relayTokenState);
+    if (trouble) this.warning(root, trouble);
+  }
+
+  /** A line of explanation under a setting, in the panel's quiet voice. */
+  private note(root: HTMLElement, text: string): void {
+    const note = root.createDiv();
+    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
+    note.setText(text);
+  }
+
+  private warning(root: HTMLElement, text: string): void {
+    const notice = root.createDiv({ cls: "osp-settings-warning" });
+    notice.setText(text);
+    notice.style.cssText =
+      "font-size:0.85em;opacity:0.8;border-left:2px solid var(--text-warning);padding-left:0.75em;margin:0 0 1em;";
+  }
+
 
   // -- 5. publish ----------------------------------------------------------
 
