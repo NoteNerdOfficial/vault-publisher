@@ -2,15 +2,16 @@
  * A local server for the review preview.
  *
  * Until this existed, a comment went into the browser's `localStorage` and
- * stopped there. Getting it into the vault meant exporting a file and moving
- * it by hand, and the page could never read anything back -- so a comment was
- * invisible in another browser, on another machine, or after a rebuild. Two
- * gaps, and closing only the first would not have given anyone what they
- * wanted.
+ * stopped there. Getting it into the vault meant downloading a file and
+ * moving it by hand, and the page could never read anything back -- so a
+ * comment was invisible in another browser, on another machine, or after a
+ * rebuild. Two gaps, and closing only the first would not have given anyone
+ * what they wanted. The download is gone now, and this is why.
  *
  * A page cannot write to disk, so something local has to hold the pen. This
  * does: it serves the built preview *and* a small JSON API from the same
- * origin, which is the detail that makes the rest simple. Same origin means
+ * origin -- the comments, and a route that asks the plugin to file one of
+ * them in a tracker -- which is the detail that makes the rest simple. Same origin means
  * no CORS, no preflight, no `null`-origin requests from `file://`, and
  * relative URLs that just work. The overlay reads the comments when the page
  * opens and writes them back as they are made; the plugin puts them in the
@@ -28,7 +29,7 @@
  */
 
 import { createServer, IncomingMessage, Server, ServerResponse } from "http";
-import { OVERLAY_SCHEMA_VERSION } from "./types";
+import { OVERLAY_SCHEMA_VERSION, OverlayExternalIssue } from "./types";
 
 /** Everything the server is allowed to touch, so it can touch nothing else. */
 export interface ReviewStore {
@@ -45,8 +46,29 @@ export interface ReviewStore {
   readPreview(path: string): Promise<ArrayBuffer | string | null>;
 }
 
+/**
+ * What came of asking for one comment to be filed in a tracker.
+ *
+ * A refusal is a value rather than a throw, because most of them are not
+ * faults: no tracker set up, no repository named, a token without permission
+ * to open an issue. The reviewer needs the sentence, not a stack trace.
+ */
+export type RelayOutcome =
+  | { ok: true; external: OverlayExternalIssue }
+  | { ok: false; error: string };
+
 export interface ReviewServerOptions {
   store: ReviewStore;
+  /**
+   * Files one comment in a tracker, by id.
+   *
+   * Optional, and absent is the normal case: a vault with no tracker
+   * configured passes nothing, the route answers that there is none, and the
+   * overlay shows no Send action at all. The handler lives in the plugin
+   * because it is the only side holding a credential -- this server passes an
+   * id across and hands the answer back.
+   */
+  relay?: (id: string) => Promise<RelayOutcome>;
   /** 0, the default, takes whatever port the OS offers. */
   port?: number;
   /** Injectable so a test is not at the mercy of a random value. */
@@ -97,9 +119,9 @@ export function mimeFor(path: string): string {
 /**
  * The empty document, used when nothing has been saved yet.
  *
- * Shaped like an export file on purpose: the same `parseExport` reads both,
+ * Shaped like a saved review on purpose: the same `parseExport` reads both,
  * and the import command needs no idea whether a file was written by the
- * server or downloaded from the overlay by hand.
+ * server or copied into the folder by hand.
  */
 export function emptyDocument(site: string): string {
   return JSON.stringify(
@@ -112,6 +134,44 @@ export function emptyDocument(site: string): string {
     null,
     2,
   );
+}
+
+/**
+ * Puts back the issue records an incoming document does not carry.
+ *
+ * The browser never sets `external` -- only the plugin does -- so where the
+ * two copies disagree the file is right and the page is simply out of date.
+ * This can therefore only add information, never undo anything a reviewer
+ * did, which is what makes it safe to apply to every save.
+ */
+export function carryExternal(incoming: unknown[], saved: string | null): unknown[] {
+  if (!saved) return incoming;
+
+  let known: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(saved) as { comments?: unknown };
+    if (!Array.isArray(parsed.comments)) return incoming;
+    known = Object.create(null) as Record<string, unknown>;
+    for (const row of parsed.comments) {
+      if (!row || typeof row !== "object") continue;
+      const comment = row as { id?: unknown; external?: unknown };
+      if (typeof comment.id === "string" && comment.external) {
+        known[comment.id] = comment.external;
+      }
+    }
+  } catch {
+    // An unreadable file is about to be replaced by a good one. Nothing to
+    // carry across, and no reason to refuse the save over it.
+    return incoming;
+  }
+
+  return incoming.map((row) => {
+    if (!row || typeof row !== "object") return row;
+    const comment = row as { id?: unknown; external?: unknown };
+    if (comment.external || typeof comment.id !== "string") return row;
+    const external = known[comment.id];
+    return external ? { ...comment, external } : row;
+  });
 }
 
 /** A random token. Not a secret worth protecting for long, but unguessable. */
@@ -245,6 +305,13 @@ export class ReviewServer {
         return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
       }
 
+      if (path === "/api/relay") {
+        if (request.method !== "POST") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        return await this.postRelay(request, response);
+      }
+
       if (request.method !== "GET" && request.method !== "HEAD") {
         return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
       }
@@ -299,8 +366,58 @@ export class ReviewServer {
       return send(response, 400, MIME.json, `{"error":"expected a comments array"}`);
     }
 
-    await this.options.store.writeComments(JSON.stringify(parsed, null, 2));
+    // The browser is writing the whole document, and it has no idea about
+    // anything the plugin wrote into the file since the page loaded. One
+    // field is in that position -- the issue a comment was filed as -- and
+    // losing it would mean the next Send filed a second issue for the same
+    // comment. So it is read off the file and put back before the write.
+    const document = parsed as { comments: unknown[] };
+    document.comments = carryExternal(
+      document.comments,
+      await this.options.store.readComments(),
+    );
+
+    await this.options.store.writeComments(JSON.stringify(document, null, 2));
     send(response, 200, MIME.json, `{"saved":true}`);
+  }
+
+  private async postRelay(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    const relay = this.options.relay;
+    // 501 rather than 404: the route exists, this vault just has no tracker
+    // behind it, and the overlay says so in those words.
+    if (!relay) {
+      return send(response, 501, MIME.json, `{"error":"No tracker is set up."}`);
+    }
+
+    const body = await readBody(request);
+    if (body === null) return send(response, 413, MIME.json, `{"error":"too large"}`);
+
+    let id: unknown;
+    try {
+      id = (JSON.parse(body) as { id?: unknown }).id;
+    } catch {
+      return send(response, 400, MIME.json, `{"error":"not valid JSON"}`);
+    }
+    if (typeof id !== "string" || !id) {
+      return send(response, 400, MIME.json, `{"error":"expected a comment id"}`);
+    }
+
+    let outcome: RelayOutcome;
+    try {
+      outcome = await relay(id);
+    } catch (error) {
+      outcome = {
+        ok: false,
+        error: error instanceof Error ? error.message : "Filing it failed.",
+      };
+    }
+
+    // 200 either way, with the refusal in the body: every failure here is
+    // one the reviewer is meant to read, and a status code is not a sentence.
+    send(response, 200, MIME.json, JSON.stringify(outcome));
   }
 
   private async getFile(url: string, response: ServerResponse): Promise<void> {

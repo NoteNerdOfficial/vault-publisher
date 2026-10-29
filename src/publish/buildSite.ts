@@ -177,6 +177,15 @@ export interface SiteConfig {
   reviewOverlay?: {
     /** Prefills the comment author in the overlay. */
     reviewer?: string;
+    /**
+     * Name of the tracker a comment can be filed in, e.g. "GitHub".
+     *
+     * Absent means no Send action at all, which is the normal case. It is a
+     * name rather than a flag because the only thing the page does with it is
+     * put it in a menu label, and a page that knew which provider it was
+     * talking to would be a page that had to be taught about the next one.
+     */
+    tracker?: string;
   };
   /**
    * Largest single attachment to publish, in bytes. Defaults to 25 MiB.
@@ -740,6 +749,7 @@ export async function buildSite(
           ? {
               sourcePath: page.sourcePath,
               reviewer: config.reviewOverlay.reviewer,
+              tracker: config.reviewOverlay.tracker,
             }
           : undefined,
         shell: {

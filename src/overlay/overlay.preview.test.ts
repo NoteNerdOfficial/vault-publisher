@@ -47,13 +47,19 @@ describe("the overlay, as a file to open", () => {
       },
       content: holder.innerHTML,
       headings: [{ level: 2, text: "Scope", id: "scope" }],
-      overlay: { sourcePath: "notes/Scope.md", reviewer: "Reviewer" },
+      // A tracker named, so the Send action is in the page the browser opens.
+      overlay: {
+        sourcePath: "notes/Scope.md",
+        reviewer: "Reviewer",
+        tracker: "GitHub",
+      },
     });
 
     // Always checked, whether or not the file is written: this is the whole
     // reason the harness renders through the real `buildPage`.
     expect(html).toContain("osp-review");
     expect(html).toContain("data-osp-block");
+    expect(html).toContain("GitHub");
 
     if (!OUT) return;
     mkdirSync(OUT, { recursive: true });

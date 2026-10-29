@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  RelayOutcome,
   ReviewServer,
   ReviewStore,
+  carryExternal,
   emptyDocument,
   mimeFor,
   previewPathFor,
 } from "./server";
+import { OVERLAY_SCHEMA_VERSION } from "./types";
 
 /**
  * The server reads and writes inside the vault, so most of what is tested
@@ -241,13 +244,203 @@ describe("the review server", () => {
 
     expect(again.port).toBe(first?.port);
   });
+
+  // This server was built with no relay handler, which is the normal case:
+  // a vault with no tracker configured. The route exists and says so, which
+  // is what lets the overlay show the reason rather than a dead action.
+  it("says there is no tracker when nothing was wired up to file into", async () => {
+    const response = await fetch(withToken("/api/relay"), {
+      method: "POST",
+      body: `{"id":"c1"}`,
+    });
+
+    expect(response.status).toBe(501);
+    expect((await response.json()).error).toContain("No tracker");
+  });
+
+  it("refuses to file anything without a token", async () => {
+    const response = await fetch(`${base}/api/relay`, {
+      method: "POST",
+      body: `{"id":"c1"}`,
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  /*
+   * The browser saves the whole document, and it knows nothing about what
+   * the plugin wrote into the file since the page loaded. Losing the issue
+   * record that way would mean the next Send filed a second issue for a
+   * comment that already had one.
+   */
+  it("does not drop an issue the plugin recorded while the page was open", async () => {
+    files.comments = JSON.stringify({
+      version: 4,
+      comments: [
+        {
+          id: "a",
+          text: "Filed already.",
+          external: { provider: "github", key: "o/r#7", url: "https://x/7" },
+        },
+      ],
+    });
+
+    await fetch(withToken("/api/comments"), {
+      method: "POST",
+      body: JSON.stringify({
+        version: 4,
+        comments: [{ id: "a", text: "Filed already." }],
+      }),
+    });
+
+    const written = JSON.parse(files.comments ?? "");
+    expect(written.comments[0].external.key).toBe("o/r#7");
+  });
+});
+
+/**
+ * Filing a comment is the plugin's job -- it holds the credential -- so all
+ * the server does is carry an id across and hand the answer back. What is
+ * tested here is that carrying, including the refusals, since every one of
+ * them is a sentence somebody is meant to read.
+ */
+describe("the review server with a tracker behind it", () => {
+  let server: ReviewServer;
+  let base: string;
+  let asked: string[];
+  let answer: (id: string) => Promise<RelayOutcome>;
+  const TOKEN = "test-token";
+
+  const FILED: RelayOutcome = {
+    ok: true,
+    external: {
+      provider: "github",
+      key: "owner/repo#41",
+      url: "https://github.com/owner/repo/issues/41",
+      filedAt: "2026-10-29T10:00:00.000Z",
+    },
+  };
+
+  beforeEach(async () => {
+    asked = [];
+    answer = async () => FILED;
+    server = new ReviewServer({
+      store: store(),
+      token: TOKEN,
+      relay: (id) => {
+        asked.push(id);
+        return answer(id);
+      },
+    });
+    const address = await server.start();
+    base = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await server.stop();
+  });
+
+  const relay = (body: string) =>
+    fetch(`${base}/api/relay?t=${TOKEN}`, { method: "POST", body });
+
+  it("files the comment it was asked about and hands back the issue", async () => {
+    const response = await relay(`{"id":"c1"}`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(FILED);
+    expect(asked).toEqual(["c1"]);
+  });
+
+  // A refusal is not a fault: no repository named, a token that cannot open
+  // an issue. The reviewer needs the sentence, so it travels in the body with
+  // a 200 rather than as a status code with nothing to read.
+  it("passes a refusal through as something to read", async () => {
+    answer = async () => ({ ok: false, error: "the token cannot open issues there" });
+    const response = await relay(`{"id":"c1"}`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: "the token cannot open issues there",
+    });
+  });
+
+  it("turns a handler that throws into the same kind of answer", async () => {
+    answer = async () => {
+      throw new Error("GitHub is unreachable");
+    };
+    const body = await (await relay(`{"id":"c1"}`)).json();
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("GitHub is unreachable");
+  });
+
+  it.each([
+    ["a body that is not JSON", "{ oh dear"],
+    ["a body naming no comment", `{}`],
+    ["a body whose id is not a string", `{"id":7}`],
+  ])("refuses %s", async (_why, body) => {
+    const response = await relay(body);
+
+    expect(response.status).toBe(400);
+    expect(asked).toEqual([]);
+  });
+
+  it("refuses to file over GET, which is not a thing to do by navigating", async () => {
+    const response = await fetch(`${base}/api/relay?t=${TOKEN}`);
+
+    expect(response.status).toBe(405);
+    expect(asked).toEqual([]);
+  });
+});
+
+describe("carryExternal", () => {
+  const FILED = { provider: "github", key: "o/r#7", url: "https://x/7" };
+
+  it("puts back a record the incoming copy does not carry", () => {
+    const out = carryExternal(
+      [{ id: "a", text: "One." }],
+      JSON.stringify({ comments: [{ id: "a", external: FILED }] }),
+    );
+
+    expect(out).toEqual([{ id: "a", text: "One.", external: FILED }]);
+  });
+
+  it("leaves a row that carries its own alone", () => {
+    const own = { provider: "github", key: "o/r#9", url: "https://x/9" };
+    const out = carryExternal(
+      [{ id: "a", external: own }],
+      JSON.stringify({ comments: [{ id: "a", external: FILED }] }),
+    );
+
+    expect(out).toEqual([{ id: "a", external: own }]);
+  });
+
+  it("has nothing to carry for a comment the file does not hold", () => {
+    const out = carryExternal(
+      [{ id: "new", text: "Just written." }],
+      JSON.stringify({ comments: [{ id: "a", external: FILED }] }),
+    );
+
+    expect(out).toEqual([{ id: "new", text: "Just written." }]);
+  });
+
+  // A file about to be replaced by a good one is no reason to refuse a save.
+  it.each([["nothing saved yet", null], ["an unreadable file", "{ oh dear"]])(
+    "passes the incoming comments through given %s",
+    (_why, saved) => {
+      const rows = [{ id: "a" }];
+
+      expect(carryExternal(rows, saved as string | null)).toBe(rows);
+    },
+  );
 });
 
 describe("emptyDocument", () => {
-  it("is shaped like an export, so one reader handles both", () => {
+  it("is shaped like a saved review, so one reader handles both", () => {
     const parsed = JSON.parse(emptyDocument("Handbook"));
 
-    expect(parsed.version).toBe(1);
+    expect(parsed.version).toBe(OVERLAY_SCHEMA_VERSION);
     expect(parsed.site).toBe("Handbook");
     expect(parsed.comments).toEqual([]);
   });

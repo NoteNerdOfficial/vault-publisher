@@ -9,7 +9,7 @@ import {
   reviewNoteName,
   splitReviewInputs,
 } from "./importReview";
-import { OverlayComment } from "./types";
+import { OVERLAY_SCHEMA_VERSION, OverlayComment } from "./types";
 
 const NOW = new Date("2026-10-28T09:00:00.000Z");
 
@@ -20,10 +20,18 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     sourcePath: "notes/Plan.md",
     block: "abc123",
     blockText: "The second paragraph.",
+    x: 300,
+    y: 230,
+    rx: 0.5,
+    ry: 0.5,
     author: "Reviewer",
     text: "Needs a citation.",
     createdAt: "2026-10-28T08:00:00.000Z",
     resolved: false,
+    priority: "normal",
+    agent: null,
+    external: null,
+    replies: [],
     ...over,
   };
 }
@@ -46,10 +54,13 @@ describe("parseExport", () => {
     expect(data.comments[0].text).toBe("Needs a citation.");
   });
 
-  it("treats a missing version as the first one", () => {
+  // A file written before the field existed, which is what a missing
+  // version means. It reads, and comes back stamped with the shape this
+  // build actually hands on.
+  it("accepts a file with no version at all", () => {
     const data = parseExport(`{"comments":[]}`);
 
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(OVERLAY_SCHEMA_VERSION);
   });
 
   it("fills the optional fields rather than carrying undefined into a note", () => {
@@ -61,6 +72,102 @@ describe("parseExport", () => {
     expect(data.comments[0].block).toBeNull();
     expect(data.comments[0].resolved).toBe(false);
     expect(data.comments[0].id).toBe("imported-0");
+    expect(data.comments[0].replies).toEqual([]);
+    expect(data.comments[0].rx).toBeNull();
+  });
+
+  it("keeps the point a pin was dropped on", () => {
+    const data = parseExport(
+      `{"version":2,"comments":[{"sourcePath":"a.md","text":"Fix.","x":300,"y":230,"rx":0.5,"ry":0.25}]}`,
+    );
+
+    expect(data.comments[0].x).toBe(300);
+    expect(data.comments[0].rx).toBe(0.5);
+    expect(data.comments[0].ry).toBe(0.25);
+  });
+
+  it("reads the replies on a comment", () => {
+    const data = parseExport(
+      `{"version":2,"comments":[{"sourcePath":"a.md","text":"Fix.","replies":[` +
+        `{"id":"r1","author":"Sam","text":"Agreed.","createdAt":"2026-10-28T09:00:00Z"}]}]}`,
+    );
+
+    expect(data.comments[0].replies).toHaveLength(1);
+    expect(data.comments[0].replies[0].text).toBe("Agreed.");
+    expect(data.comments[0].replies[0].author).toBe("Sam");
+  });
+
+  // A comment with one unreadable follow-up is still worth importing, so a
+  // bad reply is dropped where a bad comment is refused.
+  it("drops a reply it cannot read rather than refusing the review", () => {
+    const data = parseExport(
+      `{"version":2,"comments":[{"sourcePath":"a.md","text":"Fix.","replies":[` +
+        `"nope",{"text":"   "},{"text":"Kept."}]}]}`,
+    );
+
+    expect(data.comments[0].replies).toHaveLength(1);
+    expect(data.comments[0].replies[0].text).toBe("Kept.");
+  });
+
+  it("reads a priority, and defaults one it does not recognise to normal", () => {
+    const data = parseExport(
+      `{"comments":[{"sourcePath":"a.md","text":"Fix.","priority":"high"},` +
+        `{"sourcePath":"a.md","text":"Also.","priority":"urgent"},` +
+        `{"sourcePath":"a.md","text":"And.","priority":"low"}]}`,
+    );
+
+    expect(data.comments.map((row) => row.priority)).toEqual([
+      "high",
+      "normal",
+      "low",
+    ]);
+  });
+
+  // A comment a tool wrote into the review file. Nothing in the overlay sets
+  // this, so reading it is the whole of the support for it.
+  it("keeps the agent that filed a comment", () => {
+    const data = parseExport(
+      `{"comments":[{"sourcePath":"a.md","text":"Fix.","agent":"Claude Code"},` +
+        `{"sourcePath":"a.md","text":"Also.","agent":""},` +
+        `{"sourcePath":"a.md","text":"And.","agent":9}]}`,
+    );
+
+    expect(data.comments.map((row) => row.agent)).toEqual([
+      "Claude Code",
+      null,
+      null,
+    ]);
+  });
+
+  // The issue a comment was filed as. Written by the plugin, read back here,
+  // and checked on the way in: this ends up as a link in a note somebody
+  // clicks, and the file can be edited by hand.
+  it("keeps the issue a comment was filed as", () => {
+    const data = parseExport(
+      `{"comments":[{"sourcePath":"a.md","text":"Fix.","external":` +
+        `{"provider":"github","key":"o/r#41","url":"https://github.com/o/r/issues/41",` +
+        `"filedAt":"2026-10-29T10:00:00.000Z"}}]}`,
+    );
+
+    expect(data.comments[0].external).toEqual({
+      provider: "github",
+      key: "o/r#41",
+      url: "https://github.com/o/r/issues/41",
+      filedAt: "2026-10-29T10:00:00.000Z",
+    });
+  });
+
+  it.each([
+    ["no key", `{"url":"https://x/1"}`],
+    ["no address", `{"key":"o/r#1"}`],
+    ["an address that is not a web address", `{"key":"o/r#1","url":"javascript:alert(1)"}`],
+    ["nothing recognisable", `"o/r#1"`],
+  ])("reads an issue record with %s as no issue at all", (_why, external) => {
+    const data = parseExport(
+      `{"comments":[{"sourcePath":"a.md","text":"Fix.","external":${external}}]}`,
+    );
+
+    expect(data.comments[0].external).toBeNull();
   });
 
   // Each of these is a file someone could plausibly be holding: a truncated
@@ -155,6 +262,70 @@ describe("reviewNote", () => {
     expect(note).toContain("- [ ] Needs a citation.");
     expect(note).toContain("- [ ] Step 4 is out of date.");
     expect(note).toContain("2 comments on 2 notes, 2 still open, from Handbook.");
+  });
+
+  // The signifiers the Tasks plugin reads, so a priority set in the browser
+  // is one the vault can sort by rather than a word in a sentence.
+  it("marks a high or low priority with the signifier the vault reads", () => {
+    const note = reviewNote({
+      site: "",
+      now: NOW,
+      comments: [
+        comment({ id: "a", text: "A blocker.", priority: "high" }),
+        comment({ id: "b", text: "A question." }),
+        comment({ id: "c", text: "A nit.", priority: "low" }),
+      ],
+    });
+
+    expect(note).toContain("- [ ] \u23eb A blocker.");
+    expect(note).toContain("- [ ] A question.");
+    expect(note).toContain("- [ ] \ud83d\udd3d A nit.");
+  });
+
+  it("says when a comment came from a tool rather than a person", () => {
+    const note = reviewNote({
+      site: "",
+      now: NOW,
+      comments: [
+        comment({ id: "a", author: "Claude", agent: "Claude Code" }),
+        comment({ id: "b", author: "Reviewer", text: "Typed by hand." }),
+      ],
+    });
+
+    expect(note).toContain("*Claude (via Claude Code), 2026-10-28*");
+    expect(note).toContain("*Reviewer, 2026-10-28*");
+  });
+
+  it("nests the replies under the comment they answer", () => {
+    const note = reviewNote({
+      site: "",
+      now: NOW,
+      comments: [
+        comment({
+          text: "Needs a citation.",
+          replies: [
+            { id: "r1", author: "Sam", text: "Added one.", createdAt: "2026-10-28T08:30:00.000Z" },
+          ],
+        }),
+      ],
+    });
+
+    expect(note).toContain("- [ ] Needs a citation.");
+    expect(note).toContain("      - Added one. *Sam, 2026-10-28*");
+  });
+
+  it("escapes a reply that would have become Markdown of its own", () => {
+    const note = reviewNote({
+      site: "",
+      now: NOW,
+      comments: [
+        comment({
+          replies: [{ id: "r1", author: "Sam", text: "- not a bullet", createdAt: "" }],
+        }),
+      ],
+    });
+
+    expect(note).toContain("      - \\- not a bullet *Sam*");
   });
 
   it("ticks a resolved comment, so the list is what is left", () => {
@@ -275,5 +446,38 @@ describe("splitReviewInputs", () => {
 
   it("copes with a folder that has nothing in it", () => {
     expect(splitReviewInputs([], "comments.json")).toEqual({ live: [], drops: [] });
+  });
+});
+
+describe("a comment that has been filed as an issue", () => {
+  // Outside the italics, because it is a link, and a link nobody can tell
+  // from the prose around it is a link nobody clicks.
+  it("links to the issue from the task it became", () => {
+    const note = reviewNote({
+      site: "Handbook",
+      now: NOW,
+      comments: [
+        comment({
+          text: "Needs a citation.",
+          external: {
+            provider: "github",
+            key: "owner/repo#41",
+            url: "https://github.com/owner/repo/issues/41",
+            filedAt: "2026-10-29T10:00:00.000Z",
+          },
+        }),
+      ],
+    });
+
+    expect(note).toContain(
+      "*Reviewer, 2026-10-28* [owner/repo#41](https://github.com/owner/repo/issues/41)",
+    );
+  });
+
+  it("says nothing extra about a comment nobody filed", () => {
+    const note = reviewNote({ site: "", now: NOW, comments: [comment()] });
+
+    expect(note).toContain("      *Reviewer, 2026-10-28*\n");
+    expect(note).not.toContain("](");
   });
 });

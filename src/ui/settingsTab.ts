@@ -7,6 +7,7 @@ import {
   describeTokenState,
   storageMode,
 } from "../platform/secrets";
+import { RelayProvider } from "../overlay/relay";
 
 /**
  * The settings screen.
@@ -84,6 +85,12 @@ export interface SettingsHost {
       reviewer: string;
       reviewFolder: string;
     };
+    relay: {
+      provider: RelayProvider;
+      owner: string;
+      repo: string;
+      labels: string;
+    };
     github: {
       apiBase: string;
       owner: string;
@@ -98,8 +105,10 @@ export interface SettingsHost {
   verifyToken(): Promise<string>;
   publish(): Promise<void>;
   buildToPreview(): Promise<void>;
-  /** Turns exported review comments into a note in the vault. */
+  /** Turns review comments into a note in the vault. */
   importReview(): Promise<void>;
+  /** Files every open review comment in the tracker. */
+  relayOpenComments(): Promise<void>;
   /** Serves the built preview locally and opens it in the browser. */
   openPreview(): Promise<void>;
   /** Where the review server is listening, or null while it is not running. */
@@ -805,8 +814,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     new Setting(root)
       .setName("Review folder")
       .setDesc(
-        "Where to drop an exported comment-overlay.json, and where the " +
-          "imported review note is written.",
+        "Where comments are saved as you leave them, and where the imported " +
+          "review note is written.",
       )
       .addText((text) =>
         text
@@ -822,14 +831,125 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     new Setting(root)
       .setName("Import review comments")
       .setDesc(
-        "Reads every export in the review folder and writes one note, with a " +
-          "task per comment, linked to the note it is about.",
+        "Reads the review folder and writes one note, with a task per " +
+          "comment, linked to the note it is about.",
       )
       .addButton((button) =>
         button.setButtonText("Import").onClick(async () => {
           button.setDisabled(true);
           try {
             await this.host.importReview();
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
+
+    this.renderRelay(root);
+  }
+
+  /**
+   * Filing review comments as issues.
+   *
+   * Inside the Review section rather than beside the GitHub connection,
+   * because this is a thing done to a comment, not a thing done to the site.
+   * Off is the first option and the default, and choosing it hides the rest:
+   * a vault whose reviews stay in the vault should not have to read any of
+   * this.
+   */
+  private renderRelay(root: HTMLElement): void {
+    const relay = this.host.settings.relay;
+    const github = this.host.settings.github;
+
+    new Setting(root).setName("Issue tracker").setHeading();
+
+    new Setting(root)
+      .setName("File comments as issues")
+      .setDesc(
+        "Adds a Send action to a comment, so the work it asks for can be " +
+          "tracked where the rest of the work is. Nothing is sent " +
+          "automatically, and nothing is kept in step afterwards: a comment " +
+          "goes across once, when you ask for it.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("none", "Off");
+        dropdown.addOption("github", "GitHub Issues");
+        dropdown.setValue(relay.provider === "github" ? "github" : "none");
+        dropdown.onChange(async (value) => {
+          relay.provider = value === "github" ? "github" : "none";
+          await this.host.saveSettings();
+          this.display();
+        });
+      });
+
+    if (relay.provider !== "github") return;
+
+    new Setting(root)
+      .setName("Repository owner")
+      .setDesc("Leave blank to use the repository the site publishes to.")
+      .addText((text) =>
+        text
+          .setPlaceholder(github.owner || "owner")
+          .setValue(relay.owner)
+          .onChange(async (value) => {
+            relay.owner = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Repository")
+      .setDesc("Leave blank to use the repository the site publishes to.")
+      .addText((text) =>
+        text
+          .setPlaceholder(github.repo || "repo")
+          .setValue(relay.repo)
+          .onChange(async (value) => {
+            relay.repo = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    new Setting(root)
+      .setName("Labels")
+      .setDesc(
+        "Put on every issue filed from a comment, separated by commas. A " +
+          "high or low priority adds its own label as well.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("review")
+          .setValue(relay.labels)
+          .onChange(async (value) => {
+            relay.labels = value;
+            await this.host.saveSettings();
+          }),
+      );
+
+    const target = `${relay.owner || github.owner}/${relay.repo || github.repo}`;
+    const note = root.createDiv();
+    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
+    // Both of these are things someone would otherwise find out from a
+    // failure: a token that cannot open issues, and a preview built before
+    // the tracker was turned on, which has no Send action in it.
+    note.setText(
+      (target === "/"
+        ? "Name a repository above, or set one under GitHub. "
+        : `Issues go to ${target}, using the token under GitHub — which has to be allowed to open issues there. `) +
+        "Rebuild the preview after turning this on, so the Send action is in it.",
+    );
+
+    new Setting(root)
+      .setName("Send every open comment")
+      .setDesc(
+        "Files each open comment that has not been filed yet, and records " +
+          "the issue on it so it is never filed twice.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Send").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.host.relayOpenComments();
           } finally {
             button.setDisabled(false);
           }

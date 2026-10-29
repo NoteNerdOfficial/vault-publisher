@@ -373,12 +373,46 @@ export class GitHubClient {
   async getViewer(): Promise<{ login: string }> {
     return this.request<{ login: string }>("GET", "/user");
   }
+
+  // -- issues --------------------------------------------------------------
+
+  /**
+   * Files one issue and returns it.
+   *
+   * A label the repository does not have yet is created by GitHub as part of
+   * this call, which is what lets a priority label work with no setup step
+   * first. A request refused outright over its labels is retried once without
+   * them: an issue with no labels is worth a great deal more than no issue,
+   * and the caller has a comment in front of someone waiting on it.
+   */
+  async createIssue(options: {
+    title: string;
+    body: string;
+    labels?: string[];
+  }): Promise<IssueInfo> {
+    const path = `/repos/${this.config.owner}/${this.config.repo}/issues`;
+    const labels = options.labels?.length ? options.labels : undefined;
+    const base = { title: options.title, body: options.body };
+
+    try {
+      return await this.request<IssueInfo>("POST", path, { ...base, labels });
+    } catch (e) {
+      if (!labels || !(e instanceof GitHubError) || e.status !== 422) throw e;
+      return this.request<IssueInfo>("POST", path, base);
+    }
+  }
 }
 
 export interface CommitResult {
   commitSha: string;
   treeSha: string;
   previousSha: string | null;
+}
+
+export interface IssueInfo {
+  number: number;
+  html_url: string;
+  title: string;
 }
 
 export interface RepoInfo {

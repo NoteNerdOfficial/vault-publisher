@@ -36,8 +36,23 @@ import {
   reviewNoteName,
   splitReviewInputs,
 } from "./overlay/importReview";
-import { OverlayComment } from "./overlay/types";
-import { ReviewServer, ReviewServerAddress, ReviewStore } from "./overlay/server";
+import { OverlayComment, OverlayExport, OverlayExternalIssue } from "./overlay/types";
+import {
+  RelayOutcome,
+  ReviewServer,
+  ReviewServerAddress,
+  ReviewStore,
+} from "./overlay/server";
+import {
+  DEFAULT_RELAY_LABELS,
+  RelayProvider,
+  RelayTarget,
+  applyExternals,
+  externalFor,
+  issueFor,
+  pendingComments,
+  resolveTarget,
+} from "./overlay/relay";
 import {
   findLegacyFolder,
   hasStoredSettings,
@@ -91,8 +106,25 @@ interface Settings {
     enabled: boolean;
     /** Prefills the comment author in the overlay. */
     reviewer: string;
-    /** Vault folder exports are dropped into, for the import command. */
+    /** Vault folder the review file is saved in, and imported from. */
     reviewFolder: string;
+  };
+  /**
+   * Filing a review comment as an issue in a tracker.
+   *
+   * Off unless somebody turns it on, and that is the whole of the design: a
+   * `provider` of "none" means no command does anything, no action appears in
+   * the overlay, and no request is ever made. A review that stays in the
+   * vault is the normal case and should cost nothing.
+   */
+  relay: {
+    provider: RelayProvider;
+    /** Blank means the repository the site publishes to. */
+    owner: string;
+    /** Blank means the repository the site publishes to. */
+    repo: string;
+    /** Comma-separated labels every filed issue carries. */
+    labels: string;
   };
   github: {
     apiBase: string;
@@ -123,6 +155,12 @@ const DEFAULT_SETTINGS: Settings = {
     enabled: false,
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
+  },
+  relay: {
+    provider: "none",
+    owner: "",
+    repo: "",
+    labels: DEFAULT_RELAY_LABELS,
   },
   github: {
     apiBase: GITHUB_COM_API,
@@ -188,6 +226,11 @@ export default class VaultPublisherPlugin extends Plugin {
       id: "open-review-preview",
       name: "Open preview in browser",
       callback: () => void this.openPreview(),
+    });
+    this.addCommand({
+      id: "relay-review-comments",
+      name: "Send open review comments to the tracker",
+      callback: () => void this.relayOpenComments(),
     });
 
     // Rendering before the workspace is ready gives Dataview no index to
@@ -292,6 +335,7 @@ export default class VaultPublisherPlugin extends Plugin {
         ...DEFAULT_SETTINGS.commentOverlay,
         ...stored?.commentOverlay,
       },
+      relay: { ...DEFAULT_SETTINGS.relay, ...stored?.relay },
       github: { ...DEFAULT_SETTINGS.github, ...stored?.github },
     };
     // The token lives encrypted on disk and in the clear only in memory, so
@@ -448,9 +492,16 @@ export default class VaultPublisherPlugin extends Plugin {
 
     new Notice("Building site...");
     const overlay = this.settings.commentOverlay;
+    // Resolved here rather than in the page: a relay turned on but pointed at
+    // no repository would otherwise put a Send action in every preview that
+    // could only ever answer with the reason it cannot work.
+    const target = resolveTarget(this.settings.relay, this.settings.github);
     const result = await this.build({
       reviewOverlay: overlay.enabled
-        ? { reviewer: overlay.reviewer }
+        ? {
+            reviewer: overlay.reviewer,
+            tracker: typeof target === "string" ? undefined : "GitHub",
+          }
         : undefined,
     });
 
@@ -624,7 +675,13 @@ export default class VaultPublisherPlugin extends Plugin {
   /** Starts the review server if it is not already up. */
   async startReviewServer(): Promise<ReviewServerAddress> {
     if (!this.reviewServer) {
-      this.reviewServer = new ReviewServer({ store: this.reviewStore() });
+      this.reviewServer = new ReviewServer({
+        store: this.reviewStore(),
+        // Handed over whether or not a tracker is configured: the server is
+        // started once and the setting can change under it, so "is there a
+        // tracker" is a question answered per request rather than per socket.
+        relay: (id) => this.relayComment(id),
+      });
     }
     return this.reviewServer.start();
   }
@@ -671,14 +728,15 @@ export default class VaultPublisherPlugin extends Plugin {
   }
 
   /**
-   * Turns exported review comments into a note in the vault.
+   * Turns review comments into a note in the vault.
    *
    * Reads every `*.json` in the review folder rather than asking for one
-   * through a file picker. The folder is a path the settings already name, it
-   * needs no Electron dialog, and dropping a download into a folder is a step
-   * someone can repeat without being walked through it. Imported files are
-   * renamed rather than deleted: an import that produced the wrong note
-   * should be recoverable from the file that produced it.
+   * through a file picker. The folder is a path the settings already name and
+   * the one the overlay writes to as comments are left, so there is nothing
+   * to pick and no Electron dialog to open. A file dropped there by hand --
+   * copied off another machine, say -- is read on the same terms. Imported
+   * files are renamed rather than deleted: an import that produced the wrong
+   * note should be recoverable from the file that produced it.
    */
   async importReview(): Promise<void> {
     const adapter = this.app.vault.adapter;
@@ -687,22 +745,22 @@ export default class VaultPublisherPlugin extends Plugin {
     if (!(await adapter.exists(folder))) {
       await adapter.mkdir(folder);
       new Notice(
-        `Vault Publisher: put an exported comment-overlay.json in ${folder}, then run this again.`,
+        `Vault Publisher: no comments yet. Open a preview and leave some, then run this again.`,
         10000,
       );
       return;
     }
 
     const listing = await adapter.list(folder);
-    // The live file the review server writes, and the one-off exports anyone
-    // may still drop here by hand. Both are read; only the drops are renamed,
-    // because renaming the live one would take the running review with it.
+    // The live file the review server writes, and any one-off file dropped
+    // here by hand. Both are read; only the drops are renamed, because
+    // renaming the live one would take the running review with it.
     const { live, drops } = splitReviewInputs(listing.files, LIVE_COMMENTS);
     const inputs = [...live, ...drops];
 
     if (!inputs.length) {
       new Notice(
-        `Vault Publisher: no exports found in ${folder}. Export from the overlay first.`,
+        `Vault Publisher: nothing to import from ${folder}. Leave some comments in a preview first.`,
         8000,
       );
       return;
@@ -727,12 +785,12 @@ export default class VaultPublisherPlugin extends Plugin {
     }
 
     if (!comments.length) {
-      new Notice("Vault Publisher: those exports hold no comments.", 8000);
+      new Notice("Vault Publisher: the review folder holds no comments.", 8000);
       return;
     }
 
-    // The live file and a hand-dropped export of it hold the same comments,
-    // so importing both would put every one of them in the note twice.
+    // The live file and a hand-dropped copy of it hold the same comments, so
+    // importing both would put every one of them in the note twice.
     const seen = new Set<string>();
     const unique = comments.filter((comment) => {
       if (seen.has(comment.id)) return false;
@@ -740,7 +798,7 @@ export default class VaultPublisherPlugin extends Plugin {
       return true;
     });
 
-    // Two reviews in a day is the normal case -- export, import, fix some of
+    // Two reviews in a day is the normal case -- read, import, fix some of
     // it, go round again -- so the second one must not overwrite the first.
     const existing = new Set(listing.files);
     const now = new Date();
@@ -766,6 +824,190 @@ export default class VaultPublisherPlugin extends Plugin {
       `Vault Publisher: imported ${unique.length} comment(s) on ${notes} note(s) into ${target}`,
       8000,
     );
+  }
+
+  // -- the tracker ---------------------------------------------------------
+
+  /**
+   * The repository to file in, and a client for it -- or a sentence saying
+   * what is missing.
+   *
+   * The token is the publish token. One credential rather than two: it is a
+   * GitHub PAT either way, the repository is usually the same repository, and
+   * a second encrypted field to lose would buy nothing. The cost is that
+   * filing issues needs that token to carry issue write as well, which the
+   * settings panel says.
+   */
+  private relayClient(): { target: RelayTarget; client: GitHubClient } | string {
+    const target = resolveTarget(this.settings.relay, this.settings.github);
+    if (typeof target === "string") return target;
+
+    if (!this.settings.github.token) {
+      return this.tokenState === "none"
+        ? "Add a GitHub token in settings before filing issues."
+        : "The stored GitHub token could not be read. Restart Obsidian, or paste it again.";
+    }
+
+    return {
+      target,
+      client: new GitHubClient({
+        apiBase: this.settings.github.apiBase,
+        token: this.settings.github.token,
+        owner: target.owner,
+        repo: target.repo,
+      }),
+    };
+  }
+
+  /**
+   * Files one comment, by id, and records the issue on it.
+   *
+   * This is what the overlay's Send action calls, through the review server.
+   * A comment that already carries an issue is answered with that issue
+   * rather than filed again -- the check is here rather than in the browser
+   * because the browser's copy can be out of date, and a duplicate issue is
+   * not something an undo exists for.
+   */
+  async relayComment(id: string): Promise<RelayOutcome> {
+    const ready = this.relayClient();
+    if (typeof ready === "string") return { ok: false, error: ready };
+
+    const store = this.reviewStore();
+    const raw = await store.readComments();
+    if (!raw) {
+      return { ok: false, error: "No comments have reached the vault yet." };
+    }
+
+    let document: OverlayExport;
+    try {
+      document = parseExport(raw);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof ReviewImportError ? error.message : String(error),
+      };
+    }
+
+    const comment = document.comments.find((row) => row.id === id);
+    if (!comment) {
+      return { ok: false, error: "That comment has not been saved to the vault yet." };
+    }
+    if (comment.external) return { ok: true, external: comment.external };
+
+    let external: OverlayExternalIssue;
+    try {
+      const issue = await ready.client.createIssue(
+        issueFor(comment, ready.target, { site: document.site }),
+      );
+      external = externalFor(ready.target, issue, new Date());
+    } catch (error) {
+      return { ok: false, error: relayFailure(error, ready.target) };
+    }
+
+    // The issue exists now, so this is reported as a success whatever the
+    // write does. A write that failed is not a lost record either: the
+    // browser is told the issue's key, sets it on its own copy, and saves
+    // the document itself a moment later.
+    await this.writeExternals(store, new Map([[id, external]]));
+    return { ok: true, external };
+  }
+
+  /**
+   * Files every open comment that has not been filed yet.
+   *
+   * Sequential, and it stops at the first refusal. A loop that carried on
+   * would turn one wrong setting into thirty rejected requests, and the
+   * thirty-first would be the one that explained why.
+   */
+  async relayOpenComments(): Promise<void> {
+    const ready = this.relayClient();
+    if (typeof ready === "string") {
+      new Notice(`Vault Publisher: ${ready}`, 8000);
+      return;
+    }
+
+    const store = this.reviewStore();
+    const raw = await store.readComments();
+    if (!raw) {
+      new Notice("Vault Publisher: no review comments have reached the vault yet.", 8000);
+      return;
+    }
+
+    let document: OverlayExport;
+    try {
+      document = parseExport(raw);
+    } catch (error) {
+      new Notice(
+        `Vault Publisher: ${error instanceof ReviewImportError ? error.message : String(error)}`,
+        12000,
+      );
+      return;
+    }
+
+    const pending = pendingComments(document.comments);
+    if (!pending.length) {
+      new Notice(
+        "Vault Publisher: nothing to send. Every open comment has been filed already.",
+        8000,
+      );
+      return;
+    }
+
+    const where = `${ready.target.owner}/${ready.target.repo}`;
+    const filed = new Map<string, OverlayExternalIssue>();
+    let refusal: string | null = null;
+
+    for (const comment of pending) {
+      this.progress?.(`Filing in ${where}`, filed.size, pending.length);
+      try {
+        const issue = await ready.client.createIssue(
+          issueFor(comment, ready.target, { site: document.site }),
+        );
+        filed.set(comment.id, externalFor(ready.target, issue, new Date()));
+      } catch (error) {
+        refusal = relayFailure(error, ready.target);
+        break;
+      }
+    }
+
+    // Written even after a refusal, so the issues that were filed are
+    // recorded as filed. Without this, a run that failed half way would file
+    // the first half again the next time it ran.
+    const saved = filed.size === 0 || (await this.writeExternals(store, filed));
+
+    const parts = [
+      filed.size
+        ? `filed ${filed.size} of ${pending.length} comment(s) in ${where}`
+        : `filed nothing in ${where}`,
+    ];
+    if (refusal) parts.push(refusal);
+    if (!saved) {
+      parts.push(
+        "the issues could not be recorded on the comments, so check them before sending again",
+      );
+    }
+    new Notice(`Vault Publisher: ${parts.join(" \u2014 ")}`, refusal || !saved ? 14000 : 8000);
+  }
+
+  /** Puts the issue records onto the saved comments. False if it could not. */
+  private async writeExternals(
+    store: ReviewStore,
+    filed: Map<string, OverlayExternalIssue>,
+  ): Promise<boolean> {
+    try {
+      // Read again rather than reusing the document the issues were built
+      // from: a reviewer in a browser may have saved over it while the
+      // requests were in flight, and their comments must not be rolled back
+      // by this write.
+      const fresh = await store.readComments();
+      if (!fresh) return false;
+      const next = applyExternals(fresh, filed);
+      if (!next) return false;
+      await store.writeComments(next);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   // -- publish -------------------------------------------------------------
@@ -1319,4 +1561,28 @@ function openExternal(url: string): void {
     // Fall through: a window is better than nothing.
   }
   window.open(url, "_blank");
+}
+
+/**
+ * A GitHub refusal, said in terms of what to change.
+ *
+ * `GitHubError` already carries GitHub's own message, which is accurate and
+ * frequently useless: "Not Found" for a repository the token cannot see is
+ * true and tells nobody what to do about it. The three statuses worth
+ * translating are the three that are nearly always a setting.
+ */
+function relayFailure(error: unknown, target: RelayTarget): string {
+  const where = `${target.owner}/${target.repo}`;
+  if (error instanceof GitHubError) {
+    if (error.status === 401) return "GitHub rejected the token.";
+    if (error.status === 403) {
+      return `the token is not allowed to open issues in ${where}`;
+    }
+    if (error.status === 404) {
+      return `${where} is not there, or the token cannot see it`;
+    }
+    if (error.status === 410) return `issues are turned off in ${where}`;
+    return error.message;
+  }
+  return error instanceof Error ? error.message : String(error);
 }

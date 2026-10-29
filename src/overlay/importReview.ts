@@ -1,5 +1,5 @@
 /**
- * Turning an exported review into a note in the vault.
+ * Turning a saved review into a note in the vault.
  *
  * This is the half of the overlay that only an Obsidian plugin can do. A
  * comment widget can collect feedback on a page; a publisher running inside
@@ -26,7 +26,25 @@ import {
   OVERLAY_SCHEMA_VERSION,
   OverlayComment,
   OverlayExport,
+  OverlayExternalIssue,
+  OverlayPriority,
+  OverlayReply,
 } from "./types";
+
+/**
+ * The Tasks plugin's own priority signifiers.
+ *
+ * Written as the signifiers rather than as the words "high" and "low" so
+ * that a priority set in the browser is a priority the vault can sort by: a
+ * review note is a task list, and the plugin that reads task lists here
+ * knows these two characters. Normal priority has no signifier, which is
+ * exactly right -- it is what a task without one already means.
+ */
+const PRIORITY_MARK: Record<OverlayPriority, string> = {
+  high: "\u23eb",
+  normal: "",
+  low: "\ud83d\udd3d",
+};
 
 /** Thrown with a message meant for a Notice, not a stack trace. */
 export class ReviewImportError extends Error {
@@ -37,7 +55,7 @@ export class ReviewImportError extends Error {
 }
 
 /**
- * Reads an export file.
+ * Reads a saved review file.
  *
  * Every field is checked and the optional ones are defaulted, because the
  * input is a file a person may have hand-edited, truncated or concatenated.
@@ -78,7 +96,7 @@ export function parseExport(raw: string): OverlayExport {
 }
 
 function fail(why: string): never {
-  throw new ReviewImportError(`That file is not a review export: ${why}.`);
+  throw new ReviewImportError(`That file is not a saved review: ${why}.`);
 }
 
 function readComment(value: unknown, index: number): OverlayComment {
@@ -103,11 +121,82 @@ function readComment(value: unknown, index: number): OverlayComment {
       typeof row.blockText === "string"
         ? row.blockText.slice(0, BLOCK_TEXT_LIMIT)
         : "",
+    // A file written before the drop point existed has none, and the overlay
+    // falls back to the block's corner for it. Nothing here needs a position
+    // at all, so a missing one is a default rather than a rejection.
+    x: num(row.x),
+    y: num(row.y),
+    rx: typeof row.rx === "number" ? row.rx : null,
+    ry: typeof row.ry === "number" ? row.ry : null,
     author: typeof row.author === "string" && row.author ? row.author : "Anonymous",
     text: row.text,
     createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
     resolved: row.resolved === true,
+    priority: readPriority(row.priority),
+    // A tool may write this in; nothing refuses a review for lacking it.
+    agent: typeof row.agent === "string" && row.agent ? row.agent : null,
+    external: readExternal(row.external),
+    replies: readReplies(row.replies, index),
   };
+}
+
+function readPriority(value: unknown): OverlayPriority {
+  return value === "high" || value === "low" ? value : "normal";
+}
+
+/**
+ * The issue a comment was filed as, or null.
+ *
+ * Checked the same way the overlay checks it, and for the same reason: this
+ * ends up as a link in a note somebody clicks, and a file that has been
+ * hand-edited could carry anything. A record with no key or no http address
+ * is no record.
+ */
+function readExternal(value: unknown): OverlayExternalIssue | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.key !== "string" || !row.key) return null;
+  if (typeof row.url !== "string" || !/^https?:\/\//.test(row.url)) return null;
+  return {
+    provider: "github",
+    key: row.key,
+    url: row.url,
+    filedAt: typeof row.filedAt === "string" ? row.filedAt : "",
+  };
+}
+
+function num(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Replies, skipping anything that is not one.
+ *
+ * Unlike a comment, a malformed reply is dropped rather than thrown: a
+ * comment with one unreadable follow-up is still worth importing, and
+ * refusing the whole review over it would be a worse trade than losing a
+ * line nobody can read anyway.
+ */
+function readReplies(value: unknown, index: number): OverlayReply[] {
+  if (!Array.isArray(value)) return [];
+  const out: OverlayReply[] = [];
+
+  value.forEach((entry, position) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return;
+    const row = entry as Record<string, unknown>;
+    if (typeof row.text !== "string" || !row.text.trim()) return;
+    out.push({
+      id:
+        typeof row.id === "string" && row.id
+          ? row.id
+          : `imported-${index}-${position}`,
+      author: typeof row.author === "string" && row.author ? row.author : "Anonymous",
+      text: row.text,
+      createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
+    });
+  });
+
+  return out;
 }
 
 /** Vault path to the name a wikilink uses: the basename, without extension. */
@@ -199,11 +288,24 @@ export function reviewNote(input: ReviewNoteInput): string {
         .split("\n")
         .map((line, index) => (index === 0 ? line : `      ${line}`))
         .join("\n");
-      lines.push(`- [${box}] ${body}`);
+      // The signifier leads the line rather than trailing it: a comment can
+      // run to several lines, and what is being asked for should be readable
+      // from the left edge of the list without reading to the end of one.
+      const mark = PRIORITY_MARK[comment.priority];
+      lines.push(`- [${box}] ${mark ? `${mark} ` : ""}${body}`);
       if (comment.blockText) {
         lines.push(`      > ${comment.blockText}`);
       }
       lines.push(`      ${attribution(comment)}`);
+      // Replies as a nested list rather than more tasks: a reply is part of
+      // the argument about one comment, not a second thing to do.
+      for (const reply of comment.replies) {
+        const text = flattenForList(reply.text.trim())
+          .split("\n")
+          .map((line, index) => (index === 0 ? line : `        ${line}`))
+          .join("\n");
+        lines.push(`      - ${text} ${said(reply.author, reply.createdAt)}`);
+      }
     }
     lines.push("");
   }
@@ -212,10 +314,26 @@ export function reviewNote(input: ReviewNoteInput): string {
 }
 
 function attribution(comment: OverlayComment): string {
-  const parts = [comment.author];
+  // Said, because a name alone does not tell anyone whether a person read
+  // the page or a tool was handed the file.
+  const who = comment.agent
+    ? `${comment.author} (via ${comment.agent})`
+    : comment.author;
+  const parts = [who];
   if (comment.createdAt) parts.push(isoDay(new Date(comment.createdAt)));
   // Said plainly rather than left for someone to work out from a missing pin.
   if (!comment.block) parts.push("about the page");
+  // Outside the italics: it is a link, and a link nobody can tell from the
+  // prose around it is a link nobody clicks.
+  const filed = comment.external
+    ? ` [${comment.external.key}](${comment.external.url})`
+    : "";
+  return `*${parts.join(", ")}*${filed}`;
+}
+
+function said(author: string, createdAt: string): string {
+  const parts = [author];
+  if (createdAt) parts.push(isoDay(new Date(createdAt)));
   return `*${parts.join(", ")}*`;
 }
 
@@ -246,7 +364,7 @@ export function reviewNoteName(now: Date, taken: (name: string) => boolean): str
  * an import does to everything it consumes -- would pull the store out from
  * under a review in progress, and the next comment would land in a new, empty
  * file with everything before it gone. So the live file is read and left
- * exactly where it is, and only the hand-dropped exports are renamed.
+ * exactly where it is, and only the hand-dropped files are renamed.
  */
 export function splitReviewInputs(
   files: string[],

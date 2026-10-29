@@ -8,6 +8,8 @@ import { GitHubClient, GitHubError } from "./client";
 interface Call {
   method: string;
   url: string;
+  /** The JSON the client sent, parsed, for the calls that send one. */
+  body?: unknown;
 }
 
 /**
@@ -23,18 +25,24 @@ function fakeHttp(
   },
 ) {
   const calls: Call[] = [];
-  const restore = setRequestUrl(async (options: { method: string; url: string }) => {
-    const call = { method: options.method, url: options.url };
-    calls.push(call);
-    const r = reply(call);
-    return {
-      status: r.status ?? 200,
-      json: r.json,
-      text: r.text ?? "",
-      headers: r.headers ?? {},
-      arrayBuffer: new ArrayBuffer(0),
-    };
-  });
+  const restore = setRequestUrl(
+    async (options: { method: string; url: string; body?: string }) => {
+      const call = {
+        method: options.method,
+        url: options.url,
+        body: options.body === undefined ? undefined : JSON.parse(options.body),
+      };
+      calls.push(call);
+      const r = reply(call);
+      return {
+        status: r.status ?? 200,
+        json: r.json,
+        text: r.text ?? "",
+        headers: r.headers ?? {},
+        arrayBuffer: new ArrayBuffer(0),
+      };
+    },
+  );
   return { calls, restore };
 }
 
@@ -204,5 +212,83 @@ describe("readFile", () => {
     restore = http.restore;
 
     await expect(client().readFile("gh-pages", "missing.json")).resolves.toBeNull();
+  });
+});
+
+describe("createIssue", () => {
+  it("posts the issue to the repository it was built for", async () => {
+    const http = fakeHttp(() => ({
+      json: { number: 41, html_url: "https://github.com/o/r/issues/41", title: "t" },
+    }));
+    restore = http.restore;
+
+    const issue = await client().createIssue({
+      title: "Needs a citation",
+      body: "The paragraph about performance.",
+      labels: ["review", "priority: high"],
+    });
+
+    expect(http.calls[0].method).toBe("POST");
+    expect(http.calls[0].url).toBe("https://api.github.com/repos/o/r/issues");
+    expect(http.calls[0].body).toEqual({
+      title: "Needs a citation",
+      body: "The paragraph about performance.",
+      labels: ["review", "priority: high"],
+    });
+    expect(issue.number).toBe(41);
+  });
+
+  // GitHub creates a label a repository does not have as part of the call,
+  // so this is not the usual path -- but an issue with no labels is worth a
+  // great deal more than no issue, and somebody is waiting on it.
+  it("files it without labels rather than not at all, if labels are refused", async () => {
+    const http = fakeHttp((call) =>
+      (call.body as { labels?: string[] }).labels
+        ? { status: 422, json: { message: "Validation Failed" } }
+        : { json: { number: 7, html_url: "https://github.com/o/r/issues/7", title: "t" } },
+    );
+    restore = http.restore;
+
+    const issue = await client().createIssue({
+      title: "t",
+      body: "b",
+      labels: ["nope"],
+    });
+
+    expect(issue.number).toBe(7);
+    expect(http.calls).toHaveLength(2);
+    expect(http.calls[1].body).toEqual({ title: "t", body: "b" });
+  });
+
+  it("sends no labels field at all when there are none", async () => {
+    const http = fakeHttp(() => ({
+      json: { number: 1, html_url: "https://github.com/o/r/issues/1", title: "t" },
+    }));
+    restore = http.restore;
+
+    await client().createIssue({ title: "t", body: "b", labels: [] });
+
+    expect(http.calls[0].body).toEqual({ title: "t", body: "b" });
+  });
+
+  // Everything else is the caller's to explain: a 403 here is a token that
+  // cannot open issues, which is a sentence about settings.
+  it("lets a refusal through, with its status on it", async () => {
+    const http = fakeHttp(() => ({ status: 403, json: { message: "Forbidden" } }));
+    restore = http.restore;
+
+    await expect(
+      client().createIssue({ title: "t", body: "b" }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("retries only for a refusal about the request, not for a 403", async () => {
+    const http = fakeHttp(() => ({ status: 403, json: { message: "Forbidden" } }));
+    restore = http.restore;
+
+    await expect(
+      client().createIssue({ title: "t", body: "b", labels: ["review"] }),
+    ).rejects.toBeInstanceOf(GitHubError);
+    expect(http.calls).toHaveLength(1);
   });
 });

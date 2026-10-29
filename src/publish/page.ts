@@ -583,6 +583,8 @@ export function buildPage(options: {
     sourcePath: string;
     /** Prefills the comment author, from settings. */
     reviewer?: string;
+    /** Tracker a comment can be filed in, by name, when one is set up. */
+    tracker?: string;
   };
 }): string {
   const { meta, content, headings } = options;
@@ -652,7 +654,7 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}">`
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}">` : ""}
 <link rel="stylesheet" href="${root}assets/obsidian.css">
 <link rel="stylesheet" href="${root}assets/site.css">
-${overlay ? `<meta name="osp-review" content="${escapeHtml(JSON.stringify({ sourcePath: overlay.sourcePath, page: meta.url, site: meta.siteName, reviewer: overlay.reviewer ?? "" }))}">` : ""}
+${overlay ? `<meta name="osp-review" content="${escapeHtml(JSON.stringify({ sourcePath: overlay.sourcePath, page: meta.url, site: meta.siteName, reviewer: overlay.reviewer ?? "", tracker: overlay.tracker ?? "" }))}">` : ""}
 <script>${THEME_BOOT}</script>
 </head>
 <body>

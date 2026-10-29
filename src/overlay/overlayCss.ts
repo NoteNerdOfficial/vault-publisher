@@ -8,226 +8,1126 @@
  * a shadow root nothing reaches in, so these rules are the only ones in play
  * and none of them can reach back out and change the page being reviewed.
  *
- * Theme comes from a `data-theme` attribute this script sets on the shadow
- * wrapper, copied from the one the page already sets on `<html>`. A shadow
- * root cannot select its host document's attributes, and `prefers-color-scheme`
- * would ignore the reader's own choice.
+ * **The colour says what the mark means.** One hue carries the whole system:
+ * an open mark is correction ink, and it is the only saturated thing on
+ * screen. Resolving a comment drains it to graphite, so a page's remaining
+ * work is readable at a glance from the pins alone, without opening
+ * anything. That is the job colour has here; it decorates nothing else.
+ *
+ * Theme comes from a `data-theme` attribute the script sets on the shadow
+ * wrapper. There are two, light and dark, chosen by the reviewer and seeded
+ * once from the page's own theme. The overlay's surfaces are deliberately
+ * not the page's: a review tool that restyles itself to match the site being
+ * reviewed stops being legible as a separate thing, and the point of the
+ * preview is to look at the site, not at the tool.
+ *
+ * The pin's ink is the one value that does not change with the theme. A pin
+ * is drawn over the page, not over the overlay, so it answers to the
+ * reviewer's content rather than to this panel, and a mark that changed
+ * colour with a setting would stop meaning one thing.
  */
 export const OVERLAY_CSS = `
 :host { all: initial; }
 
 .osp-overlay {
+  /* Correction ink. White on it is 4.57:1, so the numerals inside a pin
+     clear AA on the one surface that is never the reviewer's to restyle. */
+  --co-pin: #d4421e;
+  --co-pin-soft: rgba(212, 66, 30, 0.1);
+  --co-ink: #b3351a;
+  --co-done: #6b7076;
   --co-bg: #ffffff;
-  --co-fg: #1f2328;
-  --co-dim: #59636e;
-  --co-line: #d1d9e0;
-  --co-accent: #0969da;
-  --co-pin: #bc4c00;
-  --co-done: #1a7f37;
-  --co-shadow: 0 1px 3px rgba(31, 35, 40, 0.12), 0 8px 24px rgba(31, 35, 40, 0.12);
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --co-bg-2: #f2f3f5;
+  --co-fg: #15181c;
+  --co-fg-2: #596069;
+  --co-fg-3: #6e757d;
+  --co-line: #e1e4e8;
+  --co-danger: #8e1d10;
+  /* The outline over the block the cursor is on. Quieter than the mark: it
+     follows the pointer, and anything at full strength that moves with the
+     pointer is a flicker rather than a hint. */
+  --co-aim-line: rgba(212, 66, 30, 0.5);
+
+  --co-r-1: 6px;
+  --co-r-2: 8px;
+  --co-r-3: 12px;
+
+  --co-shadow:
+    0 1px 2px rgba(16, 18, 22, 0.06),
+    0 8px 24px -6px rgba(16, 18, 22, 0.18);
+  --co-shadow-pin:
+    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18))
+    drop-shadow(0 3px 6px rgba(0, 0, 0, 0.16));
+
+  /* Exponential ease-out: everything starts at speed and settles, which is
+     what makes a 180ms transition read as instant rather than as animation. */
+  --co-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  font: 13px/20px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: var(--co-fg);
 }
 
 .osp-overlay[data-theme="dark"] {
-  --co-bg: #151b23;
-  --co-fg: #d1d7e0;
-  --co-dim: #9198a1;
-  --co-line: #3d444d;
-  --co-accent: #4493f8;
-  --co-pin: #fd8c73;
-  --co-done: #3fb950;
-  --co-shadow: 0 1px 3px rgba(1, 4, 9, 0.4), 0 8px 24px rgba(1, 4, 9, 0.5);
+  --co-pin-soft: rgba(212, 66, 30, 0.18);
+  --co-ink: #f2603a;
+  --co-done: #7d858e;
+  --co-bg: #16181c;
+  --co-bg-2: #1e2126;
+  --co-fg: #e6e9ed;
+  --co-fg-2: #9ba3ac;
+  --co-fg-3: #7d858e;
+  --co-line: #2e333a;
+  --co-aim-line: rgba(242, 96, 58, 0.55);
+  --co-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 12px 32px -8px rgba(0, 0, 0, 0.6);
 }
 
-.osp-overlay button {
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid var(--co-line);
-  border-radius: 6px;
-  padding: 4px 10px;
-}
-.osp-overlay button:hover { border-color: var(--co-accent); color: var(--co-accent); }
-.osp-overlay button[data-primary] {
-  background: var(--co-accent);
-  border-color: var(--co-accent);
-  color: #fff;
-}
-.osp-overlay button[data-primary]:hover { opacity: 0.9; color: #fff; }
-.osp-overlay button:disabled { opacity: 0.5; cursor: default; }
+.osp-overlay * { box-sizing: border-box; margin: 0; padding: 0; }
+.osp-overlay [hidden] { display: none !important; }
+.osp-overlay button { font: inherit; cursor: pointer; }
+.osp-overlay svg { flex: none; display: block; }
 
-/* --- the launcher ---------------------------------------------------- */
+/* Numbers that sit in a fixed box have to be one width, or a pin reading 1
+   and a pin reading 11 are optically off-centre from each other. */
+.osp-overlay .co-num,
+.osp-overlay .co-time,
+.osp-overlay .co-pin span,
+.osp-overlay .co-pop-mark,
+.osp-overlay .co-filter b { font-variant-numeric: tabular-nums; }
 
-.osp-overlay .co-launch {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  pointer-events: auto;
-  background: var(--co-bg);
-  box-shadow: var(--co-shadow);
+/* --- the surfaces the browser draws ---------------------------------- */
+
+/*
+ * Selection, caret, focus ring and scrollbar all ship with defaults that
+ * belong to no design system, and inside a shadow root they are ours to
+ * set. Leaving them is the difference between a thing that was built and a
+ * thing that was assembled.
+ */
+.osp-overlay ::selection { background: var(--co-pin-soft); color: var(--co-fg); }
+.osp-overlay textarea,
+.osp-overlay input { caret-color: var(--co-pin); }
+
+.osp-overlay :focus-visible {
+  outline: 2px solid var(--co-pin);
+  outline-offset: 2px;
+}
+.osp-overlay textarea:focus-visible,
+.osp-overlay .co-field:focus-visible { outline: none; }
+
+.osp-overlay .co-list,
+.osp-overlay .co-pop {
+  scrollbar-width: thin;
+  scrollbar-color: var(--co-line) transparent;
+}
+.osp-overlay .co-list::-webkit-scrollbar,
+.osp-overlay .co-pop::-webkit-scrollbar { width: 10px; }
+.osp-overlay .co-list::-webkit-scrollbar-track,
+.osp-overlay .co-pop::-webkit-scrollbar-track { background: transparent; }
+.osp-overlay .co-list::-webkit-scrollbar-thumb,
+.osp-overlay .co-pop::-webkit-scrollbar-thumb {
+  background: var(--co-line);
+  border: 3px solid transparent;
+  background-clip: content-box;
   border-radius: 999px;
-  padding: 7px 14px;
+}
+.osp-overlay .co-list::-webkit-scrollbar-thumb:hover,
+.osp-overlay .co-pop::-webkit-scrollbar-thumb:hover { background: var(--co-fg-3); background-clip: content-box; }
+
+/* --- the notch -------------------------------------------------------- */
+
+.osp-overlay .co-notch {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  padding: 4px;
+  pointer-events: auto;
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: 24px;
+  box-shadow: var(--co-shadow);
+  z-index: 1;
 }
-.osp-overlay .co-launch[hidden] { display: none; }
-.osp-overlay .co-count {
-  background: var(--co-pin);
-  color: #fff;
-  border-radius: 999px;
-  min-width: 17px;
-  height: 17px;
-  font-size: 11px;
-  font-weight: 600;
-  display: inline-flex;
+
+.osp-overlay .co-notch-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--co-fg-2);
+  display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 4px;
+  transition: background 0.15s, color 0.15s;
 }
-.osp-overlay .co-count[hidden] { display: none; }
+.osp-overlay .co-notch-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.osp-overlay .co-notch-btn[data-open] { background: var(--co-bg-2); color: var(--co-fg); }
 
-/* --- the panel ------------------------------------------------------- */
+.osp-overlay .co-notch-div { width: 1px; height: 20px; background: var(--co-line); }
+
+/* The three modes, as one control with a chip that slides between them --
+   which is what makes them read as a choice of one rather than three
+   independent toggles. */
+.osp-overlay .co-modes {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  border: 1px solid var(--co-line);
+  border-radius: 16px;
+  background: var(--co-bg-2);
+}
+.osp-overlay .co-mode-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(33.333% - 2px);
+  height: calc(100% - 4px);
+  background: var(--co-pin);
+  border-radius: 14px;
+  transition: transform 0.22s var(--co-ease);
+  pointer-events: none;
+}
+.osp-overlay .co-mode-slider[data-at="1"] { transform: translateX(100%); }
+.osp-overlay .co-mode-slider[data-at="2"] { transform: translateX(200%); }
+
+.osp-overlay .co-mode {
+  position: relative;
+  z-index: 1;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--co-fg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+}
+.osp-overlay .co-mode[data-active] { color: #fff; }
+.osp-overlay .co-mode:not([data-active]):hover { background: var(--co-bg); color: var(--co-fg); }
+
+/* --- the notch menu --------------------------------------------------- */
+
+.osp-overlay .co-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow);
+  animation: co-rise 0.16s var(--co-ease);
+  z-index: 1;
+}
+.osp-overlay .co-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--co-r-2);
+  background: transparent;
+  color: var(--co-fg);
+  white-space: nowrap;
+  text-align: left;
+  transition: background 0.15s;
+}
+.osp-overlay .co-menu-item svg { color: var(--co-fg-2); }
+.osp-overlay .co-menu-item:hover { background: var(--co-bg-2); }
+.osp-overlay .co-menu-item:hover svg { color: var(--co-fg); }
+.osp-overlay .co-menu-rule { height: 1px; margin: 4px 0; background: var(--co-line); }
+.osp-overlay .co-menu-key {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--co-fg-3);
+  font-size: 11px;
+}
+
+/* --- pins ------------------------------------------------------------- */
+
+/* The container sits at the document origin, so a pin's coordinates are
+   document coordinates and scrolling moves nothing. */
+.osp-overlay .co-pins { position: absolute; top: 0; left: 0; }
+
+/*
+ * The mark. A disc on a stem whose tip is the point that was clicked, drawn
+ * with a ring in the overlay's own ground so it separates from whatever the
+ * reviewer's page put underneath it -- body text, a photograph, a dark
+ * callout. A pin that needs the page to be a particular colour to be
+ * readable is a pin that fails on the page it was most needed.
+ */
+.osp-overlay .co-pin {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: auto;
+  /* The sharp corner is at (5, 27) inside the box, so this puts that corner
+     -- not the box, and not the tag's middle -- on the point that was
+     clicked, and growing from the same origin drops it onto the point. */
+  transform: translate(-5px, -27px);
+  transform-origin: 5px 27px;
+  filter: var(--co-shadow-pin);
+  transition: filter 0.18s var(--co-ease);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.osp-overlay .co-pin svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* The ring that holds the mark off the reviewer's own content. It lives
+   here rather than on the element so it follows the theme. */
+.osp-overlay .co-pin svg path { stroke: var(--co-bg); }
+.osp-overlay .co-pin span {
+  position: absolute;
+  left: 5px;
+  top: 3px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  pointer-events: none;
+}
+.osp-overlay .co-pin:hover {
+  filter:
+    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2))
+    drop-shadow(0 6px 12px rgba(0, 0, 0, 0.22));
+}
+.osp-overlay .co-pin[data-selected] { z-index: 2; }
+.osp-overlay .co-pin:focus-visible { outline-offset: 1px; border-radius: 999px; }
+
+/* The mark being written, before it is a comment. */
+.osp-overlay .co-ghost { pointer-events: none; animation: co-pin-drop 0.24s var(--co-ease); }
+
+@keyframes co-pin-drop {
+  from { transform: translate(-5px, -33px) scale(0.4); opacity: 0; }
+  to { transform: translate(-5px, -27px) scale(1); opacity: 1; }
+}
+
+@keyframes co-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- the block under the cursor --------------------------------------- */
+
+/*
+ * Which block a click would mark. It sits at the document origin like the
+ * pins, so it travels with the text and needs no scroll handler, and it is
+ * drawn in here rather than on the page's own element so that nothing about
+ * the article being reviewed is changed by looking at it.
+ *
+ * The transition is on the box itself, so moving between two paragraphs
+ * glides rather than cuts -- which is what makes it read as one pointer
+ * rather than as two separate highlights appearing.
+ */
+.osp-overlay .co-aim {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 5px;
+  background: var(--co-pin-soft);
+  box-shadow: inset 0 0 0 1.5px var(--co-aim-line);
+  transition:
+    left 0.12s var(--co-ease),
+    top 0.12s var(--co-ease),
+    width 0.12s var(--co-ease),
+    height 0.12s var(--co-ease),
+    box-shadow 0.12s var(--co-ease);
+}
+/* Chosen, not hovered. Firmer, because the decision has been made and the
+   outline now says what the comment being written is about. */
+.osp-overlay .co-aim[data-locked] {
+  box-shadow: inset 0 0 0 2px var(--co-pin);
+}
+
+/* --- the capture layer ------------------------------------------------ */
+
+/* Comment mode takes every click so that dropping a pin on a link does not
+   also follow the link. The cursor carries the mode, so there is never a
+   question of which one you are in. */
+.osp-overlay .co-capture {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='29' height='29' viewBox='0 0 32 32'%3E%3Cpath d='M13 3 L21 3 A8 8 0 0 1 29 11 L29 19 A8 8 0 0 1 21 27 L5 27 L5 11 A8 8 0 0 1 13 3 Z' fill='%23d4421e' stroke='%23ffffff' stroke-width='5' stroke-linejoin='round' paint-order='stroke'/%3E%3Cpath d='M17 10v10M12 15h10' stroke='%23ffffff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E") 4 25, crosshair;
+}
+
+/* --- the side panel --------------------------------------------------- */
 
 .osp-overlay .co-panel {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
-  width: 310px;
-  max-height: min(70vh, 560px);
-  pointer-events: auto;
-  background: var(--co-bg);
-  border: 1px solid var(--co-line);
-  border-radius: 10px;
-  box-shadow: var(--co-shadow);
+  top: 8px;
+  height: calc(100vh - 16px);
+  width: 280px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  pointer-events: auto;
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow);
+  font-size: 11px;
+  z-index: 1;
 }
-.osp-overlay .co-panel[hidden] { display: none; }
+.osp-overlay .co-panel[data-side="right"] {
+  right: 8px;
+  animation: co-slide-right 0.2s var(--co-ease);
+}
+.osp-overlay .co-panel[data-side="left"] {
+  left: 8px;
+  animation: co-slide-left 0.2s var(--co-ease);
+}
 
-.osp-overlay .co-head {
+@keyframes co-slide-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes co-slide-left {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.osp-overlay .co-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  background: transparent;
+  transition: background 0.1s;
+  z-index: 2;
+}
+.osp-overlay .co-panel[data-side="right"] .co-resizer { left: 0; }
+.osp-overlay .co-panel[data-side="left"] .co-resizer { right: 0; }
+.osp-overlay .co-resizer:hover,
+.osp-overlay .co-resizer[data-dragging] { background: var(--co-pin); opacity: 0.3; }
+
+.osp-overlay .co-panel-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--co-line);
-}
-.osp-overlay .co-title { font-weight: 600; flex: 1; }
-.osp-overlay .co-foot {
-  display: flex;
-  gap: 8px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--co-line);
-}
-.osp-overlay .co-foot > :first-child { flex: 1; }
-
-.osp-overlay .co-list { overflow-y: auto; padding: 4px 0; flex: 1; }
-.osp-overlay .co-empty { padding: 18px 14px; color: var(--co-dim); }
-
-.osp-overlay .co-item {
-  display: flex;
-  gap: 9px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--co-line);
-  align-items: flex-start;
-}
-.osp-overlay .co-item:last-child { border-bottom: 0; }
-.osp-overlay .co-item[data-resolved] { opacity: 0.55; }
-.osp-overlay .co-item[data-resolved] .co-text { text-decoration: line-through; }
-
-.osp-overlay .co-badge {
+  height: 40px;
+  padding: 0 8px;
   flex: none;
-  width: 19px;
-  height: 19px;
+  border-bottom: 1px solid var(--co-line);
+}
+.osp-overlay .co-panel-title {
+  flex: 1;
+  text-align: center;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  color: var(--co-fg);
+}
+
+.osp-overlay .co-icon-btn {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 0;
+  border-radius: var(--co-r-1);
+  background: transparent;
+  color: var(--co-fg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.osp-overlay .co-icon-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
+
+.osp-overlay .co-filters {
+  position: relative;
+  display: flex;
+  flex: none;
+  margin: 8px 8px 0;
+  padding: 2px;
+  border: 1px solid var(--co-line);
+  border-radius: 14px;
+  background: var(--co-bg-2);
+}
+.osp-overlay .co-filter-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(33.333% - 2px);
+  height: calc(100% - 4px);
+  background: var(--co-pin);
+  border-radius: 12px;
+  transition: transform 0.22s var(--co-ease);
+  pointer-events: none;
+}
+.osp-overlay .co-filter-slider[data-at="1"] { transform: translateX(100%); }
+.osp-overlay .co-filter-slider[data-at="2"] { transform: translateX(200%); }
+.osp-overlay .co-filter {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--co-fg-2);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  transition: color 0.15s;
+}
+/* The count rides inside the label, so the scope of a filter is readable
+   before it is chosen rather than after. */
+.osp-overlay .co-filter b { font-weight: 550; opacity: 0.75; }
+.osp-overlay .co-filter[data-active] { color: #fff; }
+.osp-overlay .co-filter[data-active] b { opacity: 0.85; }
+.osp-overlay .co-filter:not([data-active]):hover { color: var(--co-fg); }
+
+/* The order the list is in, said in the corner rather than in a labelled
+   control: it is one button with two states, and a legend over it would be
+   taller than the thing it names. */
+.osp-overlay .co-sortrow {
+  display: flex;
+  justify-content: flex-end;
+  flex: none;
+  padding: 6px 10px 0;
+}
+.osp-overlay .co-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--co-r-1);
+  background: transparent;
+  color: var(--co-fg-3);
+  font-size: 11px;
+  line-height: 14px;
+  transition: background 0.12s, color 0.12s;
+}
+.osp-overlay .co-sort:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.osp-overlay .co-sort[data-by="priority"] { color: var(--co-fg-2); }
+
+.osp-overlay .co-list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+
+.osp-overlay .co-row { padding: 2px 8px; cursor: pointer; }
+.osp-overlay .co-row-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--co-r-2);
+  transition: background 0.12s;
+}
+.osp-overlay .co-row:hover .co-row-card { background: var(--co-bg-2); }
+.osp-overlay .co-row[data-selected] .co-row-card { background: var(--co-pin-soft); }
+.osp-overlay .co-row[data-resolved] .co-row-name strong {
+  color: var(--co-fg-2);
+  font-weight: 450;
+}
+.osp-overlay .co-row[data-resolved] .co-row-text { color: var(--co-fg-3); }
+
+.osp-overlay .co-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
   border-radius: 999px;
   background: var(--co-pin);
   color: #fff;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 650;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  border: 0;
-  padding: 0;
 }
-.osp-overlay .co-item[data-resolved] .co-badge { background: var(--co-done); }
-.osp-overlay .co-item[data-orphan] .co-badge { background: var(--co-dim); }
+.osp-overlay .co-row[data-resolved] .co-num,
+.osp-overlay .co-row[data-orphan] .co-num { background: var(--co-done); }
 
-.osp-overlay .co-body { min-width: 0; flex: 1; }
-.osp-overlay .co-text { white-space: pre-wrap; overflow-wrap: break-word; }
-.osp-overlay .co-meta { color: var(--co-dim); font-size: 11px; margin-top: 3px; }
-.osp-overlay .co-quote {
-  color: var(--co-dim);
+.osp-overlay .co-row-body { flex: 1; min-width: 0; }
+.osp-overlay .co-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.osp-overlay .co-row-name strong {
+  font-weight: 550;
+  font-size: 13px;
+  line-height: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/*
+ * The pill on a comment no person typed. Deliberately not coloured: it is a
+ * fact about where a comment came from, not a judgement about it, and the
+ * one hue in here is spoken for.
+ */
+.osp-overlay .co-tag {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--co-line);
+  border-radius: 999px;
+  background: var(--co-bg-2);
+  color: var(--co-fg-2);
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/*
+ * The same pill carrying an issue number instead of a word, so it keeps the
+ * number's own casing and is drawn in the ink: it is the one thing in a row
+ * that leads somewhere off the page.
+ */
+.osp-overlay a.co-tag[data-ext] {
+  color: var(--co-ink);
+  text-transform: none;
+  letter-spacing: 0;
+  text-decoration: none;
+}
+.osp-overlay a.co-tag[data-ext]:hover { border-color: var(--co-ink); }
+
+.osp-overlay .co-time { flex: none; white-space: nowrap; color: var(--co-fg-2); font-size: 11px; }
+
+.osp-overlay .co-row-text {
+  margin: 1px 0 0;
+  color: var(--co-fg-2);
   font-size: 11px;
-  border-left: 2px solid var(--co-line);
-  padding-left: 6px;
-  margin-top: 4px;
+  line-height: 16px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.osp-overlay .co-row-meta { margin-top: 4px; color: var(--co-fg-3); font-size: 11px; }
+
+.osp-overlay .co-quote {
+  padding-left: 7px;
+  border-left: 1px solid var(--co-line);
+  color: var(--co-fg-2);
+  font-size: 11px;
+  line-height: 16px;
   overflow-wrap: break-word;
 }
-.osp-overlay .co-warn { color: var(--co-pin); font-size: 11px; margin-top: 3px; }
-.osp-overlay .co-tools { display: flex; gap: 6px; margin-top: 6px; }
-.osp-overlay .co-tools button { padding: 1px 7px; font-size: 11px; }
+.osp-overlay .co-row .co-quote { margin-top: 5px; }
+.osp-overlay .co-warn { color: var(--co-ink); font-size: 11px; line-height: 16px; }
+.osp-overlay .co-row .co-warn { margin-top: 4px; }
 
-/* --- pins ------------------------------------------------------------ */
-
-.osp-overlay .co-pins { position: absolute; top: 0; left: 0; }
-
-.osp-overlay .co-pin {
-  position: absolute;
-  width: 21px;
-  height: 21px;
-  border-radius: 999px 999px 999px 2px;
-  background: var(--co-pin);
-  color: #fff;
-  border: 0;
-  padding: 0;
-  font-size: 11px;
-  font-weight: 600;
+.osp-overlay .co-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  pointer-events: auto;
-  box-shadow: var(--co-shadow);
+  gap: 10px;
+  padding: 48px 28px;
+  text-align: center;
+  color: var(--co-fg-2);
 }
-.osp-overlay .co-pin[data-resolved] { background: var(--co-done); }
+.osp-overlay .co-empty svg { color: var(--co-fg-3); opacity: 0.55; }
+.osp-overlay .co-empty-title { color: var(--co-fg); font-size: 13px; font-weight: 550; }
+.osp-overlay .co-empty-text { font-size: 11px; line-height: 17px; max-width: 24ch; }
 
-/* --- the draft popover ----------------------------------------------- */
+/* --- the comment popup ------------------------------------------------ */
 
-.osp-overlay .co-draft {
+.osp-overlay .co-pop {
   position: absolute;
-  width: 272px;
+  width: 360px;
+  max-height: 400px;
+  overflow-y: auto;
   pointer-events: auto;
   background: var(--co-bg);
   border: 1px solid var(--co-line);
-  border-radius: 10px;
+  border-radius: var(--co-r-3);
   box-shadow: var(--co-shadow);
-  padding: 10px;
+  color: var(--co-fg);
+  animation: co-rise 0.15s var(--co-ease);
+  z-index: 2;
 }
-.osp-overlay .co-draft[hidden] { display: none; }
-.osp-overlay .co-draft textarea {
-  font: inherit;
-  color: inherit;
-  width: 100%;
-  box-sizing: border-box;
-  min-height: 66px;
-  resize: vertical;
-  background: transparent;
+
+/*
+ * The title bar: what this is, how much it is asking for, and what can be
+ * done to it. Three things, left to right, and the actions pushed to the far
+ * edge so the eye has one place to look for a button rather than a row that
+ * reflows as a quotation gets longer.
+ */
+.osp-overlay .co-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid var(--co-line);
+}
+.osp-overlay .co-pop-title {
+  flex: none;
+  font-size: 13px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+}
+.osp-overlay .co-pop-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
+}
+
+/*
+ * Priority as three steps of weight, not three colours.
+ *
+ * The one hue in here already means something exact -- open, and drained to
+ * graphite when resolved -- and a second meaning hung on the same colour
+ * would cost the first one its precision. So high priority is the only
+ * inverted chip in the overlay, normal is a plain one and low recedes to an
+ * outline, and each carries an arrow as well, because a pill that said what
+ * it meant only by being a shade darker would say nothing to a reader who
+ * cannot see the difference.
+ */
+.osp-overlay .co-pri,
+.osp-overlay .co-pri-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 2px 9px;
   border: 1px solid var(--co-line);
-  border-radius: 6px;
-  padding: 6px 7px;
-}
-.osp-overlay .co-draft textarea:focus { outline: 2px solid var(--co-accent); outline-offset: -1px; }
-.osp-overlay .co-draft-quote {
-  color: var(--co-dim);
+  border-radius: 999px;
+  background: var(--co-bg-2);
+  color: var(--co-fg-2);
+  font: inherit;
   font-size: 11px;
-  margin-bottom: 7px;
-  overflow-wrap: break-word;
+  font-weight: 550;
+  line-height: 15px;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
-.osp-overlay .co-draft-tools { display: flex; gap: 7px; margin-top: 8px; }
-.osp-overlay .co-draft-tools > :first-child { flex: 1; }
-.osp-overlay .co-hint { color: var(--co-dim); font-size: 11px; margin-top: 6px; }
+.osp-overlay .co-pri-mark {
+  width: 8px;
+  text-align: center;
+  font-weight: 700;
+}
+.osp-overlay .co-pri[data-level="high"] {
+  background: var(--co-fg);
+  border-color: transparent;
+  color: var(--co-bg);
+}
+.osp-overlay .co-pri[data-level="low"] {
+  background: transparent;
+  color: var(--co-fg-3);
+}
+.osp-overlay .co-pri:hover { border-color: var(--co-fg-3); }
+.osp-overlay .co-pri[data-level="high"]:hover { border-color: transparent; opacity: 0.88; }
+
+/*
+ * What the comment is attached to, quoted above it.
+ *
+ * A band rather than a line of text, so "this is the page talking" and "this
+ * is a person talking" are told apart before either is read.
+ */
+.osp-overlay .co-pop-sel {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border-radius: var(--co-r-2);
+  background: var(--co-bg-2);
+}
+.osp-overlay .co-pop-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--co-pin);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.osp-overlay .co-pop-sel[data-resolved] .co-pop-mark,
+.osp-overlay .co-pop-sel[data-orphan] .co-pop-mark { background: var(--co-done); }
+.osp-overlay .co-pop-quote {
+  flex: 1;
+  min-width: 0;
+  color: var(--co-fg-2);
+  font-size: 11px;
+  line-height: 16px;
+  padding-top: 2px;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.osp-overlay .co-pop-btn {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--co-r-1);
+  background: transparent;
+  color: var(--co-fg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.osp-overlay .co-pop-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.osp-overlay .co-pop-btn[data-on] { color: var(--co-pin); }
+
+.osp-overlay .co-pop-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 0;
+}
+.osp-overlay .co-pop-sel + .co-pop-threads { padding-top: 10px; }
+.osp-overlay .co-pop-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 16px;
+  min-width: 0;
+}
+.osp-overlay .co-avatar {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--co-bg-2);
+  border: 1px solid var(--co-line);
+  color: var(--co-fg-2);
+  font-size: 11px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.osp-overlay .co-pop-wrap { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.osp-overlay .co-pop-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.osp-overlay .co-pop-name strong {
+  font-weight: 550;
+  font-size: 13px;
+  line-height: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.osp-overlay .co-pop-body { line-height: 21px; white-space: pre-wrap; word-break: break-word; }
+
+.osp-overlay .co-pop-note {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 16px 12px;
+  padding: 9px 10px;
+  border-radius: var(--co-r-2);
+  background: var(--co-bg-2);
+}
+
+.osp-overlay .co-resolved-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--co-line);
+  color: var(--co-fg-2);
+  font-size: 12px;
+}
+.osp-overlay .co-resolved-row > span:first-child {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--co-done);
+}
+
+/*
+ * Where this comment went, at the foot of the popup.
+ *
+ * Built like the resolved row it sits beside, because the two say the same
+ * kind of thing: not what the comment is, but what has become of it. The
+ * issue key is the only link in the overlay that leaves the page, so it is
+ * the only text in here drawn in the ink.
+ */
+.osp-overlay .co-filed {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--co-line);
+  color: var(--co-fg-2);
+  font-size: 12px;
+}
+.osp-overlay .co-filed[data-pending] { color: var(--co-fg-3); }
+.osp-overlay .co-filed .co-warn { flex-basis: 100%; }
+.osp-overlay .co-ext {
+  color: var(--co-ink);
+  font-weight: 550;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.osp-overlay .co-ext:hover { border-bottom-color: currentColor; }
+
+.osp-overlay .co-pop-reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--co-line);
+}
+.osp-overlay .co-pop-reply .co-avatar { margin-top: 2px; }
+.osp-overlay .co-pop-reply .co-input { flex: 1; }
+.osp-overlay .co-pop-reply .co-input textarea { max-height: 120px; }
+
+.osp-overlay .co-pop-menu {
+  position: absolute;
+  padding: 4px;
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-2);
+  box-shadow: var(--co-shadow);
+  white-space: nowrap;
+  animation: co-rise 0.14s var(--co-ease);
+  z-index: 10;
+}
+.osp-overlay .co-pop-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--co-r-1);
+  background: transparent;
+  color: var(--co-fg);
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.12s;
+}
+.osp-overlay .co-pop-menu[data-pri] .co-pop-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 10px;
+}
+.osp-overlay .co-pop-menu[data-pri] .co-pop-menu-item[data-on] {
+  background: var(--co-bg-2);
+  font-weight: 550;
+}
+.osp-overlay .co-pop-menu-item:hover { background: var(--co-bg-2); }
+.osp-overlay .co-pop-menu-item[data-danger]:hover { background: var(--co-danger); color: #fff; }
+
+/* --- the draft, and the field it shares with replies ------------------ */
+
+.osp-overlay .co-draft {
+  position: absolute;
+  width: 288px;
+  max-width: calc(100vw - 16px);
+  padding: 10px;
+  pointer-events: auto;
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow);
+  animation: co-rise 0.16s var(--co-ease);
+  z-index: 2;
+}
+
+/* The words the pin is about, so the comment is written with them in view
+   rather than behind the box being typed into. */
+.osp-overlay .co-draft-quote {
+  margin-bottom: 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--co-aim-line);
+  color: var(--co-fg-2);
+  font-size: 11px;
+  line-height: 16px;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.osp-overlay .co-draft-foot { display: flex; gap: 4px; margin-top: 8px; }
+.osp-overlay .co-pri-opt {
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--co-fg-3);
+  cursor: pointer;
+}
+.osp-overlay .co-pri-opt:hover { color: var(--co-fg); border-color: var(--co-fg-3); }
+.osp-overlay .co-pri-opt[data-on] {
+  background: var(--co-bg-2);
+  border-color: var(--co-line);
+  color: var(--co-fg);
+}
+.osp-overlay .co-pri-opt[data-on][data-level="high"] {
+  background: var(--co-fg);
+  border-color: transparent;
+  color: var(--co-bg);
+}
+
+.osp-overlay .co-input {
+  position: relative;
+  min-height: 30px;
+  border-radius: var(--co-r-2);
+  background: var(--co-bg-2);
+  border: 1px solid transparent;
+  transition: border-color 0.14s, background 0.14s;
+}
+.osp-overlay .co-input:focus-within { border-color: var(--co-pin); background: var(--co-bg); }
+.osp-overlay .co-input textarea {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  max-height: 200px;
+  padding: 4px 34px 4px 9px;
+  border: 0;
+  border-radius: var(--co-r-2);
+  background: transparent;
+  color: var(--co-fg);
+  font: inherit;
+  line-height: 20px;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+}
+.osp-overlay .co-input textarea::placeholder { color: var(--co-fg-3); }
+.osp-overlay .co-input[data-filled] { min-height: 58px; }
+.osp-overlay .co-input[data-filled] textarea { padding-right: 9px; padding-bottom: 30px; }
+
+.osp-overlay .co-send {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--co-pin);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.14s, transform 0.14s var(--co-ease);
+}
+.osp-overlay .co-input[data-filled] .co-send { top: auto; bottom: 5px; transform: none; }
+.osp-overlay .co-send:hover:not(:disabled) { background: var(--co-ink); }
+.osp-overlay .co-send:disabled { background: var(--co-line); color: var(--co-fg-3); cursor: default; }
+
+/* --- the modal, for a name and for a confirmation --------------------- */
+
+.osp-overlay .co-scrim {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(10, 12, 15, 0.45);
+  z-index: 3;
+}
+.osp-overlay .co-modal {
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow);
+  animation: co-rise 0.18s var(--co-ease);
+}
+.osp-overlay .co-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 42px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--co-line);
+}
+.osp-overlay .co-modal-head h3 { font-size: 13px; font-weight: 550; }
+.osp-overlay .co-modal-body { padding: 14px 16px 16px; }
+.osp-overlay .co-modal-body p {
+  margin-bottom: 14px;
+  color: var(--co-fg-2);
+  line-height: 19px;
+}
+
+.osp-overlay .co-field {
+  width: 100%;
+  height: 34px;
+  margin-bottom: 12px;
+  padding: 0 10px;
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-2);
+  background: var(--co-bg-2);
+  color: var(--co-fg);
+  font: inherit;
+  outline: none;
+  transition: border-color 0.14s, background 0.14s;
+}
+.osp-overlay .co-field::placeholder { color: var(--co-fg-3); }
+.osp-overlay .co-field:focus { border-color: var(--co-pin); background: var(--co-bg); }
+
+.osp-overlay .co-submit {
+  width: 100%;
+  height: 34px;
+  border: 0;
+  border-radius: var(--co-r-2);
+  background: var(--co-pin);
+  color: #fff;
+  font: inherit;
+  font-weight: 550;
+  transition: background 0.14s, opacity 0.14s;
+}
+.osp-overlay .co-submit:hover:not(:disabled) { background: var(--co-ink); }
+.osp-overlay .co-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Deeper and duller than the mark ink, so the one irreversible button in
+   here is never mistaken for the colour that merely means "open". */
+.osp-overlay .co-submit[data-danger] { background: var(--co-danger); }
+.osp-overlay .co-submit[data-danger]:hover:not(:disabled) { background: #751509; }
+
+/* --- motion, for people who have asked for less of it ------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .osp-overlay *,
+  .osp-overlay *::before,
+  .osp-overlay *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 `;
