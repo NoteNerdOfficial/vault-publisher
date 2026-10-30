@@ -14,12 +14,12 @@ import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
  *
  * The goal the whole project is measured against is that setup is simple,
  * so this is grouped by how often a section is wanted rather than by which
- * part of the code owns each field. The two sections with buttons in them --
- * publish, and the review overlay that reads a preview -- lead, because they
- * are used on every pass; the setup under them is still in first-run order,
- * connect then choose what to publish then choose how it looks, and is what
- * the checklist points at while any of it is unfinished. `display` says more
- * about why that way round.
+ * part of the code owns each field. One block at the top holds the whole
+ * working loop -- build a preview, open it, publish -- and changes what it
+ * says with the state of setup rather than where it sits; everything under
+ * it is configuration, ordered by what reaches a working preview soonest.
+ * `display` says more about why that way round, and `renderActions` about
+ * the block.
  *
  * Two things it deliberately does:
  *
@@ -186,20 +186,32 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * from scratch rather than patched, and `display` is what every one of
    * those handlers calls.
    *
-   * **Publish and Review lead, setup follows.** This panel is two things at
-   * once: the place a site is set up, which happens once, and the place it is
-   * built, previewed and reviewed, which happens every time. Putting the
-   * one-time half first meant scrolling past it forever, so the two sections
-   * holding buttons someone actually presses are at the top and next to each
-   * other, in the order the work is done: build, then read the build. The
-   * setup below them is still in first-run order -- connect, choose what,
-   * choose how it looks -- and is still what the checklist above points at
-   * while any of it is unfinished.
+   * **One block of actions on top, setup under it.** This panel is two things
+   * at once: the place a site is set up, which happens once, and the place it
+   * is built, previewed and published, which happens every time. Putting the
+   * one-time half first meant scrolling past it forever; putting a live
+   * Publish button first meant the very first thing a new reader saw was a
+   * button that could only fail.
    *
-   * Issue tracker follows Review because it is part of reviewing. It used to
-   * be drawn from inside `renderReview`, which put a section that can run to
-   * a dozen Jira fields between the Open button and the Publish button --
-   * the two rows most likely to be wanted together.
+   * So the top is a single block that holds the whole working loop -- build a
+   * preview, open it, publish -- and changes what it says rather than where
+   * it sits. Before setup is finished it leads with what is still missing and
+   * each action carries the reason it cannot run yet; afterwards the
+   * checklist is gone and the actions are live. The block never moves, so
+   * nobody has to relearn where the buttons are the day something becomes
+   * unset. `renderActions` has the detail.
+   *
+   * **The setup below it is in the order that reaches something real
+   * fastest.** Not "connect, choose, look" -- a preview needs no GitHub at
+   * all, only a site name and a scope, so what to publish and how it looks
+   * come first and GitHub is where it belongs: the step before publishing,
+   * and nothing earlier. It also puts the two things Build preview depends on
+   * directly beneath the button.
+   *
+   * Review and Issue tracker are last but for startup behaviour: an optional
+   * way of working rather than part of setup. Issue tracker used to be drawn
+   * from inside `renderReview`, which put a section running to a dozen Jira
+   * fields in the middle of the review settings.
    *
    * The methods below are in the order they were written rather than the
    * order they draw in, so the banners over them name their section instead
@@ -214,13 +226,12 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     this.renderLegacyNotice(containerEl);
-    this.renderFirstRun(containerEl);
-    this.renderPublish(containerEl);
-    this.renderReview(containerEl);
-    this.renderRelay(containerEl);
-    this.renderConnection(containerEl);
+    this.renderActions(containerEl);
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
+    this.renderConnection(containerEl);
+    this.renderReview(containerEl);
+    this.renderRelay(containerEl);
     this.renderAutomation(containerEl);
 
     this.restoreScroll(marks);
@@ -299,28 +310,105 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   }
 
   /**
-   * A checklist, shown only until setup is finished.
+   * What setup still needs, in the order it is worth doing.
    *
-   * Three screens was the goal, and three screens for someone who has already
-   * set the thing up is two screens too many. So this is not a wizard that
-   * must be clicked through: it is a short list of what is still missing,
-   * which disappears once nothing is.
+   * Name and scope first, then the GitHub pair, because that is the order in
+   * which each step buys something: with the first two a preview builds and
+   * can be read, and the token and repository are only ever needed by the
+   * last step. The old order asked for a personal access token before the
+   * reader had seen a single page of their own site.
+   *
+   * `reach` is what the step unlocks, and is how the list can say that
+   * stopping halfway is a sensible place to stop.
    */
-  private renderFirstRun(root: HTMLElement): void {
+  private setupSteps(): Array<{ done: boolean; text: string; reach: "preview" | "publish" }> {
     const { github, site } = this.host.settings;
-    const steps: { done: boolean; text: string }[] = [
-      { done: Boolean(github.token), text: "Add a GitHub token" },
-      { done: Boolean(github.owner && github.repo), text: "Name the repository to publish to" },
-      { done: Boolean(site.siteName), text: "Give the site a name" },
-      { done: isScopeChosen(site), text: "Choose what to publish" },
+    return [
+      { done: Boolean(site.siteName), text: "Give the site a name", reach: "preview" },
+      { done: isScopeChosen(site), text: "Choose what to publish", reach: "preview" },
+      { done: Boolean(github.token), text: "Add a GitHub token", reach: "publish" },
+      {
+        done: Boolean(github.owner && github.repo),
+        text: "Name the repository to publish to",
+        reach: "publish",
+      },
     ];
-    if (steps.every((step) => step.done)) return;
+  }
 
-    new Setting(root).setName("Finish setting up").setHeading();
+  /**
+   * The whole working loop, in one block at the top of the panel.
+   *
+   * Build a preview, open it, publish it: three actions that used to be in
+   * two sections with the review overlay's settings between them, which made
+   * the preview loop something you had to already know in order to find.
+   *
+   * It has two states and one position. While setup is unfinished it leads
+   * with the short list of what is missing and every action says what is
+   * stopping it; once setup is done the list is gone and the actions are
+   * live. Nothing is reordered between the two, because a settings panel
+   * that rearranges itself costs a returning reader more than it saves a new
+   * one -- and the state can go backwards, when a token stops being readable
+   * or a scope is unset.
+   *
+   * The actions report rather than refuse. Each of them already checked its
+   * own preconditions and answered a failed press with a Notice; saying the
+   * same thing on the row, before the press, is the same sentence delivered
+   * where it can still be acted on.
+   */
+  private renderActions(root: HTMLElement): void {
+    const steps = this.setupSteps();
+    const ready = steps.every((step) => step.done);
 
+    new Setting(root)
+      .setName(ready ? "Preview and publish" : "Get started")
+      .setHeading();
+
+    if (!ready) this.renderChecklist(root, steps);
+
+    this.progressEl = root.createDiv();
+    this.progressEl.style.cssText =
+      "font-size:0.9em;margin:0 0 0.75em;min-height:1.3em;color:var(--text-muted);";
+
+    const track = root.createDiv();
+    track.style.cssText =
+      "height:4px;border-radius:2px;background:var(--background-modifier-border);margin:0 0 1.25em;overflow:hidden;";
+    this.progressBar = track.createDiv();
+    this.progressBar.style.cssText =
+      "height:100%;width:0;background:var(--interactive-accent);transition:width 120ms linear;";
+
+    // The sink stays registered for the life of the tab: a publish started
+    // from here keeps reporting even if the user scrolls away, and a publish
+    // started from the command palette fills this in if the tab is open.
+    this.host.progress = (step, done, total) => {
+      if (this.progressEl) this.progressEl.setText(step);
+      if (this.progressBar) {
+        const pct =
+          done !== undefined && total ? Math.round((done / total) * 100) : null;
+        this.progressBar.style.width = pct === null ? "100%" : `${pct}%`;
+        this.progressBar.style.opacity = pct === null ? "0.35" : "1";
+      }
+    };
+
+    this.renderBuildRow(root);
+    this.renderOpenRow(root);
+    this.renderPublishRow(root);
+  }
+
+  /**
+   * The steps still to do, and the two the preview alone needs.
+   *
+   * Done steps stay on the list struck through rather than disappearing from
+   * it. A list that shortens as it is worked through tells you how much is
+   * left; a list that also keeps what is finished tells you how far along you
+   * are, and on a four-item list that costs two lines.
+   */
+  private renderChecklist(
+    root: HTMLElement,
+    steps: Array<{ done: boolean; text: string; reach: "preview" | "publish" }>,
+  ): void {
     const list = root.createEl("ol");
     list.style.cssText =
-      "margin:-0.5em 0 1.5em;padding-left:1.4em;font-size:0.9em;line-height:1.8;";
+      "margin:-0.5em 0 1em;padding-left:1.4em;font-size:0.9em;line-height:1.8;";
     for (const step of steps) {
       const item = list.createEl("li");
       item.setText(step.done ? `${step.text} — done` : step.text);
@@ -329,10 +417,166 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     }
 
     const note = root.createDiv();
-    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-1em 0 1.5em;";
+    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:0 0 1.5em;";
+    // The useful half of the list is that it has a halfway point. Someone who
+    // only wants to see their vault as a site never has to finish it.
     note.setText(
-      "The repository is created for you on the first publish, and GitHub Pages is switched on automatically.",
+      "The first two are all a preview needs — nothing is sent anywhere until " +
+        "you publish. The repository is created for you on the first publish, " +
+        "and GitHub Pages is switched on automatically.",
     );
+  }
+
+  /** Why a preview cannot be built yet, or null when it can. */
+  private previewBlocked(): string | null {
+    return isScopeChosen(this.host.settings.site)
+      ? null
+      : "Choose what to publish, below, and this will build.";
+  }
+
+  /**
+   * Why a publish cannot run yet, or null when it can.
+   *
+   * The same conditions `publish` itself checks, in the same order, so the
+   * row and the Notice can never disagree about what is wrong. A token that
+   * is present but unreadable is reported as itself: the remedy there is to
+   * restart Obsidian, not to paste a new token.
+   */
+  private publishBlocked(): string | null {
+    const { github, site } = this.host.settings;
+    if (!github.token) {
+      return (
+        describeTokenState(this.host.tokenState) ??
+        "Add a GitHub token, below, and this will publish."
+      );
+    }
+    if (!github.owner || !github.repo) {
+      return "Name the repository to publish to, below, and this will publish.";
+    }
+    if (!isScopeChosen(site)) {
+      return "Choose what to publish, below, and this will publish.";
+    }
+    return null;
+  }
+
+  private renderBuildRow(root: HTMLElement): void {
+    const why = this.previewBlocked();
+
+    new Setting(root)
+      .setName("Build a preview")
+      .setDesc(
+        why ??
+          "Renders the site into a folder in this vault. Nothing is sent to GitHub.",
+      )
+      .addButton((button) => {
+        button.setButtonText("Build preview");
+        if (why) {
+          button.setDisabled(true);
+          return;
+        }
+        button.onClick(async () => {
+          button.setDisabled(true);
+          this.setProgress("Starting…");
+          try {
+            await this.host.buildToPreview();
+            this.setProgress("Preview built.");
+          } catch (error) {
+            this.setProgress("Build failed.");
+            new Notice(`Build failed: ${error instanceof Error ? error.message : error}`);
+          } finally {
+            button.setDisabled(false);
+          }
+        });
+      });
+  }
+
+  /**
+   * Opening the built preview in a browser.
+   *
+   * Out here rather than inside the Review section, where it used to be.
+   * `openPreview` has never needed the review overlay -- it serves the
+   * preview folder and opens it -- but it was only drawn when the overlay was
+   * switched on, so anyone who had not turned on commenting had no way to
+   * look at their own preview from this panel at all.
+   *
+   * It is not gated on a preview existing, because knowing whether one does
+   * means reading the vault and this draws synchronously. Pressing it with
+   * nothing built says so, and says to build one.
+   */
+  private renderOpenRow(root: HTMLElement): void {
+    const running = this.host.reviewServerAddress;
+
+    new Setting(root)
+      .setName("Open the preview")
+      .setDesc(
+        "Serves the built preview from this computer and opens it in your " +
+          "browser. Nothing outside this machine can reach it.",
+      )
+      .addButton((button) =>
+        button
+          .setButtonText(running ? "Open again" : "Open")
+          .onClick(async () => {
+            button.setDisabled(true);
+            try {
+              await this.host.openPreview();
+            } finally {
+              button.setDisabled(false);
+              this.display();
+            }
+          }),
+      );
+
+    // Said plainly, because a listening socket the user did not know about is
+    // exactly the sort of thing a plugin should not keep to itself.
+    const state = root.createDiv();
+    state.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
+    state.setText(
+      running
+        ? `Serving on ${running.url.split("?")[0]} \u2014 reachable only from this computer. It stops when you close Obsidian or disable the plugin.`
+        : "Nothing is being served. The server starts when you open a preview, and stops when you close Obsidian.",
+    );
+
+    if (running) {
+      new Setting(root)
+        .setName("Stop serving")
+        .setDesc("Closes the local server. Comments already saved stay in the vault.")
+        .addButton((button) =>
+          button.setButtonText("Stop").onClick(async () => {
+            await this.host.stopReviewServer();
+            this.display();
+          }),
+        );
+    }
+  }
+
+  private renderPublishRow(root: HTMLElement): void {
+    const why = this.publishBlocked();
+
+    new Setting(root)
+      .setName("Publish to GitHub")
+      .setDesc(
+        why ??
+          "Renders every selected note and commits the result. Keep Obsidian open until it finishes.",
+      )
+      .addButton((button) => {
+        button.setButtonText("Publish").setCta();
+        if (why) {
+          button.setDisabled(true);
+          return;
+        }
+        button.onClick(async () => {
+          button.setDisabled(true);
+          this.setProgress("Starting…");
+          try {
+            await this.host.publish();
+          } catch (error) {
+            this.setProgress("Publish failed.");
+            new Notice(`Publish failed: ${error instanceof Error ? error.message : error}`);
+          } finally {
+            button.setDisabled(false);
+          }
+        });
+      });
   }
 
   // -- connect -------------------------------------------------------------
@@ -671,8 +915,13 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
   // -- how it looks --------------------------------------------------------
 
+  /**
+   * Named "Appearance" rather than "Theme" because this panel is inside
+   * Obsidian's own settings, where "theme" already means the one the reader
+   * is looking at rather than the one their site will be built with.
+   */
   private renderTheme(root: HTMLElement): void {
-    new Setting(root).setName("Theme").setHeading();
+    new Setting(root).setName("Appearance").setHeading();
 
     const site = this.host.settings.site;
 
@@ -849,55 +1098,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const note = root.createDiv();
     note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
     note.setText(
-      "Build a preview, then open it below. Comments you leave are saved " +
-        "straight into the review folder in this vault, and are there again " +
-        "the next time you open the preview \u2014 in any browser.",
+      "Build a preview and open it from Preview and publish, at the top. " +
+        "Comments you leave are saved straight into the review folder in this " +
+        "vault, and are there again the next time you open the preview " +
+        "\u2014 in any browser.",
     );
-
-    const running = this.host.reviewServerAddress;
-
-    new Setting(root)
-      .setName("Open preview in browser")
-      .setDesc(
-        "Serves the built preview from this computer so the overlay can read " +
-          "and write the vault. Nothing outside this machine can reach it.",
-      )
-      .addButton((button) =>
-        button
-          .setButtonText(running ? "Open again" : "Open")
-          .setCta()
-          .onClick(async () => {
-            button.setDisabled(true);
-            try {
-              await this.host.openPreview();
-            } finally {
-              button.setDisabled(false);
-              this.display();
-            }
-          }),
-      );
-
-    // Said plainly, because a listening socket the user did not know about is
-    // exactly the sort of thing a plugin should not keep to itself.
-    const state = root.createDiv();
-    state.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
-    state.setText(
-      running
-        ? `Serving on ${running.url.split("?")[0]} \u2014 reachable only from this computer. It stops when you close Obsidian or disable the plugin.`
-        : "Not running. It starts when you open a preview, and stops when you close Obsidian.",
-    );
-
-    if (running) {
-      new Setting(root)
-        .setName("Stop serving")
-        .setDesc("Closes the local server. Comments already saved stay in the vault.")
-        .addButton((button) =>
-          button.setButtonText("Stop").onClick(async () => {
-            await this.host.stopReviewServer();
-            this.display();
-          }),
-        );
-    }
 
     new Setting(root)
       .setName("Your name")
@@ -1370,76 +1575,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       "font-size:0.85em;opacity:0.8;border-left:2px solid var(--text-warning);padding-left:0.75em;margin:0 0 1em;";
   }
 
-
-  // -- publish -------------------------------------------------------------
-
-  private renderPublish(root: HTMLElement): void {
-    new Setting(root).setName("Publish").setHeading();
-
-    this.progressEl = root.createDiv();
-    this.progressEl.style.cssText =
-      "font-size:0.9em;margin:0 0 0.75em;min-height:1.3em;color:var(--text-muted);";
-
-    const track = root.createDiv();
-    track.style.cssText =
-      "height:4px;border-radius:2px;background:var(--background-modifier-border);margin:0 0 1.25em;overflow:hidden;";
-    this.progressBar = track.createDiv();
-    this.progressBar.style.cssText =
-      "height:100%;width:0;background:var(--interactive-accent);transition:width 120ms linear;";
-
-    // The sink stays registered for the life of the tab: a publish started
-    // from here keeps reporting even if the user scrolls away, and a publish
-    // started from the command palette fills this in if the tab is open.
-    this.host.progress = (step, done, total) => {
-      if (this.progressEl) this.progressEl.setText(step);
-      if (this.progressBar) {
-        const pct =
-          done !== undefined && total ? Math.round((done / total) * 100) : null;
-        this.progressBar.style.width = pct === null ? "100%" : `${pct}%`;
-        this.progressBar.style.opacity = pct === null ? "0.35" : "1";
-      }
-    };
-
-    new Setting(root)
-      .setName("Build a preview")
-      .setDesc("Renders the site into a folder in this vault without sending anything to GitHub.")
-      .addButton((button) =>
-        button.setButtonText("Build preview").onClick(async () => {
-          button.setDisabled(true);
-          this.setProgress("Starting…");
-          try {
-            await this.host.buildToPreview();
-            this.setProgress("Preview built.");
-          } catch (error) {
-            this.setProgress("Build failed.");
-            new Notice(`Build failed: ${error instanceof Error ? error.message : error}`);
-          } finally {
-            button.setDisabled(false);
-          }
-        }),
-      );
-
-    new Setting(root)
-      .setName("Publish to GitHub")
-      .setDesc("Renders every selected note and commits the result. Keep Obsidian open until it finishes.")
-      .addButton((button) =>
-        button
-          .setButtonText("Publish")
-          .setCta()
-          .onClick(async () => {
-            button.setDisabled(true);
-            this.setProgress("Starting…");
-            try {
-              await this.host.publish();
-            } catch (error) {
-              this.setProgress("Publish failed.");
-              new Notice(`Publish failed: ${error instanceof Error ? error.message : error}`);
-            } finally {
-              button.setDisabled(false);
-            }
-          }),
-      );
-  }
 
   // -- what happens without anyone pressing a button -----------------------
 
