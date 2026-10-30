@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 /**
  * Not a test of behaviour: a way to look at the real overlay.
  *
