@@ -57,6 +57,32 @@ const OFFERED_MODES: { value: AutoRunMode; label: string }[] = [
   { value: "publish", label: "Publish to GitHub" },
 ];
 
+/**
+ * Spacing for the prose that sits between settings rows.
+ *
+ * Every one of these blocks used to carry its own negative top margin, to
+ * pull it up under the row above and close the gap Obsidian's default theme
+ * leaves there. That only works in a theme whose rows are separated by a
+ * rule. Plenty of themes draw each row as a card instead, and a negative
+ * margin there does not close a gap -- it drives the paragraph into the
+ * bottom edge of the card above it.
+ *
+ * So nothing reaches above its own box any more, and there is one
+ * definition rather than eight copies to drift apart. Symmetric positive
+ * spacing is the one arrangement that reads correctly whether the thing
+ * above is a rule or a card.
+ */
+const NOTE_STYLE = "font-size:0.85em;opacity:0.75;margin:0.9em 0 1.1em;";
+
+/**
+ * The same, in the warning voice. A 1px rule rather than the 2px it was: at
+ * two it reads as a decorated card of its own, and the colour already says
+ * this one is different.
+ */
+const WARNING_STYLE =
+  "font-size:0.85em;opacity:0.85;border-left:1px solid var(--text-warning);" +
+  "padding-left:0.75em;margin:0.9em 0 1.1em;";
+
 /** What the Jira credential field is called, per way of signing in. */
 const JIRA_CREDENTIAL_NAME_UI: Record<JiraAuth, string> = {
   cloud: "API token",
@@ -209,9 +235,12 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * directly beneath the button.
    *
    * Review and Issue tracker are last but for startup behaviour: an optional
-   * way of working rather than part of setup. Issue tracker used to be drawn
-   * from inside `renderReview`, which put a section running to a dozen Jira
-   * fields in the middle of the review settings.
+   * way of working rather than part of setup. Neither exists at all until the
+   * overlay is switched on, and the switch for that is up in the action
+   * block, attached to the build it is an argument to -- see
+   * `renderBuildRow`. Issue tracker used to be drawn from inside
+   * `renderReview`, which put a section running to a dozen Jira fields in the
+   * middle of the review settings.
    *
    * The methods below are in the order they were written rather than the
    * order they draw in, so the banners over them name their section instead
@@ -365,13 +394,26 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     if (!ready) this.renderChecklist(root, steps);
 
-    this.progressEl = root.createDiv();
-    this.progressEl.style.cssText =
-      "font-size:0.9em;margin:0 0 0.75em;min-height:1.3em;color:var(--text-muted);";
+    /*
+     * The progress readout, which is not on screen until there is progress.
+     *
+     * It used to be drawn always: an empty line of reserved height and a 4px
+     * empty track, directly under the heading. With nothing building, that
+     * is a stray grey rule and a band of dead space at the top of the panel
+     * -- and the rule reads as a section divider, which is the one thing it
+     * is not. So the whole readout is hidden until the first report arrives
+     * and stays up afterwards, holding whatever it last said.
+     */
+    const readout = root.createDiv();
+    readout.style.cssText = "display:none;margin:0.2em 0 1.25em;";
 
-    const track = root.createDiv();
+    this.progressEl = readout.createDiv();
+    this.progressEl.style.cssText =
+      "font-size:0.9em;margin:0 0 0.5em;color:var(--text-muted);";
+
+    const track = readout.createDiv();
     track.style.cssText =
-      "height:4px;border-radius:2px;background:var(--background-modifier-border);margin:0 0 1.25em;overflow:hidden;";
+      "height:4px;border-radius:2px;background:var(--background-modifier-border);overflow:hidden;";
     this.progressBar = track.createDiv();
     this.progressBar.style.cssText =
       "height:100%;width:0;background:var(--interactive-accent);transition:width 120ms linear;";
@@ -380,6 +422,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // from here keeps reporting even if the user scrolls away, and a publish
     // started from the command palette fills this in if the tab is open.
     this.host.progress = (step, done, total) => {
+      readout.style.display = "block";
       if (this.progressEl) this.progressEl.setText(step);
       if (this.progressBar) {
         const pct =
@@ -408,7 +451,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   ): void {
     const list = root.createEl("ol");
     list.style.cssText =
-      "margin:-0.5em 0 1em;padding-left:1.4em;font-size:0.9em;line-height:1.8;";
+      "margin:0.4em 0 0.8em;padding-left:1.4em;font-size:0.9em;line-height:1.8;";
     for (const step of steps) {
       const item = list.createEl("li");
       item.setText(step.done ? `${step.text} — done` : step.text);
@@ -416,11 +459,10 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       if (step.done) item.style.textDecoration = "line-through";
     }
 
-    const note = root.createDiv();
-    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:0 0 1.5em;";
     // The useful half of the list is that it has a halfway point. Someone who
     // only wants to see their vault as a site never has to finish it.
-    note.setText(
+    this.note(
+      root,
       "The first two are all a preview needs — nothing is sent anywhere until " +
         "you publish. The repository is created for you on the first publish, " +
         "and GitHub Pages is switched on automatically.",
@@ -459,14 +501,36 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     return null;
   }
 
+  /**
+   * Building a preview, and the one choice that changes what gets built.
+   *
+   * The overlay toggle lives here rather than down in the Review section
+   * because that is what it actually is: `buildToPreview` reads it on the way
+   * past and hands the build a review layer or nothing. It was filed as a
+   * feature of reviewing, which put the argument several sections away from
+   * the button that consumes it, and left the button's own description
+   * describing something it might not be about to do.
+   *
+   * So the row says which of the two builds it is about to make, and the
+   * switch for that sits directly under it, indented, because an option that
+   * belongs to one action should be impossible to read as belonging to the
+   * panel. Under the button rather than over it: the action is what someone
+   * opened this panel for and should stay the first thing in it, and a row
+   * that names its own state does not need the switch read first to be
+   * understood.
+   */
   private renderBuildRow(root: HTMLElement): void {
     const why = this.previewBlocked();
+    const overlay = this.host.settings.commentOverlay;
 
     new Setting(root)
       .setName("Build a preview")
       .setDesc(
         why ??
-          "Renders the site into a folder in this vault. Nothing is sent to GitHub.",
+          (overlay.enabled
+            ? "Renders the site into a folder in this vault, with the review " +
+              "overlay on it. Nothing is sent to GitHub."
+            : "Renders the site into a folder in this vault. Nothing is sent to GitHub."),
       )
       .addButton((button) => {
         button.setButtonText("Build preview");
@@ -488,6 +552,31 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }
         });
       });
+
+    // Left exactly as the theme draws any other row. An earlier version
+    // stripped its top border and indented it, to make it look like part of
+    // the card above; in a theme that draws rows as cards that produced an
+    // indented card with its top padding gone, misaligned against every
+    // neighbour. What ties it to the build is that it sits directly under it
+    // and that the build row says which of the two builds it will make --
+    // neither of which depends on a theme cooperating.
+    new Setting(root)
+      .setName("Include a review overlay")
+      .setDesc(
+        "A comment layer on the build, so you can pin notes to a paragraph " +
+          "while reading it. Never added to a published site, and your " +
+          "readers never see it.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(overlay.enabled).onChange(async (value) => {
+          overlay.enabled = value;
+          await this.host.saveSettings();
+          // Redrawn because this is also what decides whether the Review
+          // section below exists at all, and what the row above it says.
+          this.display();
+        }),
+      );
+
   }
 
   /**
@@ -508,9 +597,19 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     new Setting(root)
       .setName("Open the preview")
+      // The server's state belongs to this row, so it is said in this row.
+      // It used to be a bare line underneath, pulled up by a negative
+      // margin, which left it jammed against the row above and hanging
+      // outside the inset every other piece of text in the panel sits in.
+      // A listening socket is worth saying plainly; it is not worth its own
+      // paragraph.
       .setDesc(
-        "Serves the built preview from this computer and opens it in your " +
-          "browser. Nothing outside this machine can reach it.",
+        running
+          ? `Serving on ${running.url.split("?")[0]} — reachable only from this ` +
+              "computer. It stops when you close Obsidian or disable the plugin."
+          : "Serves the built preview from this computer and opens it in your " +
+              "browser. Nothing outside this machine can reach it, and the " +
+              "server stops when you close Obsidian.",
       )
       .addButton((button) =>
         button
@@ -525,16 +624,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             }
           }),
       );
-
-    // Said plainly, because a listening socket the user did not know about is
-    // exactly the sort of thing a plugin should not keep to itself.
-    const state = root.createDiv();
-    state.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
-    state.setText(
-      running
-        ? `Serving on ${running.url.split("?")[0]} \u2014 reachable only from this computer. It stops when you close Obsidian or disable the plugin.`
-        : "Nothing is being served. The server starts when you open a preview, and stops when you close Obsidian.",
-    );
 
     if (running) {
       new Setting(root)
@@ -608,21 +697,16 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // the field looks empty and the remedy is not to paste a new token.
     const trouble = describeTokenState(this.host.tokenState);
     if (trouble) {
-      const notice = root.createDiv({ cls: "osp-settings-warning" });
-      notice.setText(trouble);
-      notice.style.cssText =
-        "font-size:0.85em;opacity:0.8;border-left:2px solid var(--text-warning);padding-left:0.75em;margin:0 0 1em;";
+      this.warning(root, trouble);
     }
 
     if (storageMode() === "plaintext") {
-      const warning = root.createDiv({ cls: "osp-settings-warning" });
-      warning.setText(
+      this.warning(
+        root,
         "This platform does not offer encrypted storage, so the token is " +
           "saved as plain text in this vault. Use a fine-grained token " +
           "limited to the one repository you publish to.",
       );
-      warning.style.cssText =
-        "font-size:0.85em;opacity:0.8;border-left:2px solid var(--text-warning);padding-left:0.75em;margin:0 0 1em;";
     }
 
     new Setting(root)
@@ -644,7 +728,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       );
 
     this.statusEl = root.createDiv({ cls: "osp-settings-status" });
-    this.statusEl.style.cssText = "font-size:0.9em;margin:-0.5em 0 1.5em;min-height:1.2em;";
+    this.statusEl.style.cssText = "font-size:0.9em;margin:0.9em 0 1.1em;min-height:1.2em;";
 
     new Setting(root)
       .setName("Repository")
@@ -932,7 +1016,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const chosen = getTheme(site.theme).name;
 
     const description = root.createDiv();
-    description.style.cssText = "font-size:0.9em;opacity:0.75;margin:-0.5em 0 1.5em;";
+    description.style.cssText = NOTE_STYLE;
 
     const describe = (name: string) => {
       description.setText(getTheme(name).description);
@@ -944,7 +1028,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         `This site was set to "${site.theme}", which is no longer one of the themes. It will build as ${getTheme(chosen).label} until you pick another.`,
       );
       notice.style.cssText =
-        "font-size:0.9em;margin:-0.5em 0 1em;padding:0.6em 0.8em;border-radius:6px;" +
+        "font-size:0.9em;margin:0.9em 0 1.1em;padding:0.6em 0.8em;border-radius:6px;" +
         "background:var(--background-modifier-error-hover);color:var(--text-normal);";
     }
 
@@ -1076,32 +1160,19 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   private renderReview(root: HTMLElement): void {
     const overlay = this.host.settings.commentOverlay;
 
-    new Setting(root).setName("Review").setHeading();
-
-    new Setting(root)
-      .setName("Add a review overlay to previews")
-      .setDesc(
-        "Puts a comment layer on preview builds, so you can pin notes to a " +
-          "paragraph while reading the built site. It is never added to a " +
-          "published site, and your readers never see it.",
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(overlay.enabled).onChange(async (value) => {
-          overlay.enabled = value;
-          await this.host.saveSettings();
-          this.display();
-        }),
-      );
-
+    // Nothing here until there is an overlay to configure. The switch that
+    // turns one on is up with Build a preview, where it is an argument to
+    // the build rather than a feature of its own, so this whole section
+    // comes and goes with it instead of standing empty behind one toggle.
     if (!overlay.enabled) return;
 
-    const note = root.createDiv();
-    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
-    note.setText(
-      "Build a preview and open it from Preview and publish, at the top. " +
-        "Comments you leave are saved straight into the review folder in this " +
+    new Setting(root).setName("Review").setHeading();
+
+    this.note(
+      root,
+      "Comments you leave are saved straight into the review folder in this " +
         "vault, and are there again the next time you open the preview " +
-        "\u2014 in any browser.",
+        "— in any browser.",
     );
 
     new Setting(root)
@@ -1563,16 +1634,16 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
   /** A line of explanation under a setting, in the panel's quiet voice. */
   private note(root: HTMLElement, text: string): void {
-    const note = root.createDiv();
-    note.style.cssText = "font-size:0.85em;opacity:0.75;margin:-0.6em 0 1.2em;";
+    const note = root.createDiv({ cls: "osp-settings-note" });
+    note.style.cssText = NOTE_STYLE;
     note.setText(text);
   }
 
+  /** The same, for something the reader has to act on. */
   private warning(root: HTMLElement, text: string): void {
     const notice = root.createDiv({ cls: "osp-settings-warning" });
     notice.setText(text);
-    notice.style.cssText =
-      "font-size:0.85em;opacity:0.8;border-left:2px solid var(--text-warning);padding-left:0.75em;margin:0 0 1em;";
+    notice.style.cssText = WARNING_STYLE;
   }
 
 

@@ -151,7 +151,16 @@ describe("how the panel is ordered", () => {
       "What to publish",
       "Appearance",
       "GitHub",
+      "On startup",
+    ]);
+    // Review appears below GitHub once there is an overlay to configure.
+    expect(sections(render({ overlay: { enabled: true } }))).toEqual([
+      "Preview and publish",
+      "What to publish",
+      "Appearance",
+      "GitHub",
       "Review",
+      "Issue tracker",
       "On startup",
     ]);
   });
@@ -165,7 +174,6 @@ describe("how the panel is ordered", () => {
       "What to publish",
       "Appearance",
       "GitHub",
-      "Review",
       "On startup",
     ]);
   });
@@ -181,6 +189,52 @@ describe("how the panel is ordered", () => {
     expect(sections(render())).not.toContain("Issue tracker");
     const on = sections(render({ overlay: { enabled: true } }));
     expect(on.indexOf("Issue tracker")).toBe(on.indexOf("Review") + 1);
+  });
+});
+
+/**
+ * The overlay switch is an argument to the build, not a feature of its own:
+ * `buildToPreview` reads it on the way past and hands the build a review
+ * layer or nothing. These are the three things that has to mean.
+ */
+describe("the review overlay, as a build option", () => {
+  /** Every row in the panel, by name, in the order it is drawn. */
+  function rows(root: HTMLElement): string[] {
+    return Array.from(root.querySelectorAll(".setting-item")).map(
+      (node) => node.querySelector(".setting-item-name")?.textContent ?? "",
+    );
+  }
+
+  it("sits with the build button, not in a section of its own", () => {
+    const names = rows(render());
+    expect(names.indexOf("Include a review overlay")).toBe(
+      names.indexOf("Build a preview") + 1,
+    );
+    // And is no longer anywhere near the review settings.
+    expect(names).not.toContain("Add a review overlay to previews");
+  });
+
+  // A button whose row describes a build it is not about to make is the
+  // thing that put the switch three sections away in the first place.
+  it("changes what the build row says it will build", () => {
+    expect(desc(render(), "Build a preview")).toBe(
+      "Renders the site into a folder in this vault. Nothing is sent to GitHub.",
+    );
+    expect(desc(render({ overlay: { enabled: true } }), "Build a preview")).toContain(
+      "with the review overlay on it",
+    );
+  });
+
+  // Turning it on is what brings the review settings into existence; off,
+  // there is no section standing empty behind one switch.
+  it("is the only trace of reviewing until it is on", () => {
+    const off = render();
+    expect(row(off, "Review folder")).toBeNull();
+    expect(row(off, "Import review comments")).toBeNull();
+
+    const on = render({ overlay: { enabled: true } });
+    expect(row(on, "Review folder")).not.toBeNull();
+    expect(row(on, "Import review comments")).not.toBeNull();
   });
 });
 
@@ -271,17 +325,92 @@ describe("opening the preview", () => {
     expect(button(render({ overlay: { enabled: true } }), "Open the preview")).not.toBeNull();
   });
 
+  // The state belongs to the row, so it is said in the row's own
+  // description rather than in a bare line underneath it: a paragraph
+  // outside a settings row sits outside the inset every other piece of text
+  // in the panel lines up with, and under a card-drawing theme it collides
+  // with the card above.
   it("says where it is serving, and offers to stop, only while it is", () => {
     const quiet = render();
-    expect(quiet.textContent).toContain("Nothing is being served");
+    expect(desc(quiet, "Open the preview")).toContain("Nothing outside this machine");
     expect(row(quiet, "Stop serving")).toBeNull();
 
     const live = render({ serving: true });
-    expect(live.textContent).toContain("Serving on http://127.0.0.1:7331/");
-    // The token the server hands out on the first request is not a thing to
-    // print back at the reader.
-    expect(live.textContent).not.toContain("t=abc");
+    expect(desc(live, "Open the preview")).toContain("Serving on http://127.0.0.1:7331/");
     expect(row(live, "Stop serving")).not.toBeNull();
+  });
+
+  // The token the server hands out on the first request is not a thing to
+  // print back at the reader.
+  it("keeps the server's token out of what it prints", () => {
+    expect(render({ serving: true }).textContent).not.toContain("t=abc");
+  });
+});
+
+/**
+ * The panel is drawn with Obsidian's own `Setting` rows and some prose
+ * between them, and the prose is the part that can be got wrong: it is
+ * hand-styled, and what it has to sit against is the theme's business.
+ *
+ * Default Obsidian separates rows with a rule. Plenty of themes draw each
+ * row as a card instead. A negative top margin closes the gap under a rule
+ * and drives the paragraph into the bottom edge of a card, so there is no
+ * value that works for both -- only zero or more does.
+ */
+describe("the spacing between rows", () => {
+  /** Every element in the panel that is hand-styled rather than a row. */
+  function loose(root: HTMLElement): HTMLElement[] {
+    return Array.from(root.querySelectorAll("[style]")).filter(
+      (node) => !node.closest(".setting-item"),
+    ) as HTMLElement[];
+  }
+
+  it("never pulls a block up into whatever is above it", () => {
+    // Drawn with everything turned on, so every optional block is present.
+    const root = render({
+      overlay: { enabled: true },
+      site: { siteName: "", folder: null },
+      github: { token: "", owner: "", repo: "" },
+      tokenState: "locked",
+      serving: true,
+    });
+
+    const pulled = loose(root)
+      .map((node) => node.style.marginTop)
+      .filter((value) => value.startsWith("-"));
+
+    expect(pulled).toEqual([]);
+  });
+
+  // A 2px coloured rule reads as a decorated card of its own; the colour is
+  // already saying this one is different.
+  it("marks a warning with a hairline, not a bar", () => {
+    const root = render({ github: { token: "" }, tokenState: "locked" });
+    const warning = root.querySelector(".osp-settings-warning") as HTMLElement;
+
+    expect(warning).not.toBeNull();
+    expect(warning.style.borderLeft).toBe("1px solid var(--text-warning)");
+  });
+
+  // An empty progress line and an empty 4px track, drawn under the heading
+  // before anything has been built, read as a stray section divider over a
+  // band of dead space.
+  it("shows nothing of the progress readout until there is progress", () => {
+    const fake = host();
+    const tab = new VaultPublisherSettingsTab(app(), fake);
+    tab.display();
+
+    const bar = tab.containerEl.querySelector(
+      "[style*='background: var(--interactive-accent)']",
+    ) as HTMLElement;
+    expect(bar).not.toBeNull();
+    const readout = bar.parentElement?.parentElement as HTMLElement;
+    expect(readout.style.display).toBe("none");
+
+    fake.progress?.("Rendering 3 of 40", 3, 40);
+    expect(readout.style.display).toBe("block");
+    expect(readout.textContent).toContain("Rendering 3 of 40");
+    expect(bar.style.width).toBe("8%");
   });
 });
 
