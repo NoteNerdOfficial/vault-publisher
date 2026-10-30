@@ -1,0 +1,53 @@
+/*
+ * Styles for this plugin's own screens inside Obsidian.
+ *
+ * Obsidian loads a plugin's `styles.css` on its own, which is the reason
+ * this file exists rather than more inline styles in `settingsTab.ts`: a
+ * rule here can answer to the theme -- light against dark, an accent the
+ * reader chose -- where an inline style can only hold one value and has to
+ * guess which. The settings panel learned that the hard way with spacing.
+ *
+ * Nothing here touches the published site. That stylesheet is built in
+ * `src/publish/theme.ts` and ships inside the site itself; the two never
+ * meet, and a rule in this file reaching a built page would be a bug.
+ */
+
+/* --- settings: related plugins -----------------------------------------
+   An app-icon tile in front of each row, so a plugin is recognisable by the
+   mark it carries on its own ribbon before its name is read. Dark mode gets
+   a near-black tile, which is how these plugins present themselves; light
+   mode gets an accent tint, because a black block on a pale panel reads as
+   a hole punched in the page rather than as an icon. */
+
+.osp-related-plugin {
+  gap: 14px;
+}
+
+.osp-related-plugin-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: 40px;
+  height: 40px;
+  margin-top: 2px;
+  border-radius: 10px;
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary));
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+}
+
+.theme-dark .osp-related-plugin-icon {
+  background: linear-gradient(180deg, #232323, #161616);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.osp-related-plugin-icon .svg-icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2.25;
+}

@@ -28,6 +28,7 @@ import {
   storageMode,
   tokenForStorage,
 } from "./platform/secrets";
+import { openExternal } from "./platform/openExternal";
 import { AutoRunMode, VaultPublisherSettingsTab } from "./ui/settingsTab";
 import {
   ReviewImportError,
@@ -2030,30 +2031,6 @@ function buildReport(
   }
 
   return lines.join("\n");
-}
-
-/**
- * Opens a URL in the user's own browser rather than an Electron window.
- *
- * `window.open` here would draw the preview inside Obsidian, which defeats
- * the point: the preview exists to be looked at the way a reader will look
- * at it. Electron's shell is reached the same guarded way `secrets.ts`
- * reaches `safeStorage`, since it is the same undocumented bridge.
- */
-function openExternal(url: string): void {
-  try {
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const req: ((id: string) => any) | undefined =
-      (globalThis as any).require ?? (window as any).require;
-    const shell = req?.("electron")?.shell;
-    if (shell?.openExternal) {
-      void shell.openExternal(url);
-      return;
-    }
-  } catch {
-    // Fall through: a window is better than nothing.
-  }
-  window.open(url, "_blank");
 }
 
 /**

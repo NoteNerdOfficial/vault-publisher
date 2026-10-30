@@ -108,6 +108,22 @@ export class TFolder {}
 
 export const apiVersion = "0.0.0-test";
 
+/**
+ * Obsidian's icon painter, which in the app looks a Lucide name up in a
+ * registry and writes an `<svg class="svg-icon">` into the element. Here it
+ * records which name was asked for, so a test can check a row carries the
+ * icon it meant to without the registry existing.
+ */
+export function setIcon(element: HTMLElement, name: string): void {
+  element.setAttribute("data-icon", name);
+  const svg = element.ownerDocument.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "svg",
+  );
+  svg.setAttribute("class", "svg-icon");
+  element.appendChild(svg);
+}
+
 export function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
 }
@@ -179,8 +195,29 @@ export function installObsidianDom(): void {
   proto.setText = function (this: HTMLElement, text: string) {
     this.textContent = text;
   };
+  proto.addClass = function (this: HTMLElement, ...names: string[]) {
+    this.classList.add(...names);
+  };
+  proto.removeClass = function (this: HTMLElement, ...names: string[]) {
+    this.classList.remove(...names);
+  };
   proto.empty = function (this: HTMLElement) {
     while (this.firstChild) this.removeChild(this.firstChild);
+  };
+
+  // Obsidian also exposes `createDiv` as a global, which makes a detached
+  // element rather than appending to one. The real signature is wider than
+  // anything here calls, so this takes the shape that is actually used.
+  (globalThis as Record<string, unknown>).createDiv = (options?: {
+    cls?: string;
+    attr?: Record<string, string>;
+  }) => {
+    const node = document.createElement("div");
+    if (options?.cls) node.className = options.cls;
+    for (const [key, value] of Object.entries(options?.attr ?? {})) {
+      node.setAttribute(key, String(value));
+    }
+    return node;
   };
 }
 

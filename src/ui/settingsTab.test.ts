@@ -2,7 +2,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { installObsidianDom } from "../../test/obsidian-stub";
-import { SettingsHost, VaultPublisherSettingsTab } from "./settingsTab";
+import { RELATED_PLUGINS, SettingsHost, VaultPublisherSettingsTab } from "./settingsTab";
 import type { App } from "obsidian";
 
 /**
@@ -152,6 +152,7 @@ describe("how the panel is ordered", () => {
       "Appearance",
       "GitHub",
       "On startup",
+      "Related plugins",
     ]);
     // Review appears below GitHub once there is an overlay to configure.
     expect(sections(render({ overlay: { enabled: true } }))).toEqual([
@@ -162,6 +163,7 @@ describe("how the panel is ordered", () => {
       "Review",
       "Issue tracker",
       "On startup",
+      "Related plugins",
     ]);
   });
 
@@ -175,6 +177,7 @@ describe("how the panel is ordered", () => {
       "Appearance",
       "GitHub",
       "On startup",
+      "Related plugins",
     ]);
   });
 
@@ -358,11 +361,9 @@ describe("opening the preview", () => {
  * value that works for both -- only zero or more does.
  */
 describe("the spacing between rows", () => {
-  /** Every element in the panel that is hand-styled rather than a row. */
-  function loose(root: HTMLElement): HTMLElement[] {
-    return Array.from(root.querySelectorAll("[style]")).filter(
-      (node) => !node.closest(".setting-item"),
-    ) as HTMLElement[];
+  /** Everything in the panel carrying a hand-written style. */
+  function styled(root: HTMLElement): HTMLElement[] {
+    return Array.from(root.querySelectorAll("[style]")) as HTMLElement[];
   }
 
   it("never pulls a block up into whatever is above it", () => {
@@ -375,18 +376,53 @@ describe("the spacing between rows", () => {
       serving: true,
     });
 
-    const pulled = loose(root)
+    const pulled = styled(root)
       .map((node) => node.style.marginTop)
       .filter((value) => value.startsWith("-"));
 
     expect(pulled).toEqual([]);
   });
 
+  /*
+   * The alignment guarantee, and the reason it is structural rather than a
+   * number. A div dropped into the container sits at the outer edge of a
+   * settings row, while a row insets its own text by whatever padding the
+   * theme gives it -- so prose written as a bare div lines up with the
+   * row's edge and with none of the words in it. Assembling it out of the
+   * elements the theme already styles is what makes the inset the theme's
+   * to decide.
+   */
+  it("builds its prose out of the parts the theme indents", () => {
+    const root = render({ overlay: { enabled: true } });
+    const notes = Array.from(root.querySelectorAll(".osp-settings-note"));
+
+    expect(notes.length).toBeGreaterThan(0);
+    for (const note of notes) {
+      expect(note.classList.contains("setting-item")).toBe(true);
+      expect(note.querySelector(".setting-item-info > .setting-item-description"))
+        .not.toBeNull();
+    }
+
+    // And nothing is left putting prose straight into the container. The
+    // theme specimen is exempt and says so by name: it is a card of its
+    // own, so it lines up with the edges of the rows and not with the text
+    // inside them.
+    const bare = Array.from(root.children).filter(
+      (node) =>
+        !node.classList.contains("setting-item") &&
+        !node.classList.contains("osp-theme-specimen") &&
+        (node.textContent ?? "").length > 40,
+    );
+    expect(bare).toEqual([]);
+  });
+
   // A 2px coloured rule reads as a decorated card of its own; the colour is
   // already saying this one is different.
   it("marks a warning with a hairline, not a bar", () => {
     const root = render({ github: { token: "" }, tokenState: "locked" });
-    const warning = root.querySelector(".osp-settings-warning") as HTMLElement;
+    const warning = root.querySelector(
+      ".osp-settings-warning .setting-item-description",
+    ) as HTMLElement;
 
     expect(warning).not.toBeNull();
     expect(warning.style.borderLeft).toBe("1px solid var(--text-warning)");
@@ -411,6 +447,67 @@ describe("the spacing between rows", () => {
     expect(readout.style.display).toBe("block");
     expect(readout.textContent).toContain("Rendering 3 of 40");
     expect(bar.style.width).toBe("8%");
+  });
+});
+
+/**
+ * The only section that is not about this plugin. It is last on purpose,
+ * and it is a list of links rather than anything that acts: nothing here
+ * reaches the network, reads which plugins are installed, or reports that
+ * it was shown.
+ */
+describe("related plugins", () => {
+  it("comes last, after even the startup behaviour", () => {
+    const order = sections(render());
+    expect(order[order.length - 1]).toBe("Related plugins");
+  });
+
+  it("offers each one as a link out to its community listing", () => {
+    const root = render();
+    const rows = Array.from(root.querySelectorAll(".osp-related-plugin"));
+
+    expect(rows.map((node) => node.querySelector(".setting-item-name")?.textContent)).toEqual([
+      "Convert to Markdown",
+      "Terminus",
+      "AI Skills Manager",
+      "Browser Bookmark",
+      "Working tabs",
+      "Unhidden",
+    ]);
+    for (const node of rows) {
+      expect(node.querySelector("button")?.textContent).toBe("View plugin");
+    }
+  });
+
+  // The mark a plugin carries on its own ribbon, ahead of its name, where a
+  // reader looks for what a row is about. The name is already there for
+  // anything that cannot see it, so the tile is hidden from assistive tech.
+  it("leads each row with an icon tile that is not read aloud", () => {
+    const tiles = Array.from(
+      render().querySelectorAll(".osp-related-plugin-icon"),
+    ) as HTMLElement[];
+
+    expect(tiles.map((node) => node.getAttribute("data-icon"))).toEqual([
+      "file-text",
+      "square-terminal",
+      "shapes",
+      "bookmark",
+      "layout-panel-left",
+      "eye",
+    ]);
+    for (const tile of tiles) {
+      expect(tile.getAttribute("aria-hidden")).toBe("true");
+      // First child of the row, before the name.
+      expect(tile.parentElement?.firstElementChild).toBe(tile);
+    }
+  });
+
+  // Every URL is a community listing, so a typo cannot send someone
+  // somewhere else entirely.
+  it("points only at community.obsidian.md", () => {
+    for (const plugin of RELATED_PLUGINS) {
+      expect(plugin.url).toMatch(/^https:\/\/community\.obsidian\.md\/plugins\/[a-z0-9-]+$/);
+    }
   });
 });
 

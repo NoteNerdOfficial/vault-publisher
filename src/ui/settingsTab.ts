@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
 import { SiteConfig, isScopeChosen, resolveHomeNote, selectNotes } from "../publish/buildSite";
 import {
@@ -8,6 +8,7 @@ import {
   storageMode,
 } from "../platform/secrets";
 import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
+import { openExternal } from "../platform/openExternal";
 
 /**
  * The settings screen.
@@ -58,30 +59,79 @@ const OFFERED_MODES: { value: AutoRunMode; label: string }[] = [
 ];
 
 /**
- * Spacing for the prose that sits between settings rows.
+ * Other plugins worth having alongside this one.
  *
- * Every one of these blocks used to carry its own negative top margin, to
- * pull it up under the row above and close the gap Obsidian's default theme
- * leaves there. That only works in a theme whose rows are separated by a
- * rule. Plenty of themes draw each row as a card instead, and a negative
- * margin there does not close a gap -- it drives the paragraph into the
- * bottom edge of the card above it.
+ * Each entry says what the plugin is and what it has to do with publishing a
+ * vault, rather than repeating the listing's own blurb. A row that only
+ * described the plugin would be an advertisement; the second half of each
+ * sentence is what makes the section worth a reader's time.
  *
- * So nothing reaches above its own box any more, and there is one
- * definition rather than eight copies to drift apart. Symmetric positive
- * spacing is the one arrangement that reads correctly whether the thing
- * above is a rule or a card.
+ * `icon` is the plugin's own ribbon icon where it has one, so a row matches
+ * what the reader will see once it is installed. Convert to Markdown,
+ * Unhidden and AI Skills Manager register no ribbon icon, or register a
+ * custom SVG this plugin cannot reach, so those carry the nearest Lucide
+ * name instead.
  */
-const NOTE_STYLE = "font-size:0.85em;opacity:0.75;margin:0.9em 0 1.1em;";
-
-/**
- * The same, in the warning voice. A 1px rule rather than the 2px it was: at
- * two it reads as a decorated card of its own, and the colour already says
- * this one is different.
- */
-const WARNING_STYLE =
-  "font-size:0.85em;opacity:0.85;border-left:1px solid var(--text-warning);" +
-  "padding-left:0.75em;margin:0.9em 0 1.1em;";
+export const RELATED_PLUGINS: { name: string; desc: string; url: string; icon: string }[] = [
+  {
+    name: "Convert to Markdown",
+    desc:
+      "Turns PDFs, Office and OpenDocument files, EPUBs, web pages and email " +
+      "into Markdown, locally, with nothing uploaded. What it writes is a note " +
+      "like any other, so it is publishable the moment it lands in the vault.",
+    url: "https://community.obsidian.md/plugins/convert-to-markdown",
+    icon: "file-text",
+  },
+  {
+    name: "Terminus",
+    desc:
+      "A real terminal inside Obsidian, with a review workflow for the edits " +
+      "an agent makes. Useful beside a preview: look at what was actually " +
+      "written into the preview folder, or work on the published repository " +
+      "without leaving the vault it is built from.",
+    url: "https://community.obsidian.md/plugins/terminus",
+    icon: "square-terminal",
+  },
+  {
+    name: "AI Skills Manager",
+    desc:
+      "Manages the skills, agents, commands and rules your AI tools run. The " +
+      "review overlay reads comments a tool wrote into the review file and " +
+      "marks them as an agent's, so the agents this manages can mark up a " +
+      "preview build the same way a person does.",
+    url: "https://community.obsidian.md/plugins/ai-skills-manager",
+    icon: "shapes",
+  },
+  {
+    name: "Browser Bookmark",
+    desc:
+      "A bookmarks sidebar that opens saved links in Obsidian's own Web " +
+      "Viewer. Somewhere to keep the published site and its repository, one " +
+      "click from the notes they are built from.",
+    url: "https://community.obsidian.md/plugins/browser-bookmark",
+    icon: "bookmark",
+  },
+  {
+    name: "Working tabs",
+    desc:
+      "Groups open tabs into named spaces you can put away and finish later. " +
+      "A publishing pass sprawls \u2014 the notes being fixed, the review " +
+      "note, the preview \u2014 and this keeps that from becoming the rest " +
+      "of the day's tabs.",
+    url: "https://community.obsidian.md/plugins/working-tabs",
+    icon: "layout-panel-left",
+  },
+  {
+    name: "Unhidden",
+    desc:
+      "Reveals dot-folders like .github and .claude in the file explorer, " +
+      "search and Bases. Worth having when the vault you publish from is also " +
+      "a repository, and the parts of it Obsidian hides are the parts you " +
+      "need to look at.",
+    url: "https://community.obsidian.md/plugins/unhidden",
+    icon: "eye",
+  },
+];
 
 /** What the Jira credential field is called, per way of signing in. */
 const JIRA_CREDENTIAL_NAME_UI: Record<JiraAuth, string> = {
@@ -262,6 +312,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     this.renderReview(containerEl);
     this.renderRelay(containerEl);
     this.renderAutomation(containerEl);
+    this.renderRelatedPlugins(containerEl);
 
     this.restoreScroll(marks);
   }
@@ -449,9 +500,12 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     root: HTMLElement,
     steps: Array<{ done: boolean; text: string; reach: "preview" | "publish" }>,
   ): void {
-    const list = root.createEl("ol");
-    list.style.cssText =
-      "margin:0.4em 0 0.8em;padding-left:1.4em;font-size:0.9em;line-height:1.8;";
+    // One block, not two: the list and the line under it are one thought,
+    // and as two they were two outdented paragraphs instead of one.
+    const body = this.note(root);
+
+    const list = body.createEl("ol");
+    list.style.cssText = "margin:0 0 0.6em;padding-left:1.4em;line-height:1.8;";
     for (const step of steps) {
       const item = list.createEl("li");
       item.setText(step.done ? `${step.text} — done` : step.text);
@@ -461,8 +515,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     // The useful half of the list is that it has a halfway point. Someone who
     // only wants to see their vault as a site never has to finish it.
-    this.note(
-      root,
+    body.createDiv().setText(
       "The first two are all a preview needs — nothing is sent anywhere until " +
         "you publish. The repository is created for you on the first publish, " +
         "and GitHub Pages is switched on automatically.",
@@ -727,8 +780,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         }),
       );
 
-    this.statusEl = root.createDiv({ cls: "osp-settings-status" });
-    this.statusEl.style.cssText = "font-size:0.9em;margin:0.9em 0 1.1em;min-height:1.2em;";
+    this.statusEl = this.note(root, "");
+    this.statusEl.addClass("osp-settings-status");
+    this.statusEl.style.minHeight = "1.2em";
 
     new Setting(root)
       .setName("Repository")
@@ -1015,25 +1069,27 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const retired = site.theme !== undefined && getTheme(site.theme).name !== site.theme;
     const chosen = getTheme(site.theme).name;
 
-    const description = root.createDiv();
-    description.style.cssText = NOTE_STYLE;
+    const description = this.note(root);
 
     const describe = (name: string) => {
       description.setText(getTheme(name).description);
     };
 
     if (retired) {
-      const notice = root.createDiv();
+      const notice = this.note(root);
       notice.setText(
         `This site was set to "${site.theme}", which is no longer one of the themes. It will build as ${getTheme(chosen).label} until you pick another.`,
       );
       notice.style.cssText =
-        "font-size:0.9em;margin:0.9em 0 1.1em;padding:0.6em 0.8em;border-radius:6px;" +
+        "padding:0.6em 0.8em;border-radius:6px;" +
         "background:var(--background-modifier-error-hover);color:var(--text-normal);";
     }
 
-    const preview = root.createDiv();
-    preview.style.cssText = "margin:0 0 1.5em;";
+    // A specimen rather than prose: it is a card of its own, so it lines up
+    // with the edges of the rows around it and not with the text inside
+    // them. The one block in the panel that is right to leave full width.
+    const preview = root.createDiv({ cls: "osp-theme-specimen" });
+    preview.style.cssText = "margin:0.4em 0 1.5em;";
 
     new Setting(root)
       .setName("Style")
@@ -1632,18 +1688,47 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     if (trouble) this.warning(root, trouble);
   }
 
-  /** A line of explanation under a setting, in the panel's quiet voice. */
-  private note(root: HTMLElement, text: string): void {
-    const note = root.createDiv({ cls: "osp-settings-note" });
-    note.style.cssText = NOTE_STYLE;
-    note.setText(text);
+  /**
+   * A block of explanation between rows, built out of the theme's own parts.
+   *
+   * These were plain divs with a hand-written size, opacity and margin. The
+   * margins were the first thing wrong with them and the inset was the
+   * second: a div dropped straight into the container sits at the *outer*
+   * edge of a settings row, while every row insets its own text by whatever
+   * padding the theme gives it. Under a theme that draws rows as cards that
+   * is a visible outdent -- the prose lines up with the card's edge and with
+   * none of the words in it.
+   *
+   * There is no right number to write here, because the padding belongs to
+   * the theme. So the block is assembled from the structure Obsidian styles
+   * -- a `setting-item` holding an info column holding a description -- and
+   * the theme indents, sizes and colours it exactly as it does every other
+   * description in the panel. Nothing here sets any of those.
+   *
+   * Returns the element holding the text, for the two callers that rewrite
+   * it in place rather than redrawing the panel.
+   */
+  private note(root: HTMLElement, text?: string): HTMLElement {
+    const item = root.createDiv({ cls: "setting-item osp-settings-note" });
+    const info = item.createDiv({ cls: "setting-item-info" });
+    const body = info.createDiv({ cls: "setting-item-description" });
+    if (text !== undefined) body.setText(text);
+    return body;
   }
 
-  /** The same, for something the reader has to act on. */
-  private warning(root: HTMLElement, text: string): void {
-    const notice = root.createDiv({ cls: "osp-settings-warning" });
-    notice.setText(text);
-    notice.style.cssText = WARNING_STYLE;
+  /**
+   * The same, for something the reader has to act on.
+   *
+   * A hairline in the warning colour rather than the 2px bar it was: at two
+   * it reads as a decorated card of its own, and the colour is already
+   * saying this one is different.
+   */
+  private warning(root: HTMLElement, text: string): HTMLElement {
+    const body = this.note(root, text);
+    body.parentElement?.parentElement?.addClass("osp-settings-warning");
+    body.style.cssText =
+      "border-left:1px solid var(--text-warning);padding-left:0.75em;color:var(--text-normal);";
+    return body;
   }
 
 
@@ -1706,6 +1791,48 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     if (mode === "publish") {
       what.descEl.style.color = "var(--text-warning)";
+    }
+  }
+
+  // -- what else is worth having -------------------------------------------
+
+  /**
+   * Other plugins that pair with this one.
+   *
+   * Last, and after even the startup behaviour, because it is the only
+   * section that is not about this plugin at all. Somebody scrolling to the
+   * bottom of a settings panel has finished with it; that is the right place
+   * to mention something else, and the wrong place is anywhere above a
+   * control they came here to change.
+   *
+   * Each row is a link out, not an install button. Nothing here reaches the
+   * network, reads which plugins are installed, or reports that it was
+   * shown: it is a list of names in the plugin, and pressing one opens the
+   * community listing in the reader's own browser, where installing is
+   * Obsidian's business and not ours.
+   */
+  private renderRelatedPlugins(root: HTMLElement): void {
+    new Setting(root).setName("Related plugins").setHeading();
+    this.note(root, "Other community plugins that pair well with Vault Publisher.");
+
+    for (const plugin of RELATED_PLUGINS) {
+      const row = new Setting(root)
+        .setName(plugin.name)
+        .setDesc(plugin.desc)
+        .addButton((button) =>
+          button.setButtonText("View plugin").onClick(() => openExternal(plugin.url)),
+        );
+
+      row.settingEl.addClass("osp-related-plugin");
+      // Ahead of the name rather than beside the button: it is the plugin's
+      // own mark, so it belongs where a reader looks for what a row is
+      // about. Hidden from assistive tech, which has the name already.
+      const tile = createDiv({
+        cls: "osp-related-plugin-icon",
+        attr: { "aria-hidden": "true" },
+      });
+      setIcon(tile, plugin.icon);
+      row.settingEl.prepend(tile);
     }
   }
 

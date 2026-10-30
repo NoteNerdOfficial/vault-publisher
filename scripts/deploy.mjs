@@ -101,8 +101,21 @@ const marker = join(target, ".hotreload");
 const markerWasMissing = !existsSync(marker);
 if (markerWasMissing) writeFileSync(marker, "");
 
-for (const file of ["main.js", "manifest.json"]) {
-  copyFileSync(join(root, file), join(target, file));
+/*
+ * `styles.css` is optional to Obsidian but not to us once it exists: a copy
+ * that skipped it would leave the running plugin with last deploy's rules,
+ * which looks like a CSS change that did not take rather than a file that
+ * never arrived. Listed, and checked, so adding one is not a thing to
+ * remember here as well.
+ */
+for (const file of ["main.js", "manifest.json", "styles.css"]) {
+  const from = join(root, file);
+  if (!existsSync(from)) {
+    if (file === "styles.css") continue;
+    console.error(`cannot deploy: ${file} is missing. Run \`npm run build\` first.`);
+    process.exit(1);
+  }
+  copyFileSync(from, join(target, file));
 }
 
 console.log(`deployed ${id} v${version} -> ${target}`);
