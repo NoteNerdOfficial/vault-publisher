@@ -50,7 +50,7 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     text: "Needs a citation.",
     createdAt: "2026-10-28T08:00:00.000Z",
     resolved: false,
-    priority: "normal",
+    priority: "medium",
     agent: null,
     external: null,
     replies: [],
@@ -470,7 +470,7 @@ describe("the issue a comment becomes", () => {
       "review",
       "priority: low",
     ]);
-    expect(issueDraft(comment({ priority: "normal" }), TARGET, { site: "" }).labels).toEqual(
+    expect(issueDraft(comment({ priority: "medium" }), TARGET, { site: "" }).labels).toEqual(
       ["review"],
     );
   });

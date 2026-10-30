@@ -13,10 +13,13 @@ import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
  * The settings screen.
  *
  * The goal the whole project is measured against is that setup is simple,
- * so this is ordered the way a first run actually goes -- connect, choose
- * what to publish, choose how it looks, publish -- rather than grouped by
- * which part of the code owns each field. Someone opening this for the first
- * time should be able to work down it once and be done.
+ * so this is grouped by how often a section is wanted rather than by which
+ * part of the code owns each field. The two sections with buttons in them --
+ * publish, and the review overlay that reads a preview -- lead, because they
+ * are used on every pass; the setup under them is still in first-run order,
+ * connect then choose what to publish then choose how it looks, and is what
+ * the checklist points at while any of it is unfinished. `display` says more
+ * about why that way round.
  *
  * Two things it deliberately does:
  *
@@ -175,18 +178,85 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     this.host = host;
   }
 
+  /**
+   * Draws the whole panel.
+   *
+   * The order is the point. Several of these sections change what else is
+   * shown -- a toggle reveals the rows under it -- so the panel is rebuilt
+   * from scratch rather than patched, and `display` is what every one of
+   * those handlers calls.
+   *
+   * **Publish and Review lead, setup follows.** This panel is two things at
+   * once: the place a site is set up, which happens once, and the place it is
+   * built, previewed and reviewed, which happens every time. Putting the
+   * one-time half first meant scrolling past it forever, so the two sections
+   * holding buttons someone actually presses are at the top and next to each
+   * other, in the order the work is done: build, then read the build. The
+   * setup below them is still in first-run order -- connect, choose what,
+   * choose how it looks -- and is still what the checklist above points at
+   * while any of it is unfinished.
+   *
+   * Issue tracker follows Review because it is part of reviewing. It used to
+   * be drawn from inside `renderReview`, which put a section that can run to
+   * a dozen Jira fields between the Open button and the Publish button --
+   * the two rows most likely to be wanted together.
+   *
+   * The methods below are in the order they were written rather than the
+   * order they draw in, so the banners over them name their section instead
+   * of numbering it. The call list here is the running order.
+   */
   display(): void {
     const { containerEl } = this;
+    // Taken before the container is emptied, because emptying it collapses
+    // its height and the scroll position goes with it. Without this, every
+    // toggle in here threw the reader back to the top of the panel.
+    const marks = this.scrollMarks();
     containerEl.empty();
 
     this.renderLegacyNotice(containerEl);
     this.renderFirstRun(containerEl);
+    this.renderPublish(containerEl);
+    this.renderReview(containerEl);
+    this.renderRelay(containerEl);
     this.renderConnection(containerEl);
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
-    this.renderReview(containerEl);
-    this.renderPublish(containerEl);
     this.renderAutomation(containerEl);
+
+    this.restoreScroll(marks);
+  }
+
+  /**
+   * Where the panel is scrolled to, as offsets that can be put back.
+   *
+   * Which element actually scrolls is Obsidian's business and has changed
+   * between versions -- the tab content, or the container it sits in -- so
+   * this records every ancestor that is scrolled rather than guessing at one
+   * of them. Only non-zero offsets are kept, so the common case costs one
+   * property read.
+   */
+  private scrollMarks(): Array<[HTMLElement, number]> {
+    const marks: Array<[HTMLElement, number]> = [];
+    let node: HTMLElement | null = this.containerEl;
+    while (node) {
+      if (node.scrollTop > 0) marks.push([node, node.scrollTop]);
+      if (node === document.body) break;
+      node = node.parentElement;
+    }
+    return marks;
+  }
+
+  /**
+   * Puts the scroll position back after a redraw.
+   *
+   * Synchronous, and deliberately not deferred to an animation frame: the
+   * rebuilt rows are already in the document, so the offset lands before
+   * anything is painted and the panel never visibly moves. A redraw that
+   * made the panel shorter is clamped by the browser, which is the right
+   * answer -- the row that was being looked at is now nearer the end.
+   */
+  private restoreScroll(marks: Array<[HTMLElement, number]>): void {
+    for (const [node, at] of marks) node.scrollTop = at;
   }
 
   /**
@@ -265,7 +335,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     );
   }
 
-  // -- 1. connect ----------------------------------------------------------
+  // -- connect -------------------------------------------------------------
 
   private renderConnection(root: HTMLElement): void {
     new Setting(root).setName("GitHub").setHeading();
@@ -398,7 +468,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       );
   }
 
-  // -- 2. what to publish --------------------------------------------------
+  // -- what to publish -----------------------------------------------------
 
   private renderContent(root: HTMLElement): void {
     new Setting(root).setName("What to publish").setHeading();
@@ -599,7 +669,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     return fallback;
   }
 
-  // -- 3. how it looks -----------------------------------------------------
+  // -- how it looks --------------------------------------------------------
 
   private renderTheme(root: HTMLElement): void {
     new Setting(root).setName("Theme").setHeading();
@@ -739,7 +809,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     }
   }
 
-  // -- 4. review -----------------------------------------------------------
+  // -- review, and where its comments go -----------------------------------
 
   /**
    * The review overlay.
@@ -875,20 +945,28 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }
         }),
       );
-
-    this.renderRelay(root);
   }
 
   /**
    * Filing review comments as issues.
    *
-   * Inside the Review section rather than beside the GitHub connection,
-   * because this is a thing done to a comment, not a thing done to the site.
+   * Straight after the Review section rather than beside the GitHub
+   * connection, because this is a thing done to a comment, not a thing done
+   * to the site. Drawn by `display` rather than from inside `renderReview`,
+   * though: nested, it sat between the Open button and the Publish button,
+   * and on a Jira setup that is a dozen fields of scrolling between the two
+   * rows most often wanted together.
+   *
    * Off is the first option and the default, and choosing it hides the rest:
    * a vault whose reviews stay in the vault should not have to read any of
    * this.
    */
   private renderRelay(root: HTMLElement): void {
+    // Nothing to file from, so nothing to configure. It follows the Review
+    // section and reads as part of it, which means it should come and go
+    // with it rather than offering a tracker for comments that cannot exist.
+    if (!this.host.settings.commentOverlay.enabled) return;
+
     const relay = this.host.settings.relay;
     const github = this.host.settings.github;
 
@@ -1293,7 +1371,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   }
 
 
-  // -- 5. publish ----------------------------------------------------------
+  // -- publish -------------------------------------------------------------
 
   private renderPublish(root: HTMLElement): void {
     new Setting(root).setName("Publish").setHeading();
@@ -1363,7 +1441,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       );
   }
 
-  // -- 6. what happens without anyone pressing a button ---------------------
+  // -- what happens without anyone pressing a button -----------------------
 
   /**
    * Whether a plugin load runs something by itself.

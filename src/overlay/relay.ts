@@ -88,19 +88,19 @@ const TITLE_LIMIT = 72;
 /**
  * The label a priority earns, or nothing.
  *
- * Normal earns nothing, matching the overlay: a comment left without a
+ * Medium earns nothing, matching the overlay: a comment left without a
  * thought about its priority should not arrive carrying a claim about one.
  */
 const PRIORITY_LABEL: Record<OverlayPriority, string> = {
   high: "priority: high",
-  normal: "",
+  medium: "",
   low: "priority: low",
 };
 
 /** The same thing in a sentence, for a tracker that has no labels. */
 const PRIORITY_WORD: Record<OverlayPriority, string> = {
   high: "High",
-  normal: "Normal",
+  medium: "Medium",
   low: "Low",
 };
 
@@ -402,7 +402,7 @@ export function issueDraft(
   // Only where it has nowhere else to go. On a tracker with labels the
   // priority is one, which is something a board can filter on; saying it
   // twice would only be a line to read past.
-  if (target.provider === "asana" && comment.priority !== "normal") {
+  if (target.provider === "asana" && comment.priority !== "medium") {
     footer.push({ lead: "Priority", text: PRIORITY_WORD[comment.priority] });
   }
   footer.push({

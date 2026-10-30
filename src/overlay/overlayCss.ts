@@ -8,11 +8,18 @@
  * a shadow root nothing reaches in, so these rules are the only ones in play
  * and none of them can reach back out and change the page being reviewed.
  *
- * **The colour says what the mark means.** One hue carries the whole system:
- * an open mark is correction ink, and it is the only saturated thing on
- * screen. Resolving a comment drains it to graphite, so a page's remaining
- * work is readable at a glance from the pins alone, without opening
- * anything. That is the job colour has here; it decorates nothing else.
+ * **The colour says what the mark means.** One hue carries the page: an open
+ * mark is correction ink, and it is the only saturated thing drawn over the
+ * reviewer's own content. Resolving a comment drains it to graphite, so a
+ * page's remaining work is readable at a glance from the pins alone, without
+ * opening anything.
+ *
+ * Priority has three hues of its own -- crimson, amber, blue -- and they are
+ * chosen to be none of them that ink. Inside the overlay's own panels a
+ * level is worth reading at a glance too, and the two questions must not
+ * answer in the same colour: "still open" and "worth doing first" are
+ * different things, and a comment can be either without being both. Colour
+ * does those two jobs here and decorates nothing else.
  *
  * Theme comes from a `data-theme` attribute the script sets on the shadow
  * wrapper. There are two, light and dark, chosen by the reviewer and seeded
@@ -43,6 +50,25 @@ export const OVERLAY_CSS = `
   --co-fg-3: #6e757d;
   --co-line: #e1e4e8;
   --co-danger: #8e1d10;
+
+  /* The three priorities, each its own hue.
+     Deliberately none of them the pin's vermilion: that one already means
+     "open, not yet dealt with", and a priority wearing it would make a
+     high-priority comment and an unresolved one the same colour. So high is
+     a crimson rather than an orange-red, which is far enough from the number
+     badge beside it in a panel row to be told apart at a glance. Each pill
+     still carries its arrow as well, because a reader who cannot separate
+     the hues has to be able to read the level anyway. */
+  --co-pri-high-fg: #a3123f;
+  --co-pri-high-bg: #fdeaf0;
+  --co-pri-high-line: #f3bdd0;
+  --co-pri-medium-fg: #7a4e00;
+  --co-pri-medium-bg: #fdf2dc;
+  --co-pri-medium-line: #efd9a4;
+  --co-pri-low-fg: #1f5b7a;
+  --co-pri-low-bg: #e6f2f8;
+  --co-pri-low-line: #bbd9e9;
+
   /* The outline over the block the cursor is on. Quieter than the mark: it
      follows the pointer, and anything at full strength that moves with the
      pointer is a flicker rather than a hint. */
@@ -78,6 +104,18 @@ export const OVERLAY_CSS = `
   --co-fg-3: #7d858e;
   --co-line: #2e333a;
   --co-aim-line: rgba(242, 96, 58, 0.55);
+  /* The same three hues lightened for ink on a dark ground, over a wash of
+     themselves rather than a solid: a saturated chip at this size glows on
+     a dark panel, where the light theme's does not. */
+  --co-pri-high-fg: #ff9ab8;
+  --co-pri-high-bg: rgba(224, 37, 94, 0.16);
+  --co-pri-high-line: rgba(224, 37, 94, 0.42);
+  --co-pri-medium-fg: #f2c468;
+  --co-pri-medium-bg: rgba(201, 146, 24, 0.16);
+  --co-pri-medium-line: rgba(201, 146, 24, 0.42);
+  --co-pri-low-fg: #8cc8e8;
+  --co-pri-low-bg: rgba(56, 150, 200, 0.18);
+  --co-pri-low-line: rgba(56, 150, 200, 0.45);
   --co-shadow:
     0 1px 2px rgba(0, 0, 0, 0.5),
     0 12px 32px -8px rgba(0, 0, 0, 0.6);
@@ -372,7 +410,7 @@ export const OVERLAY_CSS = `
   position: fixed;
   top: 8px;
   height: calc(100vh - 16px);
-  width: 280px;
+  width: 320px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -494,34 +532,125 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-filter[data-active] b { opacity: 0.85; }
 .osp-overlay .co-filter:not([data-active]):hover { color: var(--co-fg); }
 
-/* The order the list is in, said in the corner rather than in a labelled
-   control: it is one button with two states, and a legend over it would be
-   taller than the thing it names. */
+/*
+ * The order the list is in: a labelled pair, not a word in a corner.
+ *
+ * It was one small grey button right-aligned under the filters, carrying the
+ * name of the order it would switch *to*. Two things were wrong with that.
+ * A single muted word in an otherwise empty row reads as a caption, so it
+ * was not seen as clickable at all; and once it was, it named the state you
+ * were not in, which has to be reasoned about rather than read. Both are
+ * fixed by showing both options at once with the one in force marked -- the
+ * same control the filters above already are, so there is one idiom in the
+ * panel rather than two.
+ *
+ * It takes a row's full width, which is what the wider panel bought.
+ */
 .osp-overlay .co-sortrow {
   display: flex;
-  justify-content: flex-end;
-  flex: none;
-  padding: 6px 10px 0;
-}
-.osp-overlay .co-sort {
-  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 7px;
+  gap: 8px;
+  flex: none;
+  margin: 8px 8px 0;
+}
+.osp-overlay .co-sortrow-label {
+  flex: none;
+  padding-left: 2px;
+  color: var(--co-fg-3);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.osp-overlay .co-orders {
+  position: relative;
+  display: flex;
+  flex: 1;
+  padding: 2px;
+  border: 1px solid var(--co-line);
+  border-radius: 14px;
+  background: var(--co-bg-2);
+}
+/* The same moving ground as the filter row, over two stops instead of
+   three: the panel's two segmented controls behave identically, so neither
+   has to be learned twice. */
+.osp-overlay .co-order-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  height: calc(100% - 4px);
+  background: var(--co-bg);
+  border: 1px solid var(--co-line);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.06);
+  transition: transform 0.22s var(--co-ease);
+  pointer-events: none;
+}
+.osp-overlay[data-theme="dark"] .co-order-slider { box-shadow: none; }
+.osp-overlay .co-order-slider[data-at="1"] { transform: translateX(100%); }
+.osp-overlay .co-order {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 4px 0;
   border: 0;
-  border-radius: var(--co-r-1);
+  border-radius: 12px;
   background: transparent;
   color: var(--co-fg-3);
   font-size: 11px;
-  line-height: 14px;
-  transition: background 0.12s, color 0.12s;
+  line-height: 16px;
+  text-align: center;
+  transition: color 0.15s;
 }
-.osp-overlay .co-sort:hover { background: var(--co-bg-2); color: var(--co-fg); }
-.osp-overlay .co-sort[data-by="priority"] { color: var(--co-fg-2); }
+.osp-overlay .co-order[data-active] { color: var(--co-fg); font-weight: 550; }
+.osp-overlay .co-order:not([data-active]):hover { color: var(--co-fg-2); }
 
 .osp-overlay .co-list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
 
-.osp-overlay .co-row { padding: 2px 8px; cursor: pointer; }
+/*
+ * The page a run of rows belongs to.
+ *
+ * Sticky, because the list is now long enough to scroll past the heading
+ * that says which page the rows under the cursor are about -- which is the
+ * one fact a grouped list must never make the reader scroll back for. The
+ * page being read is named "This page" rather than by its filename: it is
+ * the group that needs no identifying, and saying so is shorter than
+ * saying which.
+ */
+.osp-overlay .co-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 4px;
+  background: var(--co-bg);
+  color: var(--co-fg-3);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.osp-overlay .co-group[data-here] { color: var(--co-fg-2); }
+.osp-overlay .co-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.osp-overlay .co-group-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.osp-overlay .co-row { display: block; padding: 2px 8px; cursor: pointer; }
+/* A row for another page is an anchor, so it arrives wearing the browser's
+   link colour and underline. */
+.osp-overlay a.co-row { color: inherit; text-decoration: none; }
 .osp-overlay .co-row-card {
   display: flex;
   align-items: flex-start;
@@ -604,6 +733,10 @@ export const OVERLAY_CSS = `
 .osp-overlay a.co-tag[data-ext]:hover { border-color: var(--co-ink); }
 
 .osp-overlay .co-time { flex: none; white-space: nowrap; color: var(--co-fg-2); font-size: 11px; }
+/* In a panel row the time goes to the far edge, so the dates line up in a
+   column of their own instead of sitting wherever the name and the pills
+   happen to end. It is the one thing in a row nobody reads on purpose. */
+.osp-overlay .co-row-name .co-time { margin-left: auto; }
 
 .osp-overlay .co-row-text {
   margin: 1px 0 0;
@@ -642,6 +775,45 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-empty svg { color: var(--co-fg-3); opacity: 0.55; }
 .osp-overlay .co-empty-title { color: var(--co-fg); font-size: 13px; font-weight: 550; }
 .osp-overlay .co-empty-text { font-size: 11px; line-height: 17px; max-width: 24ch; }
+
+/*
+ * Which page a row is on, when the list is one flat queue and the headings
+ * are not there to say it.
+ *
+ * Above the author rather than beside them: it is where the comment is, not
+ * who wrote it, and a row whose first line answers "where" reads in the
+ * order the question is asked.
+ */
+.osp-overlay .co-row-page {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+  color: var(--co-fg-3);
+  font-size: 10px;
+  line-height: 14px;
+  min-width: 0;
+}
+.osp-overlay .co-row-page span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.osp-overlay .co-row-page svg { opacity: 0.8; }
+
+/* A row that leads to another page rather than opening a pin on this one.
+   Said with the number badge, which is the part that means "there is a mark
+   over there wearing this": hollow here, because the mark is not on screen
+   to be pointed at. */
+.osp-overlay .co-row[data-away] .co-num {
+  background: transparent;
+  border: 1px solid var(--co-line);
+  color: var(--co-fg-2);
+}
+.osp-overlay a.co-row[data-away]:hover .co-num { border-color: var(--co-fg-3); color: var(--co-fg); }
+/* A comment with no page recorded against it -- one written into the review
+   file by hand. It is listed, but there is nowhere for it to lead. */
+.osp-overlay div.co-row[data-away] { cursor: default; }
 
 /* --- the comment popup ------------------------------------------------ */
 
@@ -689,18 +861,22 @@ export const OVERLAY_CSS = `
 }
 
 /*
- * Priority as three steps of weight, not three colours.
+ * Priority as three hues, each carrying its arrow.
  *
- * The one hue in here already means something exact -- open, and drained to
- * graphite when resolved -- and a second meaning hung on the same colour
- * would cost the first one its precision. So high priority is the only
- * inverted chip in the overlay, normal is a plain one and low recedes to an
- * outline, and each carries an arrow as well, because a pill that said what
- * it meant only by being a shade darker would say nothing to a reader who
- * cannot see the difference.
+ * Three levels read as a scale, and a scale is read fastest by colour, so
+ * each level is drawn in its own: crimson, amber, blue. None of them is the
+ * pin's vermilion, which already means "open, not dealt with" -- see the
+ * tokens above for why that boundary is worth keeping. The arrow stays in
+ * every pill, because colour alone is not a label: a reader who cannot
+ * separate crimson from amber still has to be able to tell high from medium.
+ *
+ * One rule set serves the pill in the popup, the three buttons in the draft,
+ * the rows of the priority menu and the chip in a panel row, so a level is
+ * the same colour wherever it appears.
  */
 .osp-overlay .co-pri,
-.osp-overlay .co-pri-opt {
+.osp-overlay .co-pri-opt,
+.osp-overlay .co-row-pri {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -721,17 +897,49 @@ export const OVERLAY_CSS = `
   text-align: center;
   font-weight: 700;
 }
-.osp-overlay .co-pri[data-level="high"] {
-  background: var(--co-fg);
-  border-color: transparent;
-  color: var(--co-bg);
+
+/* The one place the hue is named, so every pill of a level matches. */
+.osp-overlay [data-level="high"] {
+  --co-pri-fg: var(--co-pri-high-fg);
+  --co-pri-bg: var(--co-pri-high-bg);
+  --co-pri-line: var(--co-pri-high-line);
 }
-.osp-overlay .co-pri[data-level="low"] {
-  background: transparent;
+.osp-overlay [data-level="medium"] {
+  --co-pri-fg: var(--co-pri-medium-fg);
+  --co-pri-bg: var(--co-pri-medium-bg);
+  --co-pri-line: var(--co-pri-medium-line);
+}
+.osp-overlay [data-level="low"] {
+  --co-pri-fg: var(--co-pri-low-fg);
+  --co-pri-bg: var(--co-pri-low-bg);
+  --co-pri-line: var(--co-pri-low-line);
+}
+
+.osp-overlay .co-pri[data-level],
+.osp-overlay .co-row-pri[data-level] {
+  background: var(--co-pri-bg);
+  border-color: var(--co-pri-line);
+  color: var(--co-pri-fg);
+}
+.osp-overlay .co-pri[data-level]:hover { border-color: var(--co-pri-fg); }
+
+/* A comment on another page is read in the panel rather than against its
+   pin, so the chip is the only thing saying how much it is asking for. It
+   is quieter than the popup's pill -- the row already carries a number, a
+   name and sometimes an issue -- and says the level with its arrow and hue
+   rather than repeating the word. */
+.osp-overlay .co-row-pri {
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.osp-overlay .co-row[data-resolved] .co-row-pri {
+  background: var(--co-bg-2);
+  border-color: var(--co-line);
   color: var(--co-fg-3);
 }
-.osp-overlay .co-pri:hover { border-color: var(--co-fg-3); }
-.osp-overlay .co-pri[data-level="high"]:hover { border-color: transparent; opacity: 0.88; }
 
 /*
  * What the comment is attached to, quoted above it.
@@ -938,8 +1146,12 @@ export const OVERLAY_CSS = `
   gap: 8px;
   padding: 6px 14px 6px 10px;
 }
+.osp-overlay .co-pop-menu[data-pri] .co-pop-menu-item .co-pri-mark {
+  color: var(--co-pri-fg);
+}
 .osp-overlay .co-pop-menu[data-pri] .co-pop-menu-item[data-on] {
-  background: var(--co-bg-2);
+  background: var(--co-pri-bg);
+  color: var(--co-pri-fg);
   font-weight: 550;
 }
 .osp-overlay .co-pop-menu-item:hover { background: var(--co-bg-2); }
@@ -979,22 +1191,21 @@ export const OVERLAY_CSS = `
 }
 
 .osp-overlay .co-draft-foot { display: flex; gap: 4px; margin-top: 8px; }
+/* Three buttons, one of them chosen. Only the chosen one wears its hue: all
+   three coloured at once would be a row of swatches to decode rather than a
+   question with an answer already in it. */
 .osp-overlay .co-pri-opt {
   padding: 2px 8px;
   background: transparent;
+  border-color: transparent;
   color: var(--co-fg-3);
   cursor: pointer;
 }
-.osp-overlay .co-pri-opt:hover { color: var(--co-fg); border-color: var(--co-fg-3); }
+.osp-overlay .co-pri-opt:hover { color: var(--co-pri-fg); border-color: var(--co-pri-line); }
 .osp-overlay .co-pri-opt[data-on] {
-  background: var(--co-bg-2);
-  border-color: var(--co-line);
-  color: var(--co-fg);
-}
-.osp-overlay .co-pri-opt[data-on][data-level="high"] {
-  background: var(--co-fg);
-  border-color: transparent;
-  color: var(--co-bg);
+  background: var(--co-pri-bg);
+  border-color: var(--co-pri-line);
+  color: var(--co-pri-fg);
 }
 
 .osp-overlay .co-input {

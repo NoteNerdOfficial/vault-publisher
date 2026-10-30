@@ -122,6 +122,32 @@ function leaveComment(
   click(shadow.querySelector(".co-draft .co-send"));
 }
 
+/**
+ * A comment on a different page, which is what the panel now also lists.
+ *
+ * Shaped from `row` so only the page differs: the store keys a comment to the
+ * note it was written about, so that is the field that puts it elsewhere.
+ */
+function away(text: string, over: Partial<OverlayComment> = {}): OverlayComment {
+  return row({
+    id: "elsewhere",
+    page: "notes/other.html",
+    sourcePath: "notes/Other.md",
+    text,
+    ...over,
+  });
+}
+
+/**
+ * Puts a query on the page's URL, as arriving from another page's panel does.
+ *
+ * `replaceState` rather than assigning to `location.search`, which jsdom
+ * treats as a navigation and refuses.
+ */
+function search(query: string): void {
+  window.history.replaceState({}, "", query);
+}
+
 /** A comment as the store holds one, so a test can seed one directly. */
 function row(over: Partial<OverlayComment>): OverlayComment {
   return {
@@ -138,7 +164,7 @@ function row(over: Partial<OverlayComment>): OverlayComment {
     text: "Seeded.",
     createdAt: "2026-10-28T07:00:00.000Z",
     resolved: false,
-    priority: "normal",
+    priority: "medium",
     agent: null,
     external: null,
     replies: [],
@@ -150,6 +176,8 @@ beforeEach(() => {
   localStorage.clear();
   document.head.innerHTML = "";
   document.body.innerHTML = "";
+  // A deep link set by one test must not be read by the next.
+  search("/");
   // Every drop lands on the paragraph this stands in for, unless a test
   // moves it. Without a box there is nothing to measure a fraction against.
   document.elementFromPoint = () => document.querySelector("p");
@@ -282,6 +310,25 @@ describe("the notch", () => {
     expect(notch.hidden).toBe(false);
   });
 
+  // The whole point of H is to read the build as a reader will see it, and a
+  // reader sees no pins. Hiding the wrapper rather than each part is what
+  // makes that true of anything added to the overlay later as well.
+  it("takes the pins away with it, and brings them back", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "A note.");
+    const wrap = shadow.querySelector(".osp-overlay") as HTMLElement;
+
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+
+    key("h");
+    expect(wrap.hidden).toBe(true);
+
+    key("h");
+    expect(wrap.hidden).toBe(false);
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+  });
+
   // Hiding the notch with a capture sheet still over the page would leave
   // the page unusable and nothing on screen to say why.
   it("drops back to view mode when it is hidden", () => {
@@ -311,11 +358,12 @@ describe("the notch", () => {
     click(shadow.querySelector('.co-notch-btn[title="Settings"]'));
 
     const hide = Array.from(shadow.querySelectorAll(".co-menu-item")).find((item) =>
-      item.textContent?.includes("Hide the notch"),
+      item.textContent?.includes("Hide the overlay"),
     );
     click(hide ?? null);
 
     expect((shadow.querySelector(".co-notch") as HTMLElement).hidden).toBe(true);
+    expect((shadow.querySelector(".osp-overlay") as HTMLElement).hidden).toBe(true);
   });
 });
 
@@ -525,37 +573,108 @@ describe("the panel", () => {
     expect(shadow.querySelector(".co-row-text")?.textContent).toBe("Left earlier.");
   });
 
-  // Each page shows its own comments. Without this every comment ever left
-  // appears on every page, because a pin whose block is missing still has to
-  // be listed somewhere.
-  it("shows only the comments belonging to this page", () => {
+  // Pins are this page's; the list is the whole review. What a reviewer
+  // cannot already see by looking at the page is what is still open on the
+  // pages they are not looking at, so that is what the panel is for.
+  it("lists the comments on other pages as well as this page's", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([away("About another note.")]));
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "About this one.");
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-empty")).toBeNull();
+    expect(shadow.textContent).toContain("About another note.");
+    expect(shadow.textContent).toContain("About this one.");
+    // Only this page's comment has a pin: the other page's is not here to
+    // point at.
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+  });
+
+  // Mark order is a per-page order -- it is the numbers on the pins -- so a
+  // flat list of every page's comments in it would run 1, 2, 1 with nothing
+  // saying why.
+  it("groups by page in mark order, with this page first", () => {
     localStorage.setItem(
       STORE_KEY,
       JSON.stringify([
-        {
-          id: "a",
-          page: "notes/other.html",
-          sourcePath: "notes/Other.md",
-          block: null,
-          blockText: "",
-          x: 0,
-          y: 0,
-          rx: null,
-          ry: null,
-          author: "Someone",
-          text: "About another note.",
-          createdAt: new Date().toISOString(),
-          resolved: false,
-          replies: [],
-        },
+        away("Earlier, elsewhere.", { id: "x", createdAt: "2026-10-27T07:00:00.000Z" }),
       ]),
     );
     mountPage();
     const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "Later, here.");
     mode(shadow, "review");
 
-    expect(shadow.querySelector(".co-empty")).not.toBeNull();
-    expect(shadow.textContent).not.toContain("About another note.");
+    const heads = Array.from(shadow.querySelectorAll(".co-group-name")).map(
+      (node) => node.textContent,
+    );
+    expect(heads).toEqual(["This page", "Other"]);
+    // Oldest first would have put the other page's comment at the top of a
+    // flat list; grouped, this page leads whatever the dates say.
+    expect(
+      Array.from(shadow.querySelectorAll(".co-row-text")).map((node) => node.textContent),
+    ).toEqual(["Later, here.", "Earlier, elsewhere."]);
+  });
+
+  // One queue over the whole review has no headings to say where a row is,
+  // so each row says it for itself.
+  it("names the page on a row when the list is one queue", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([away("Elsewhere.")]));
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "Here.");
+    mode(shadow, "review");
+    click(shadow.querySelector('.co-order[data-order="priority"]'));
+
+    expect(shadow.querySelectorAll(".co-group")).toHaveLength(0);
+    const pages = Array.from(shadow.querySelectorAll(".co-row")).map(
+      (node) => node.querySelector(".co-row-page")?.textContent ?? null,
+    );
+    // One queue, so the order is the review's and not this page's: the older
+    // comment leads, and it is the one that has to name where it is. This
+    // page's row says nothing, because it is the page being read.
+    expect(pages).toEqual(["Other", null]);
+  });
+
+  // A pin on another page cannot be opened from here, so the row is a link
+  // to that page carrying the comment it was clicked for.
+  it("goes to the other page, naming the comment, when such a row is clicked", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([away("Elsewhere.", { id: "far" })]));
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+
+    const link = shadow.querySelector(".co-row[data-away]") as HTMLAnchorElement;
+    expect(link).not.toBeNull();
+    expect(link.tagName).toBe("A");
+    expect(link.getAttribute("title")).toBe("Go to Other");
+    // Relative, and up out of this page's own folder: a preview is opened
+    // both from the plugin's server and straight off disk, and only a
+    // relative href works in both.
+    expect(link.getAttribute("href")).toBe("../notes/other.html?osp-comment=far");
+  });
+
+  // Arriving from such a link. The comment named is opened, in review mode,
+  // because the panel it was clicked in should still be open on the far side.
+  it("opens the comment a link asked for", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ id: "wanted", text: "Found me." })]));
+    mountPage();
+    search("?osp-comment=wanted");
+    const shadow = run();
+
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(false);
+    expect(shadow.querySelector(".co-panel")?.hasAttribute("hidden")).toBe(false);
+    expect(shadow.querySelector(".co-pop-threads")?.textContent).toContain("Found me.");
+  });
+
+  it("ignores a link naming a comment that is not here", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([away("Elsewhere.", { id: "far" })]));
+    mountPage();
+    search("?osp-comment=far");
+    const shadow = run();
+
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(true);
   });
 
   it("filters down to open and resolved", () => {
@@ -886,12 +1005,12 @@ describe("the menu", () => {
 });
 
 describe("priority", () => {
-  it("files a comment as normal when nothing is chosen", () => {
+  it("files a comment as medium when nothing is chosen", () => {
     mountPage();
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Ordinary.");
 
-    expect(stored()[0].priority).toBe("normal");
+    expect(stored()[0].priority).toBe("medium");
   });
 
   // Set while the comment is being written, because that is when the
@@ -904,7 +1023,7 @@ describe("priority", () => {
     expect(stored()[0].priority).toBe("high");
   });
 
-  it("marks the chosen level in the draft and starts each one over at normal", () => {
+  it("marks the chosen level in the draft and starts each one over at medium", () => {
     mountPage();
     const shadow = run();
     mode(shadow, "comment");
@@ -913,7 +1032,7 @@ describe("priority", () => {
     );
 
     expect(shadow.querySelector('.co-pri-opt[data-on]')?.getAttribute("data-level")).toBe(
-      "normal",
+      "medium",
     );
     click(shadow.querySelector('.co-pri-opt[data-level="low"]'));
     expect(shadow.querySelector('.co-pri-opt[data-on]')?.getAttribute("data-level")).toBe(
@@ -925,7 +1044,7 @@ describe("priority", () => {
       new MouseEvent("click", { bubbles: true, composed: true, clientX: 20, clientY: 20 }),
     );
     expect(shadow.querySelector('.co-pri-opt[data-on]')?.getAttribute("data-level")).toBe(
-      "normal",
+      "medium",
     );
   });
 
@@ -951,7 +1070,7 @@ describe("priority", () => {
     expect(
       shadow.querySelector('.co-pop-menu[data-pri] .co-pop-menu-item[data-on]')
         ?.getAttribute("data-level"),
-    ).toBe("normal");
+    ).toBe("medium");
 
     click(shadow.querySelector('.co-pop-menu-item[data-level="high"]'));
 
@@ -959,14 +1078,85 @@ describe("priority", () => {
     expect(shadow.querySelector(".co-pri")?.getAttribute("data-level")).toBe("high");
   });
 
-  it("reads a comment that was written before priority existed as normal", () => {
+  it("reads a comment that was written before priority existed as medium", () => {
     localStorage.setItem(STORE_KEY, JSON.stringify([row({ priority: undefined })]));
     mountPage();
     const shadow = run();
     mode(shadow, "review");
     click(shadow.querySelector(".co-row"));
 
-    expect(shadow.querySelector(".co-pri")?.getAttribute("data-level")).toBe("normal");
+    expect(shadow.querySelector(".co-pri")?.getAttribute("data-level")).toBe("medium");
+  });
+
+  // The level was called "normal" until schema 6. A browser keeps its
+  // comments in localStorage, so this build is handed the old name by the
+  // one before it, and it is the same level rather than an unknown one.
+  it("reads the level that used to be called normal as medium", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ priority: "normal" as never })]),
+    );
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+    click(shadow.querySelector(".co-row"));
+
+    expect(shadow.querySelector(".co-pri")?.getAttribute("data-level")).toBe("medium");
+    expect(shadow.querySelector(".co-pri")?.textContent).toContain("Medium");
+
+    // And it is written back under the new name the next time anything is
+    // saved, rather than being carried as "normal" forever.
+    click(shadow.querySelector('.co-pop-btn[title="Resolve"]'));
+    expect(stored()[0].priority).toBe("medium");
+  });
+
+  /*
+   * The three levels are told apart by colour as well as by their arrow, and
+   * the hue is attached by `data-level` rather than written per place -- so
+   * what is worth checking is that every pill carries the attribute the
+   * stylesheet keys on, wherever it is drawn.
+   */
+  it("carries the level as an attribute on the pill, the draft and the menu", () => {
+    mountPage();
+    const shadow = run();
+    mode(shadow, "comment");
+    shadow.querySelector(".co-capture")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true, clientX: 10, clientY: 10 }),
+    );
+
+    expect(
+      Array.from(shadow.querySelectorAll(".co-pri-opt")).map((node) =>
+        node.getAttribute("data-level"),
+      ),
+    ).toEqual(["high", "medium", "low"]);
+
+    key("Escape");
+    leaveComment(shadow, { x: 10, y: 10 }, "A blocker.", "high");
+    click(shadow.querySelector(".co-pin"));
+    expect(shadow.querySelector(".co-pri")?.getAttribute("data-level")).toBe("high");
+
+    click(shadow.querySelector(".co-pri"));
+    expect(
+      Array.from(shadow.querySelectorAll(".co-pop-menu[data-pri] .co-pop-menu-item")).map(
+        (node) => node.getAttribute("data-level"),
+      ),
+    ).toEqual(["high", "medium", "low"]);
+  });
+
+  // In the panel, where a comment from another page is read and its popup
+  // never is. Medium is left off: a word on every row that the eye has to
+  // read past to find the two rows that are not medium is noise.
+  it("chips a panel row with its level, except the middle one", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "A nit.", "low");
+    leaveComment(shadow, { x: 20, y: 20 }, "A question.");
+    mode(shadow, "review");
+
+    const chips = Array.from(shadow.querySelectorAll(".co-row")).map((node) =>
+      node.querySelector(".co-row-pri")?.getAttribute("data-level") ?? null,
+    );
+    expect(chips).toEqual(["low", null]);
   });
 });
 
@@ -983,13 +1173,17 @@ describe("sorting the panel", () => {
     leaveComment(shadow, { x: 30, y: 30 }, "A blocker.", "high");
   }
 
+  function order(shadow: ShadowRoot, name: string): void {
+    click(shadow.querySelector(`.co-order[data-order="${name}"]`));
+  }
+
   it("starts in mark order, which is the order the pins are numbered in", () => {
     mountPage();
     const shadow = run();
     three(shadow);
     mode(shadow, "review");
 
-    expect(shadow.querySelector(".co-sort")?.textContent).toContain("Mark order");
+    expect(shadow.querySelector(".co-order[data-active]")?.textContent).toBe("Mark order");
     expect(texts(shadow)).toEqual(["A nit.", "A question.", "A blocker."]);
   });
 
@@ -998,10 +1192,26 @@ describe("sorting the panel", () => {
     const shadow = run();
     three(shadow);
     mode(shadow, "review");
-    click(shadow.querySelector(".co-sort"));
+    order(shadow, "priority");
 
-    expect(shadow.querySelector(".co-sort")?.textContent).toContain("Priority");
+    expect(shadow.querySelector(".co-order[data-active]")?.textContent).toBe("Priority");
     expect(texts(shadow)).toEqual(["A blocker.", "A question.", "A nit."]);
+  });
+
+  // Both orders are on screen with the one in force marked, rather than one
+  // button carrying the name of the order it would switch to.
+  it("shows both orders, and moves the marker to the one in force", () => {
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(
+      Array.from(shadow.querySelectorAll(".co-order")).map((node) => node.textContent),
+    ).toEqual(["Mark order", "Priority"]);
+    expect(shadow.querySelector(".co-order-slider")?.getAttribute("data-at")).toBe("0");
+
+    order(shadow, "priority");
+    expect(shadow.querySelector(".co-order-slider")?.getAttribute("data-at")).toBe("1");
   });
 
   // The number on a pin is its place in the order the comments were made.
@@ -1011,7 +1221,7 @@ describe("sorting the panel", () => {
     const shadow = run();
     three(shadow);
     mode(shadow, "review");
-    click(shadow.querySelector(".co-sort"));
+    order(shadow, "priority");
 
     expect(
       Array.from(shadow.querySelectorAll(".co-num")).map((node) => node.textContent),
@@ -1024,10 +1234,10 @@ describe("sorting the panel", () => {
     three(shadow);
     mode(shadow, "review");
 
-    click(shadow.querySelector(".co-sort"));
+    order(shadow, "priority");
     expect(JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}").sort).toBe("priority");
 
-    click(shadow.querySelector(".co-sort"));
+    order(shadow, "time");
     expect(texts(shadow)).toEqual(["A nit.", "A question.", "A blocker."]);
     expect(JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}").sort).toBe("time");
   });
@@ -1040,18 +1250,6 @@ describe("sorting the panel", () => {
     mode(shadow, "review");
 
     expect(texts(shadow)).toEqual(["A blocker.", "A question.", "A nit."]);
-  });
-
-  // The panel can be put in priority order, so a pill on every row repeating
-  // what the order already says is a thing to read past rather than to read.
-  it("shows no priority pill on a row", () => {
-    mountPage();
-    const shadow = run();
-    three(shadow);
-    mode(shadow, "review");
-
-    expect(shadow.querySelectorAll(".co-list .co-pri")).toHaveLength(0);
-    expect(shadow.querySelector(".co-list")?.textContent).not.toContain("High");
   });
 });
 
@@ -1363,7 +1561,7 @@ describe("the overlay against the vault", () => {
     expect(sent.comments).toHaveLength(1);
     expect(sent.comments[0].text).toBe("Send this to the vault.");
     // Shaped like a review file, so the import command reads it unchanged.
-    expect(sent.version).toBe(5);
+    expect(sent.version).toBe(6);
   });
 
   // The point of the whole exercise: a comment left in another browser, or

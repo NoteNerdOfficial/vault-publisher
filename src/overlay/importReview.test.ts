@@ -28,7 +28,7 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     text: "Needs a citation.",
     createdAt: "2026-10-28T08:00:00.000Z",
     resolved: false,
-    priority: "normal",
+    priority: "medium",
     agent: null,
     external: null,
     replies: [],
@@ -109,7 +109,7 @@ describe("parseExport", () => {
     expect(data.comments[0].replies[0].text).toBe("Kept.");
   });
 
-  it("reads a priority, and defaults one it does not recognise to normal", () => {
+  it("reads a priority, and defaults one it does not recognise to medium", () => {
     const data = parseExport(
       `{"comments":[{"sourcePath":"a.md","text":"Fix.","priority":"high"},` +
         `{"sourcePath":"a.md","text":"Also.","priority":"urgent"},` +
@@ -118,9 +118,20 @@ describe("parseExport", () => {
 
     expect(data.comments.map((row) => row.priority)).toEqual([
       "high",
-      "normal",
+      "medium",
       "low",
     ]);
+  });
+
+  // The middle level was "normal" until schema 6, and a review file in a
+  // vault outlives the build that wrote it. It is the same level under a
+  // worse name, so it reads across rather than falling over.
+  it("reads the priority that used to be called normal as medium", () => {
+    const data = parseExport(
+      `{"comments":[{"sourcePath":"a.md","text":"Fix.","priority":"normal"}]}`,
+    );
+
+    expect(data.comments[0].priority).toBe("medium");
   });
 
   // A comment a tool wrote into the review file. Nothing in the overlay sets

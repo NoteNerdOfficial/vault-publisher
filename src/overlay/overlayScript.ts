@@ -13,8 +13,12 @@ import { OVERLAY_CSS } from "./overlayCss";
  * **View** leaves the page alone so it can be read and clicked. **Comment**
  * lays a capture sheet over it, so a click drops a pin instead of following a
  * link. **Review** opens a panel down the right-hand side listing every
- * comment on the page. A pin opens a popup holding the comment and its
- * replies.
+ * comment in the review -- not just this page's, since what a reviewer
+ * cannot already see is what is open on the pages they are not looking at;
+ * a row belonging to another page is a link that opens it there. A pin opens
+ * a popup holding the comment and its replies. **H** takes the whole overlay
+ * off the page, pins and all, so the build can be read as a reader will see
+ * it.
  *
  * A comment can also be filed as an issue in a tracker, from the popup's own
  * menu, when the plugin says one is set up. The page holds no credential and
@@ -102,9 +106,20 @@ export const OVERLAY_SCRIPT = `(function () {
   var STORE_KEY = "osp-overlay-comments";
   var NAME_KEY = "osp-overlay-user";
   var PREFS_KEY = "osp-overlay-prefs";
+  /*
+   * How the panel asks another page to open one of its comments.
+   *
+   * A query parameter rather than a fragment. The fragment belongs to the
+   * site -- it is how a heading is linked -- and an id in there would be
+   * read by the page's own anchor handling as a heading that does not
+   * exist. A query is ignored by a file:// URL and dropped by the plugin's
+   * server before it resolves a path, so the same link works both ways a
+   * preview is opened.
+   */
+  var DEEP_PARAM = "osp-comment";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 5;
+  var SCHEMA = 6;
 
   /*
    * The mark: a tag with three rounded corners and one sharp one, and the
@@ -131,13 +146,20 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   var PRI = {
     high: { label: "High", mark: "\\u2191" },
-    normal: { label: "Normal", mark: "\\u2013" },
+    medium: { label: "Medium", mark: "\\u2013" },
     low: { label: "Low", mark: "\\u2193" },
   };
-  var PRI_ORDER = ["high", "normal", "low"];
+  var PRI_ORDER = ["high", "medium", "low"];
 
+  /*
+   * The middle level was called "normal" until schema 6. A browser carries
+   * comments in localStorage and a vault carries them in a file, so both can
+   * hand one back long after this build replaced it -- and it is the same
+   * level under a worse name, so it is read across rather than dropped. It
+   * doubles as the fallback for anything unrecognised, which it already was.
+   */
   function priOf(value) {
-    return value === "high" || value === "low" ? value : "normal";
+    return value === "high" || value === "low" ? value : "medium";
   }
 
   function priRank(value) {
@@ -305,7 +327,14 @@ export const OVERLAY_SCRIPT = `(function () {
       : "light";
   }
   var side = prefs.side === "left" ? "left" : "right";
-  var width = typeof prefs.width === "number" ? prefs.width : 280;
+  /*
+   * 320 rather than the 280 it was. The panel carries a filter row, a
+   * labelled order row and rows that now say which page they are on, and at
+   * 280 the order control had nowhere to go but a corner. A reviewer who has
+   * dragged it to a width of their own keeps that width; this is only where
+   * it starts.
+   */
+  var width = typeof prefs.width === "number" ? prefs.width : 320;
   var sortBy = prefs.sort === "priority" ? "priority" : "time";
 
   /* --- the vault, when it is reachable ------------------------------ */
@@ -452,6 +481,8 @@ export const OVERLAY_SCRIPT = `(function () {
           writeAll();
           render();
         }
+        // The comment a link asked for may have arrived only just now.
+        showWanted();
         // Pushed back whether or not anything arrived, so comments made
         // against a bare file earlier reach the vault the first time the
         // page is opened through the plugin.
@@ -513,15 +544,35 @@ export const OVERLAY_SCRIPT = `(function () {
       });
   }
 
-  function mine() {
+  function byAge(a, b) {
+    return String(a.createdAt).localeCompare(String(b.createdAt));
+  }
+
+  /*
+   * The comments on one page, oldest first, which is the order its pins are
+   * numbered in.
+   *
+   * Keyed on the note rather than on the built URL. A URL can change under a
+   * comment -- a note renamed, a homepage promoted to index.html -- and the
+   * note the comment was written about does not.
+   */
+  function pageRows(sourcePath) {
     var out = [];
     for (var i = 0; i < all.length; i++) {
-      if (all[i] && all[i].sourcePath === SOURCE_PATH) out.push(all[i]);
+      if (all[i] && all[i].sourcePath === sourcePath) out.push(all[i]);
     }
-    out.sort(function (a, b) {
-      return String(a.createdAt).localeCompare(String(b.createdAt));
-    });
+    out.sort(byAge);
     return out;
+  }
+
+  /** The comments on the page being read. The pins are drawn from these. */
+  function mine() {
+    return pageRows(SOURCE_PATH);
+  }
+
+  /** Every comment in the review, oldest first. The panel lists these. */
+  function everything() {
+    return all.slice().sort(byAge);
   }
 
   function byId(id) {
@@ -610,6 +661,11 @@ export const OVERLAY_SCRIPT = `(function () {
         },
       ],
       ["circle", { cx: "12", cy: "12", r: "3" }],
+    ],
+    /* Lucide's file, for the row that says which page a comment is on. */
+    note: [
+      ["path", { d: "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" }],
+      ["path", { d: "M14 2v5h6" }],
     ],
     sort: [
       ["path", { d: "m3 16 4 4 4-4" }],
@@ -834,7 +890,7 @@ export const OVERLAY_SCRIPT = `(function () {
    * filed. A reviewer knows whether something blocks the page at the moment
    * they notice it, and asking later is asking them to look at it twice.
    */
-  var draftPri = "normal";
+  var draftPri = "medium";
   var draftFoot = el("div", "co-draft-foot");
   var priBtns = [];
   for (var q = 0; q < PRI_ORDER.length; q++) {
@@ -918,17 +974,48 @@ export const OVERLAY_SCRIPT = `(function () {
   panel.appendChild(filters);
 
   /*
-   * Two orders, one button.
+   * Two orders, said out loud.
+   *
+   * This was one small button in the corner, labelled with whichever order
+   * was not currently on, and nobody found it: a single grey word in a row
+   * of its own reads as a caption rather than as a control, and a label that
+   * names the state you are *not* in has to be worked out before it can be
+   * used. The order the list is in is the second question anyone has of the
+   * panel, after how much is left in it, so it is now a labelled pair built
+   * like the filter row above it -- both options visible, the one in force
+   * marked -- and the panel is wide enough to hold it.
    *
    * Mark order is the default because it is the order the numbers on the page
-   * are in, so the list and the pins can be read against each other. Priority
-   * order is for working through: it answers "what is worth doing first",
-   * which the pins cannot say at all.
+   * are in, so the list and the pins can be read against each other; it
+   * groups by page, since those numbers only count within one. Priority
+   * order is for working through: one queue over the whole review, answering
+   * "what is worth doing first", which the pins cannot say at all.
    */
+  var ORDERS = [
+    ["time", "Mark order", "Grouped by page, in the order that page's pins are numbered"],
+    ["priority", "Priority", "One queue across every page, blockers first"],
+  ];
+
   var sortRow = el("div", "co-sortrow");
-  var sortBtn = el("button", "co-sort");
-  sortRow.appendChild(sortBtn);
+  sortRow.appendChild(el("span", "co-sortrow-label", "Order"));
+  var orders = el("div", "co-orders");
+  var orderSlider = el("div", "co-order-slider");
+  orders.appendChild(orderSlider);
+  var orderBtns = [];
+  for (var w = 0; w < ORDERS.length; w++) {
+    var orderBtn = el("button", "co-order", ORDERS[w][1]);
+    orderBtn.setAttribute("data-order", ORDERS[w][0]);
+    orderBtn.setAttribute("title", ORDERS[w][2]);
+    orders.appendChild(orderBtn);
+    orderBtns.push(orderBtn);
+  }
+  sortRow.appendChild(orders);
   panel.appendChild(sortRow);
+
+  function indexOfOrder(name) {
+    for (var i = 0; i < ORDERS.length; i++) if (ORDERS[i][0] === name) return i;
+    return 0;
+  }
 
   var list = el("div", "co-list");
   panel.appendChild(list);
@@ -1120,14 +1207,70 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   /*
-   * A comment's number on this page, counting from one in the order the
+   * A comment's number on its own page, counting from one in the order the
    * comments were made. The pin, the panel row and the popup all read it
    * from here, so a mark is the same number wherever it is seen.
+   *
+   * The comment's page, not this one: the panel lists the whole review, and
+   * a comment from another page has to show the number it wears over there
+   * rather than a position in a list it is only visiting.
    */
   function markNumber(comment) {
-    var rows = mine();
+    var rows = pageRows(comment.sourcePath);
     for (var i = 0; i < rows.length; i++) if (rows[i].id === comment.id) return i + 1;
     return 0;
+  }
+
+  /* --- the other pages ---------------------------------------------- */
+
+  function elsewhere(comment) {
+    return comment.sourcePath !== SOURCE_PATH;
+  }
+
+  /*
+   * Whether a row can lead anywhere.
+   *
+   * A comment carries the page it was left on, but one written into the
+   * review file by hand may not, and a link built from a missing page is a
+   * link to this page's own folder. So a row without one is listed and
+   * labelled like any other and simply does not go anywhere: it is still the
+   * reviewer's note, and a dead link would be a worse answer than none.
+   */
+  function reachable(comment) {
+    return elsewhere(comment) && !!comment.page;
+  }
+
+  /*
+   * What to call the page a comment is on.
+   *
+   * The note's own filename, which is what the reviewer knows it as. The
+   * built URL names the same thing, but lower-cased and carrying ".html",
+   * and a panel row has no width to spend on either.
+   */
+  function pageName(comment) {
+    var path = comment.sourcePath || comment.page || "";
+    var at = path.lastIndexOf("/");
+    var name = at === -1 ? path : path.slice(at + 1);
+    name = name.replace(/\\.(md|html?)$/i, "");
+    return name || "Untitled";
+  }
+
+  /*
+   * A link from here to another page, aimed at one comment on it.
+   *
+   * Relative, because a preview is opened two ways -- served by the plugin,
+   * or straight off disk -- and only a relative href works in both. The
+   * depth comes from this page's own URL, which is the one thing a page
+   * knows about where it sits in the site. Each segment of the target is
+   * encoded, since a note may be called anything a filesystem allows.
+   */
+  function pageHref(comment) {
+    var depth = PAGE.split("/").length - 1;
+    var up = "";
+    for (var i = 0; i < depth; i++) up += "../";
+    var parts = String(comment.page || "").split("/");
+    for (var j = 0; j < parts.length; j++) parts[j] = encodeURIComponent(parts[j]);
+    return up + parts.join("/") + "?" + DEEP_PARAM + "=" + encodeURIComponent(comment.id);
   }
 
   /* --- pins --------------------------------------------------------- */
@@ -1176,20 +1319,102 @@ export const OVERLAY_SCRIPT = `(function () {
    * order the comments were made, and sorting the list must not renumber the
    * page underneath it.
    */
-  function sorted(rows) {
-    if (sortBy !== "priority") return rows;
+  function queued(rows) {
     return rows.slice().sort(function (a, b) {
       var by = priRank(a.priority) - priRank(b.priority);
       if (by !== 0) return by;
-      return String(a.createdAt).localeCompare(String(b.createdAt));
+      return byAge(a, b);
     });
   }
 
+  /*
+   * The comments split by the page they are on, the page being read first
+   * and the rest by name.
+   *
+   * Mark order is a per-page order -- it is the numbers on the pins -- so a
+   * flat list of every page's comments in it would run 1, 2, 1, 2, 3 with
+   * nothing saying why. Grouping is what makes the order mean something
+   * again: inside a group it is the order that page's pins are numbered in,
+   * and this page leads because its pins are the ones on screen.
+   */
+  function groupByPage(rows) {
+    var groups = [];
+    var at = Object.create(null);
+    for (var i = 0; i < rows.length; i++) {
+      var key = rows[i].sourcePath || rows[i].page || "";
+      if (at[key] === undefined) {
+        at[key] = groups.length;
+        groups.push({
+          key: key,
+          here: key === SOURCE_PATH,
+          name: pageName(rows[i]),
+          rows: [],
+        });
+      }
+      groups[at[key]].rows.push(rows[i]);
+    }
+    groups.sort(function (a, b) {
+      if (a.here !== b.here) return a.here ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return groups;
+  }
+
+  function groupHead(group) {
+    var head = el("div", "co-group");
+    if (group.here) head.setAttribute("data-here", "");
+    else head.setAttribute("title", group.key);
+    head.appendChild(el("span", "co-group-name", group.here ? "This page" : group.name));
+    head.appendChild(el("span", "co-group-count", String(group.rows.length)));
+    return head;
+  }
+
+  /*
+   * What the list says when it has nothing to show, which depends on whether
+   * there is nothing or merely nothing matching.
+   *
+   * Said of the whole review rather than of this page, since that is what the
+   * panel now lists: "all clear" with four open comments one page over would
+   * be a lie told confidently.
+   */
+  function emptyState(total) {
+    var empty = el("div", "co-empty");
+    empty.appendChild(icon(ICONS.bubble, 26));
+    if (!total) {
+      empty.appendChild(el("div", "co-empty-title", "Nothing marked yet"));
+      empty.appendChild(
+        el("div", "co-empty-text", "Press C, then click the words you want to say something about.")
+      );
+    } else if (filter === "open") {
+      empty.appendChild(el("div", "co-empty-title", "All clear"));
+      empty.appendChild(
+        el("div", "co-empty-text", "Every mark in this review has been dealt with.")
+      );
+    } else {
+      empty.appendChild(el("div", "co-empty-title", "Nothing resolved yet"));
+      empty.appendChild(
+        el("div", "co-empty-text", "Marks you resolve are kept here rather than deleted.")
+      );
+    }
+    return empty;
+  }
+
+  /*
+   * The panel, which lists the whole review rather than the page it is open
+   * on.
+   *
+   * It used to show this page's comments only, which made it a second way of
+   * reading the pins already on screen. The thing a reviewer actually wants
+   * from a list is the part they cannot see: what is still open on the nine
+   * pages they are not looking at. So the counts, the filters and the rows
+   * are all over every page, and a row belonging to somewhere else is a link
+   * to that page rather than to a pin that is not here.
+   */
   function renderPanel() {
-    var all_ = mine();
+    var rows = everything();
     var open_ = 0;
-    for (var t = 0; t < all_.length; t++) if (!all_[t].resolved) open_++;
-    var tallies = [all_.length, open_, all_.length - open_];
+    for (var t = 0; t < rows.length; t++) if (!rows[t].resolved) open_++;
+    var tallies = [rows.length, open_, rows.length - open_];
 
     for (var i = 0; i < filterBtns.length; i++) {
       if (FILTERS[i] === filter) filterBtns[i].setAttribute("data-active", "");
@@ -1198,74 +1423,117 @@ export const OVERLAY_SCRIPT = `(function () {
     }
     filterSlider.setAttribute("data-at", String(FILTERS.indexOf(filter)));
 
-    clear(sortBtn);
-    sortBtn.setAttribute("data-by", sortBy);
-    sortBtn.setAttribute(
-      "title",
-      sortBy === "priority" ? "Sort by mark order" : "Sort by priority"
-    );
-    sortBtn.appendChild(icon(ICONS.sort, 12));
-    sortBtn.appendChild(
-      el("span", null, sortBy === "priority" ? "Priority" : "Mark order")
-    );
+    for (var o = 0; o < orderBtns.length; o++) {
+      if (ORDERS[o][0] === sortBy) orderBtns[o].setAttribute("data-active", "");
+      else orderBtns[o].removeAttribute("data-active");
+    }
+    orderSlider.setAttribute("data-at", String(indexOfOrder(sortBy)));
 
     clear(sideBtn);
     sideBtn.setAttribute("title", side === "right" ? "Move to the left" : "Move to the right");
     sideBtn.appendChild(icon(side === "right" ? ICONS.toLeft : ICONS.toRight));
 
     clear(list);
-    var rows = sorted(mine());
-    var shown = 0;
+    var shown = [];
+    for (var j = 0; j < rows.length; j++) if (passes(rows[j])) shown.push(rows[j]);
 
-    for (var j = 0; j < rows.length; j++) {
-      if (!passes(rows[j])) continue;
-      list.appendChild(panelRow(rows[j], markNumber(rows[j])));
-      shown++;
+    if (!shown.length) {
+      list.appendChild(emptyState(rows.length));
+      return;
     }
 
-    if (!shown) {
-      var empty = el("div", "co-empty");
-      empty.appendChild(icon(ICONS.bubble, 26));
-      if (!rows.length) {
-        empty.appendChild(el("div", "co-empty-title", "Nothing marked yet"));
-        empty.appendChild(
-          el("div", "co-empty-text", "Press C, then click the words you want to say something about.")
-        );
-      } else if (filter === "open") {
-        empty.appendChild(el("div", "co-empty-title", "All clear"));
-        empty.appendChild(
-          el("div", "co-empty-text", "Every mark on this page has been dealt with.")
-        );
-      } else {
-        empty.appendChild(el("div", "co-empty-title", "Nothing resolved yet"));
-        empty.appendChild(
-          el("div", "co-empty-text", "Marks you resolve are kept here rather than deleted.")
-        );
+    if (sortBy === "priority") {
+      // One queue over the whole review, so each row has to say for itself
+      // which page it is on.
+      var queue = queued(shown);
+      for (var q = 0; q < queue.length; q++) {
+        list.appendChild(panelRow(queue[q], markNumber(queue[q]), true));
       }
-      list.appendChild(empty);
+      return;
+    }
+
+    // Grouped, so the heading says the page and the rows need not repeat it.
+    var groups = groupByPage(shown);
+    for (var g = 0; g < groups.length; g++) {
+      list.appendChild(groupHead(groups[g]));
+      for (var r = 0; r < groups[g].rows.length; r++) {
+        list.appendChild(panelRow(groups[g].rows[r], markNumber(groups[g].rows[r]), false));
+      }
     }
   }
 
-  function panelRow(comment, number) {
-    var row = el("div", "co-row");
+  /*
+   * One row of the panel.
+   *
+   * showPage is set when the list is one flat queue, where a row is the only
+   * thing that can say which page it belongs to. Under a group heading it is
+   * off, because the heading has just said it.
+   */
+  function panelRow(comment, number, showPage) {
+    var away = elsewhere(comment);
+    var leads = reachable(comment);
+    /*
+     * A row for another page is a real link, not a div that navigates when
+     * clicked. A pin over there cannot be opened from here, so the row's job
+     * is to go to the page -- and written as an anchor it also behaves like
+     * one: the browser shows where it leads, and a middle- or command-click
+     * opens that page in a tab of its own, which is exactly how someone
+     * works through a list of things to fix.
+     */
+    var row = el(leads ? "a" : "div", "co-row");
     row.setAttribute("data-comment", comment.id);
     if (comment.resolved) row.setAttribute("data-resolved", "");
-    if (comment.id === selected) row.setAttribute("data-selected", "");
-    var lost = orphaned(comment);
+    if (comment.id === selected && !away) row.setAttribute("data-selected", "");
+    if (away) row.setAttribute("data-away", "");
+    if (leads) {
+      row.setAttribute("href", pageHref(comment));
+      row.setAttribute("title", "Go to " + pageName(comment));
+    }
+    var lost = !away && orphaned(comment);
     if (lost) row.setAttribute("data-orphan", "");
 
     var card = el("div", "co-row-card");
     card.appendChild(el("span", "co-num", String(number)));
 
     var body = el("div", "co-row-body");
+
+    // Which page, when the list is not already grouped by it.
+    if (showPage && away) {
+      var where = el("div", "co-row-page");
+      where.appendChild(icon(ICONS.note, 11));
+      where.appendChild(el("span", null, pageName(comment)));
+      body.appendChild(where);
+    }
+
     var name = el("div", "co-row-name");
-    name.appendChild(el("strong", null, comment.author || "Anonymous"));
     /*
-     * No priority pill in here: the panel can be put in priority order, and
-     * a label repeating what the sort already says is a label the eye has to
-     * read past on every row. What the panel cannot say any other way is who
-     * wrote a comment without reading the page, so that is what the pill is
-     * for.
+     * Who said it, then how much they are asking for, then -- pushed to the
+     * far edge -- when. A row answers in the order the questions are asked,
+     * and the timestamp is the one part nobody reads deliberately, so it
+     * sits in a column of its own at the right rather than in the middle of
+     * the line where it pushes the pills about as the dates age.
+     *
+     * The priority, but only when it is one. A chip on every row saying
+     * "MEDIUM" is a word the eye has to read past on every row to find the
+     * two that are not; left off, the rows that do carry one are the ones
+     * worth looking at.
+     *
+     * It is here at all because the panel is now the whole review: a comment
+     * on another page is read in this list and nowhere else, so the list has
+     * to carry what the popup over there would have said.
+     */
+    name.appendChild(el("strong", null, comment.author || "Anonymous"));
+    if (comment.priority !== "medium") {
+      var level = el("span", "co-row-pri");
+      level.setAttribute("data-level", comment.priority);
+      level.setAttribute("title", PRI[comment.priority].label + " priority");
+      level.appendChild(el("span", "co-pri-mark", PRI[comment.priority].mark));
+      level.appendChild(el("span", null, PRI[comment.priority].label));
+      name.appendChild(level);
+    }
+    /*
+     * Who wrote a comment without reading the page, which nothing else in a
+     * row says.
      */
     if (comment.agent) {
       var tag = el("span", "co-tag", "Agent");
@@ -1309,11 +1577,17 @@ export const OVERLAY_SCRIPT = `(function () {
 
     card.appendChild(body);
     row.appendChild(card);
-    row.addEventListener("click", function () {
-      openPopup(comment.id);
-      var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
-      if (pin && pin.scrollIntoView) pin.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+    // Only this page's rows get a handler. The others are links, and the
+    // overlay on the page they land on opens the comment they named.
+    if (!away) {
+      row.addEventListener("click", function () {
+        openPopup(comment.id);
+        var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
+        if (pin && pin.scrollIntoView) {
+          pin.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    }
     return row;
   }
 
@@ -1728,7 +2002,7 @@ export const OVERLAY_SCRIPT = `(function () {
     if (point.node) aim.setAttribute("data-locked", "");
 
     draftQuote.textContent = point.text || "About the page";
-    draftPri = "normal";
+    draftPri = "medium";
     paintDraftPri();
 
     // The pin the comment will become, drawn before it exists, so the drop
@@ -1840,11 +2114,16 @@ export const OVERLAY_SCRIPT = `(function () {
     })(FILTERS[g]);
   }
 
-  sortBtn.addEventListener("click", function () {
-    sortBy = sortBy === "priority" ? "time" : "priority";
-    writePrefs();
-    renderPanel();
-  });
+  for (var y = 0; y < orderBtns.length; y++) {
+    (function (name) {
+      orderBtns[y].addEventListener("click", function () {
+        if (sortBy === name) return;
+        sortBy = name;
+        writePrefs();
+        renderPanel();
+      });
+    })(ORDERS[y][0]);
+  }
 
   sideBtn.addEventListener("click", function () {
     side = side === "right" ? "left" : "right";
@@ -1863,7 +2142,8 @@ export const OVERLAY_SCRIPT = `(function () {
 
     function move(moveEvent) {
       var delta = side === "right" ? startX - moveEvent.clientX : moveEvent.clientX - startX;
-      width = Math.max(220, Math.min(520, startWidth + delta));
+      // The floor is where the order row stops fitting beside its label.
+      width = Math.max(260, Math.min(560, startWidth + delta));
       panel.style.width = width + "px";
     }
 
@@ -1933,7 +2213,7 @@ export const OVERLAY_SCRIPT = `(function () {
       })
     );
     menu.appendChild(
-      item("Hide the notch", ICONS.hide, "H", function () {
+      item("Hide the overlay", ICONS.hide, "H", function () {
         setHidden(true);
       })
     );
@@ -1960,11 +2240,21 @@ export const OVERLAY_SCRIPT = `(function () {
   /* --- hiding --------------------------------------------------------- */
 
   /*
-   * H puts the notch away and takes the overlay out of the reader's way:
-   * comment mode's capture sheet, the panel, any open popup and a draft all
-   * go with it, because leaving a sheet over the page with no visible way to
-   * turn it off is a page that has stopped working for no stated reason. The
-   * pins stay -- they are the comments, not the tool.
+   * H takes the whole overlay off the page, pins included.
+   *
+   * The pins used to stay, on the reasoning that they are the comments
+   * rather than the tool. In practice they are the thing most in the way:
+   * the reason to press H is to look at the page as a reader will see it,
+   * and a page with eleven tags hanging off its paragraphs is not that page.
+   * So the hiding is done on the wrapper every visible part lives inside,
+   * which means nothing can be left behind by having been forgotten here.
+   *
+   * The modes are still closed down on the way out rather than merely
+   * covered: a capture sheet over the page with no visible way to turn it
+   * off is a page that has stopped working for no stated reason, and a
+   * sheet is still over it whether or not it can be seen. H brings
+   * everything back, and so does the menu row that offers it, which is why
+   * that row names the key.
    */
   function setHidden(next) {
     hidden = next;
@@ -1974,6 +2264,7 @@ export const OVERLAY_SCRIPT = `(function () {
       closePopup();
       setMode("view");
     }
+    wrap.hidden = next;
     notch.hidden = next;
   }
 
@@ -2182,7 +2473,51 @@ export const OVERLAY_SCRIPT = `(function () {
     new ResizeObserver(reposition).observe(document.body);
   }
 
+  /* --- arriving from another page's panel ---------------------------- */
+
+  /*
+   * The comment a link asked for, if a link asked for one.
+   *
+   * Tried twice. Once now, for a comment this browser already holds, and
+   * again when the vault answers, for one it does not: a review opened on a
+   * second machine, or in a browser whose storage has been cleared, has its
+   * comments in the file and nowhere else, and the row that was clicked was
+   * drawn from exactly that. It is cleared once it has been honoured, so a
+   * reviewer who has started reading something else is not pulled back to
+   * it by a request that has already been met.
+   */
+  var wanted = askedFor();
+
+  function askedFor() {
+    var query = String(location.search || "");
+    var at = query.indexOf(DEEP_PARAM + "=");
+    if (at === -1) return "";
+    var raw = query.slice(at + DEEP_PARAM.length + 1).split("&")[0];
+    try {
+      return decodeURIComponent(raw);
+    } catch (e) {
+      return raw;
+    }
+  }
+
+  function showWanted() {
+    if (!wanted) return;
+    var comment = byId(wanted);
+    // Not here: either the id is stale, or it names a comment on a third
+    // page. Neither is worth saying anything about -- the page is the page
+    // the reviewer asked for either way.
+    if (!comment || elsewhere(comment)) return;
+    wanted = "";
+    // In review mode, because that is the mode they left: the panel they
+    // clicked the row in should still be open when they arrive.
+    setMode("review");
+    openPopup(comment.id);
+    var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
+    if (pin && pin.scrollIntoView) pin.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   setMode("view");
+  showWanted();
   pull();
 })();
 `;

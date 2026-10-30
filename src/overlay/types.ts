@@ -29,22 +29,31 @@
  *
  * 2 added the drop point (`x`, `y`, `rx`, `ry`) and `replies`. 3 added
  * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
- * `external` and the document's `withdrawn` list. An older file still reads:
- * every added field is optional and defaults to what a comment without it
- * meant.
+ * `external` and the document's `withdrawn` list. 6 renamed the middle
+ * priority from `normal` to `medium`. An older file still reads: every added
+ * field is optional and defaults to what a comment without it meant, and a
+ * `normal` priority is read as `medium` by every reader of one.
  */
-export const OVERLAY_SCHEMA_VERSION = 5;
+export const OVERLAY_SCHEMA_VERSION = 6;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
  *
  * Three, not five. A reviewer triaging their own notes can tell "this blocks
  * the page" from "this is a nit" and will not reliably tell a 2 from a 3, so
- * a fourth level buys indecision rather than precision. `normal` is what a
+ * a fourth level buys indecision rather than precision. `medium` is what a
  * comment left without a thought about it means, and is therefore the
- * default and the one that shows no pill.
+ * default.
+ *
+ * `medium` rather than `normal`, which is what it was called until schema 6.
+ * Three levels read as a scale, and the middle of a scale is named for where
+ * it sits on it: high, medium, low. "Normal" named it for being unremarkable
+ * instead, which made the other two deviations from a baseline rather than
+ * two of three steps -- and left "high and normal" to be read as a pair of
+ * different kinds of thing. A review file written before the rename still
+ * says `normal`, and every reader here maps it across.
  */
-export type OverlayPriority = "high" | "normal" | "low";
+export type OverlayPriority = "high" | "medium" | "low";
 
 /**
  * An issue filed from a comment, in whatever tracker the work is tracked in.
@@ -134,7 +143,7 @@ export interface OverlayComment {
   /** ISO 8601. */
   createdAt: string;
   resolved: boolean;
-  /** What the reviewer thinks this is worth. `normal` when unstated. */
+  /** What the reviewer thinks this is worth. `medium` when unstated. */
   priority: OverlayPriority;
   /**
    * The tool that filed this comment, or null for one a person typed in the

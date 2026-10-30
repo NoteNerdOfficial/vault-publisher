@@ -37,12 +37,12 @@ import {
  * Written as the signifiers rather than as the words "high" and "low" so
  * that a priority set in the browser is a priority the vault can sort by: a
  * review note is a task list, and the plugin that reads task lists here
- * knows these two characters. Normal priority has no signifier, which is
+ * knows these two characters. Medium priority has no signifier, which is
  * exactly right -- it is what a task without one already means.
  */
 const PRIORITY_MARK: Record<OverlayPriority, string> = {
   high: "\u23eb",
-  normal: "",
+  medium: "",
   low: "\ud83d\udd3d",
 };
 
@@ -140,8 +140,17 @@ function readComment(value: unknown, index: number): OverlayComment {
   };
 }
 
+/**
+ * A comment's priority, with the name it used to go by read across.
+ *
+ * `normal` is what the middle level was called until schema 6, and a review
+ * file in a vault outlives the build that wrote it, so it has to keep
+ * reading. It maps to `medium` rather than being rejected, because it is the
+ * same level under a worse name -- and it is also what an unrecognised value
+ * falls back to, which it already was.
+ */
 function readPriority(value: unknown): OverlayPriority {
-  return value === "high" || value === "low" ? value : "normal";
+  return value === "high" || value === "low" ? value : "medium";
 }
 
 /**
