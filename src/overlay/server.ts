@@ -69,6 +69,17 @@ export interface ReviewServerOptions {
    * id across and hands the answer back.
    */
   relay?: (id: string) => Promise<RelayOutcome>;
+  /**
+   * Called after the overlay has read or written the review.
+   *
+   * The hook the plugin keeps its trackers in step from: a page being opened
+   * or a comment being changed is the moment the two sides are worth putting
+   * back in step. It is called and not awaited -- whatever it does must not
+   * hold a reviewer's request open -- and anything it throws is swallowed
+   * here, because a tracker being unreachable is not a reason for a save to
+   * fail.
+   */
+  touched?: () => void;
   /** 0, the default, takes whatever port the OS offers. */
   port?: number;
   /** Injectable so a test is not at the mercy of a random value. */
@@ -144,6 +155,43 @@ export function emptyDocument(site: string): string {
  * This can therefore only add information, never undo anything a reviewer
  * did, which is what makes it safe to apply to every save.
  */
+/**
+ * The deletions still waiting to be acted on, after a save.
+ *
+ * Two sources: what the browser has just handed over, and what the file
+ * already held because the plugin has not closed those issues yet. Keyed by
+ * the issue rather than by the comment, since the comment is gone and the
+ * same issue arriving twice would be closed twice.
+ */
+export function carryWithdrawn(incoming: unknown, saved: string | null): unknown[] {
+  const out: unknown[] = [];
+  const seen = new Set<string>();
+
+  const add = (rows: unknown): void => {
+    if (!Array.isArray(rows)) return;
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const entry = row as { external?: { provider?: unknown; key?: unknown } };
+      if (!entry.external || typeof entry.external !== "object") continue;
+      const key = `${String(entry.external.provider ?? "")}:${String(entry.external.key ?? "")}`;
+      if (key === ":" || seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+  };
+
+  add(incoming);
+  if (saved) {
+    try {
+      add((JSON.parse(saved) as { withdrawn?: unknown }).withdrawn);
+    } catch {
+      // An unreadable file is about to be replaced by a good one.
+    }
+  }
+
+  return out;
+}
+
 export function carryExternal(incoming: unknown[], saved: string | null): unknown[] {
   if (!saved) return incoming;
 
@@ -337,6 +385,21 @@ export class ReviewServer {
     }
   }
 
+  /**
+   * Tells the plugin the review was touched, and never fails over it.
+   *
+   * Deliberately not awaited: the reviewer's request is already answered,
+   * and whatever the plugin does with this -- a round of HTTP to a tracker,
+   * in practice -- is not something to hold a browser open for.
+   */
+  private touched(): void {
+    try {
+      this.options.touched?.();
+    } catch {
+      // A hook that throws is the plugin's problem, not this request's.
+    }
+  }
+
   private async getComments(response: ServerResponse): Promise<void> {
     const saved = await this.options.store.readComments();
     send(
@@ -348,6 +411,10 @@ export class ReviewServer {
       // showing comments that are no longer there.
       { "Cache-Control": "no-store" },
     );
+    // A page being opened is the other half of keeping the two sides in
+    // step: this answer is what the overlay shows, so it is worth having
+    // the next one be current.
+    this.touched();
   }
 
   private async putComments(
@@ -379,14 +446,17 @@ export class ReviewServer {
     // field is in that position -- the issue a comment was filed as -- and
     // losing it would mean the next Send filed a second issue for the same
     // comment. So it is read off the file and put back before the write.
-    const document = parsed as { comments: unknown[] };
-    document.comments = carryExternal(
-      document.comments,
-      await this.options.store.readComments(),
-    );
+    const document = parsed as { comments: unknown[]; withdrawn?: unknown };
+    const saved = await this.options.store.readComments();
+    document.comments = carryExternal(document.comments, saved);
+    // The browser hands over the deletions it has just made; the file holds
+    // the ones the plugin has not dealt with yet. Both have to survive this
+    // write, or an issue is left open with nothing pointing at it.
+    document.withdrawn = carryWithdrawn(document.withdrawn, saved);
 
     await this.options.store.writeComments(JSON.stringify(document, null, 2));
     send(response, 200, MIME.json, `{"saved":true}`);
+    this.touched();
   }
 
   private async postRelay(

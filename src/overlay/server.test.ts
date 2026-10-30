@@ -4,11 +4,28 @@ import {
   ReviewServer,
   ReviewStore,
   carryExternal,
+  carryWithdrawn,
   emptyDocument,
   mimeFor,
   previewPathFor,
 } from "./server";
 import { OVERLAY_SCHEMA_VERSION } from "./types";
+
+/**
+ * Every request in this file closes its connection when it is answered.
+ *
+ * Node's `fetch` keeps sockets in a pool to reuse them, and a pooled socket
+ * to a server that has since been stopped is an open handle nothing here can
+ * reach: the worker process stays alive after its last test, and the run
+ * fails at teardown with every test having passed. Asking for the connection
+ * to be closed costs a handshake per request in one test file, and buys a
+ * test run that means what it says.
+ */
+const fetch = (url: string | URL, init: RequestInit = {}): Promise<Response> =>
+  globalThis.fetch(url, {
+    ...init,
+    headers: { connection: "close", ...(init.headers as Record<string, string>) },
+  });
 
 /**
  * The server reads and writes inside the vault, so most of what is tested
@@ -434,6 +451,118 @@ describe("carryExternal", () => {
       expect(carryExternal(rows, saved as string | null)).toBe(rows);
     },
   );
+});
+
+/**
+ * The hook the plugin keeps its trackers in step from.
+ *
+ * It fires on the overlay's own reads and writes, because those are the
+ * moments the two sides are worth putting back in step, and it must never
+ * be able to break one of them: a reviewer mid-sentence does not care that
+ * a tracker is unreachable.
+ */
+describe("the review server telling the plugin the review was touched", () => {
+  let server: ReviewServer;
+  let base: string;
+  let touches: number;
+  const TOKEN = "test-token";
+
+  beforeEach(async () => {
+    touches = 0;
+    server = new ReviewServer({
+      store: store(),
+      token: TOKEN,
+      touched: () => {
+        touches += 1;
+      },
+    });
+    const address = await server.start();
+    base = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await server.stop();
+  });
+
+  it("says so when a page reads the review", async () => {
+    await fetch(`${base}/api/comments?t=${TOKEN}`);
+
+    expect(touches).toBe(1);
+  });
+
+  it("says so after a save, once the save is done", async () => {
+    const response = await fetch(`${base}/api/comments?t=${TOKEN}`, {
+      method: "POST",
+      body: JSON.stringify({ comments: [] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(touches).toBe(1);
+  });
+
+  it("does not say so for a save it refused", async () => {
+    await fetch(`${base}/api/comments?t=${TOKEN}`, { method: "POST", body: "{ oh dear" });
+
+    expect(touches).toBe(0);
+  });
+
+  // The hook belongs to the plugin, and a plugin that throws is not a
+  // reason for somebody's comment to fail to save.
+  it("answers the request anyway when the hook throws", async () => {
+    const angry = new ReviewServer({
+      store: store(),
+      token: TOKEN,
+      touched: () => {
+        throw new Error("the tracker is on fire");
+      },
+    });
+    const address = await angry.start();
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/api/comments?t=${TOKEN}`,
+        { method: "POST", body: JSON.stringify({ comments: [] }) },
+      );
+
+      expect(response.status).toBe(200);
+    } finally {
+      await angry.stop();
+    }
+  });
+});
+
+/**
+ * The deletions waiting to be acted on.
+ *
+ * The browser hands over what it has just deleted; the file holds what the
+ * plugin has not managed to close yet. Both have to survive a save, or an
+ * issue is left open with nothing pointing at it.
+ */
+describe("carryWithdrawn", () => {
+  const gone = { id: "a", external: { provider: "github", key: "o/r#7" }, at: "t" };
+  const stuck = { id: "b", external: { provider: "github", key: "o/r#8" }, at: "t" };
+
+  it("keeps what the browser sent and what the file still held", () => {
+    const out = carryWithdrawn([gone], JSON.stringify({ withdrawn: [stuck] }));
+
+    expect(out).toEqual([gone, stuck]);
+  });
+
+  it("keeps one entry per issue, not per time it was handed over", () => {
+    const out = carryWithdrawn([gone], JSON.stringify({ withdrawn: [gone] }));
+
+    expect(out).toEqual([gone]);
+  });
+
+  it("drops a row with no issue on it, which is nothing anyone can close", () => {
+    const out = carryWithdrawn([{ id: "c", at: "t" }, "nonsense", null], null);
+
+    expect(out).toEqual([]);
+  });
+
+  it("has nothing to carry when neither side has any", () => {
+    expect(carryWithdrawn(undefined, null)).toEqual([]);
+    expect(carryWithdrawn(undefined, "{ oh dear")).toEqual([]);
+  });
 });
 
 describe("emptyDocument", () => {

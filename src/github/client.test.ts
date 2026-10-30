@@ -292,3 +292,115 @@ describe("createIssue", () => {
     expect(http.calls).toHaveLength(1);
   });
 });
+
+describe("closeIssue", () => {
+  it("closes it as done for a comment that was resolved", async () => {
+    const http = fakeHttp(() => ({ json: {} }));
+    restore = http.restore;
+
+    await client().closeIssue(41, "completed");
+
+    expect(http.calls[0].method).toBe("PATCH");
+    expect(http.calls[0].url).toBe("https://api.github.com/repos/o/r/issues/41");
+    expect(http.calls[0].body).toEqual({ state: "closed", state_reason: "completed" });
+  });
+
+  // A deleted comment is not a claim that the work was done, and the reason
+  // is also what stops a later sync reading it back as finished work.
+  it("closes it as not planned for a comment that was deleted", async () => {
+    const http = fakeHttp(() => ({ json: {} }));
+    restore = http.restore;
+
+    await client().closeIssue(41, "not_planned");
+
+    expect(http.calls[0].body).toMatchObject({ state_reason: "not_planned" });
+  });
+});
+
+/**
+ * Reading an issue back, which is what catching up on filed comments does.
+ */
+describe("getIssue", () => {
+  it("asks for the one issue, and reports why it was closed", async () => {
+    const http = fakeHttp(() => ({
+      json: { state: "closed", state_reason: "not_planned" },
+    }));
+    restore = http.restore;
+
+    const issue = await client().getIssue(41);
+
+    expect(http.calls[0].method).toBe("GET");
+    expect(http.calls[0].url).toBe("https://api.github.com/repos/o/r/issues/41");
+    expect(issue).toEqual({ state: "closed", state_reason: "not_planned" });
+  });
+
+  it("does not invent a reason that was not sent", async () => {
+    const http = fakeHttp(() => ({ json: { state: "open" } }));
+    restore = http.restore;
+
+    expect(await client().getIssue(1)).toEqual({ state: "open", state_reason: null });
+  });
+});
+
+/**
+ * What answers on a corporate network is not always GitHub.
+ *
+ * An Enterprise Server behind a sign-on portal answers with the portal's
+ * login page, and often answers successfully: HTTP 200 and an HTML body.
+ * Reading that as JSON threw a parse error from inside the plugin, with
+ * nothing in it about what had actually happened.
+ */
+describe("an answer that did not come from the API", () => {
+  /**
+   * `json` is a getter here because that is what it is in Obsidian: it parses
+   * the body on first read and throws when the body is not JSON.
+   */
+  function replying(body: string, status = 200): void {
+    restore = setRequestUrl(async () => ({
+      status,
+      get json(): unknown {
+        throw new SyntaxError("Unexpected token < in JSON at position 0");
+      },
+      text: body,
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+    }));
+  }
+
+  it("names a sign-in page as what it is", async () => {
+    replying(
+      "<!DOCTYPE html><html><head><title>Sign in</title></head>" +
+        '<body><input type="password" name="password"></body></html>',
+    );
+
+    await expect(client().getViewer()).rejects.toThrow(/sign-in page/);
+  });
+
+  it("refuses it even though it arrived as a success", async () => {
+    replying("<html><head><title>Log in</title></head><body></body></html>");
+
+    await expect(client().getViewer()).rejects.toBeInstanceOf(GitHubError);
+  });
+
+  // The other way to get a web page out of this: an Enterprise Server whose
+  // web address was entered where its API root belongs.
+  it("says what an Enterprise API root looks like", async () => {
+    replying("<html><body><h1>GitHub Enterprise</h1></body></html>", 200);
+
+    await expect(client().getViewer()).rejects.toThrow(/\/api\/v3/);
+  });
+
+  // An empty body is not that failure: it is a 204, or a status that speaks
+  // for itself, and the statuses were already handled.
+  it("leaves an empty answer to the status it came with", async () => {
+    restore = setRequestUrl(async () => ({
+      status: 404,
+      json: undefined,
+      text: "",
+      headers: {},
+      arrayBuffer: new ArrayBuffer(0),
+    }));
+
+    await expect(client().getRef("gh-pages")).resolves.toBeNull();
+  });
+});

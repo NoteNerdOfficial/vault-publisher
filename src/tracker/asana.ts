@@ -60,4 +60,36 @@ export class AsanaClient {
       url: created.data?.permalink_url || `${API.replace("/api/1.0", "")}/0/0/${gid}`,
     };
   }
+
+  /**
+   * Ticks one task off.
+   *
+   * There is no "closed for another reason" here: a task is completed or it
+   * is not, and Asana offers nothing else to say about it.
+   */
+  async completeTask(gid: string): Promise<void> {
+    await trackerRequest({
+      url: `${API}/tasks/${encodeURIComponent(gid)}`,
+      method: "PUT",
+      headers: { Authorization: `Bearer ${this.config.token}` },
+      body: { data: { completed: true } },
+    });
+  }
+
+  /**
+   * Whether one task is ticked off.
+   *
+   * `completed` is the whole of what Asana has to say about it: a task
+   * carries no resolution and no reason, so there is nothing else to ask
+   * for and no half-done state to interpret.
+   */
+  async taskStatus(gid: string): Promise<{ completed: boolean }> {
+    const task = await trackerRequest<{ data?: { completed?: boolean } }>({
+      url: `${API}/tasks/${encodeURIComponent(gid)}?opt_fields=completed`,
+      method: "GET",
+      headers: { Authorization: `Bearer ${this.config.token}` },
+    });
+
+    return { completed: task.data?.completed === true };
+  }
 }

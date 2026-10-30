@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 // real package, which has no such export. The alias points at this same file,
 // so the client under test and this import share one module instance.
 import { setRequestUrl } from "../../test/obsidian-stub";
-import { JiraClient, jiraLabels } from "./jira";
+import { JiraClient, JiraConfig, jiraLabels, pickTransition } from "./jira";
 import { TrackerError } from "./request";
 
 interface Call {
@@ -50,13 +50,15 @@ afterEach(() => {
   restore = null;
 });
 
-function client() {
+function client(over: Partial<JiraConfig> = {}) {
   return new JiraClient({
     site: "https://acme.atlassian.net",
     project: "ENG",
     issueType: "Task",
-    email: "someone@example.com",
+    auth: "cloud",
+    user: "someone@example.com",
     token: "jira-token",
+    ...over,
   });
 }
 
@@ -91,6 +93,17 @@ describe("createIssue", () => {
       key: "ENG-14",
       url: "https://acme.atlassian.net/browse/ENG-14",
     });
+  });
+
+  // Server and Data Center refuse anything that changes data unless the
+  // request says it is not a browser being made to act for somebody.
+  it("opts out of the cross-site check", async () => {
+    const http = fakeHttp(() => ({ json: { key: "ENG-1" } }));
+    restore = http.restore;
+
+    await client().createIssue({ summary: "t", description: DESCRIPTION });
+
+    expect(http.calls[0].headers["X-Atlassian-Token"]).toBe("no-check");
   });
 
   it("authenticates with the email and the token, not with a bearer", () => {
@@ -168,6 +181,198 @@ describe("createIssue", () => {
     await expect(
       client().createIssue({ summary: "t", description: DESCRIPTION }),
     ).rejects.toBeInstanceOf(TrackerError);
+  });
+});
+
+/**
+ * The Jira a company runs itself, which is a different API behind the same
+ * name: a bearer token instead of a pair, v2 instead of v3, and very often a
+ * context path in front of all of it.
+ */
+describe("a Jira somebody runs themselves", () => {
+  it("sends a personal access token as a bearer token, to the older API", async () => {
+    const http = fakeHttp(() => ({ json: { key: "ENG-2" } }));
+    restore = http.restore;
+
+    const issue = await client({
+      site: "https://jira.example.com/jira",
+      auth: "pat",
+      // A token is the whole credential there: no account goes with it.
+      user: "",
+      token: "pat-token",
+    }).createIssue({ summary: "t", description: "h3. Replies" });
+
+    expect(http.calls[0].headers.Authorization).toBe("Bearer pat-token");
+    expect(http.calls[0].url).toBe("https://jira.example.com/jira/rest/api/2/issue");
+    // The description is a string there, and goes across as one.
+    expect(http.calls[0].body).toMatchObject({
+      fields: { description: "h3. Replies" },
+    });
+    expect(issue.url).toBe("https://jira.example.com/jira/browse/ENG-2");
+  });
+
+  it("signs in with a username when that is all the version has", async () => {
+    const http = fakeHttp(() => ({ json: { key: "ENG-3" } }));
+    restore = http.restore;
+
+    await client({
+      site: "https://jira.example.com",
+      auth: "basic",
+      user: "someone",
+      token: "a password",
+    }).createIssue({ summary: "t", description: "" });
+
+    const auth = http.calls[0].headers.Authorization;
+    expect(atob(auth.slice(6))).toBe("someone:a password");
+    expect(http.calls[0].url).toBe("https://jira.example.com/rest/api/2/issue");
+  });
+
+  // The API can be behind a gateway nobody browses to, and a link to it is a
+  // link to a page that does not load.
+  it("links to the address a person opens Jira at", async () => {
+    const http = fakeHttp(() => ({ json: { key: "ENG-4" } }));
+    restore = http.restore;
+
+    const issue = await client({
+      site: "https://jira-api.internal/jira",
+      browseUrl: "https://jira.example.com/jira/",
+      auth: "pat",
+      user: "",
+    }).createIssue({ summary: "t", description: "" });
+
+    expect(http.calls[0].url).toBe("https://jira-api.internal/jira/rest/api/2/issue");
+    expect(issue.url).toBe("https://jira.example.com/jira/browse/ENG-4");
+  });
+});
+
+/** Reading a status back, which is what catching up on a comment does. */
+describe("issueStatus", () => {
+  it("asks only for the two fields it reads", async () => {
+    const http = fakeHttp(() => ({
+      json: {
+        fields: {
+          status: { statusCategory: { key: "done" } },
+          resolution: { name: "Won't Do" },
+        },
+      },
+    }));
+    restore = http.restore;
+
+    const status = await client().issueStatus("ENG-14");
+
+    expect(http.calls[0].method).toBe("GET");
+    expect(http.calls[0].url).toBe(
+      "https://acme.atlassian.net/rest/api/3/issue/ENG-14?fields=status,resolution",
+    );
+    expect(status).toEqual({ category: "done", resolution: "Won't Do" });
+  });
+
+  it("reads the older API on a Jira a company runs", async () => {
+    const http = fakeHttp(() => ({
+      json: { fields: { status: { statusCategory: { key: "indeterminate" } } } },
+    }));
+    restore = http.restore;
+
+    const status = await client({
+      site: "https://jira.example.com/jira",
+      auth: "pat",
+      user: "",
+    }).issueStatus("ENG-9");
+
+    expect(http.calls[0].url).toBe(
+      "https://jira.example.com/jira/rest/api/2/issue/ENG-9?fields=status,resolution",
+    );
+    // An unresolved issue has no resolution at all, and that is not an error.
+    expect(status).toEqual({ category: "indeterminate", resolution: "" });
+  });
+});
+
+/**
+ * Closing, which in Jira is not a field but a move through the project's own
+ * workflow: the transitions have to be asked for before one can be used.
+ */
+describe("closeIssue", () => {
+  const TRANSITIONS = {
+    transitions: [
+      { id: "11", name: "Start progress", to: { statusCategory: { key: "indeterminate" } } },
+      { id: "21", name: "Done", to: { statusCategory: { key: "done" }, name: "Done" } },
+      { id: "31", name: "Won't Do", to: { statusCategory: { key: "done" }, name: "Won't Do" } },
+    ],
+  };
+
+  it("asks what the workflow offers, then posts the one that finishes it", async () => {
+    const http = fakeHttp((call) => (call.method === "GET" ? { json: TRANSITIONS } : {}));
+    restore = http.restore;
+
+    await client().closeIssue("ENG-14", "done");
+
+    expect(http.calls[0].method).toBe("GET");
+    expect(http.calls[0].url).toContain("/rest/api/3/issue/ENG-14/transitions");
+    expect(http.calls[1].method).toBe("POST");
+    expect(http.calls[1].url).toBe(
+      "https://acme.atlassian.net/rest/api/3/issue/ENG-14/transitions",
+    );
+    expect(http.calls[1].body).toEqual({ transition: { id: "21" } });
+  });
+
+  it("prefers the transition that says the work will not be done", async () => {
+    const http = fakeHttp((call) => (call.method === "GET" ? { json: TRANSITIONS } : {}));
+    restore = http.restore;
+
+    await client().closeIssue("ENG-14", "declined");
+
+    expect(http.calls[1].body).toEqual({ transition: { id: "31" } });
+  });
+
+  // A workflow can genuinely refuse to let this account finish an issue, and
+  // that is worth saying rather than moving the issue sideways instead.
+  it("says so when no transition would close it, and posts nothing", async () => {
+    const http = fakeHttp(() => ({
+      json: { transitions: [{ id: "11", name: "Start progress", to: { statusCategory: { key: "indeterminate" } } }] },
+    }));
+    restore = http.restore;
+
+    await expect(client().closeIssue("ENG-14", "done")).rejects.toThrow(/no transition/);
+    expect(http.calls).toHaveLength(1);
+  });
+
+  it("uses the older API on a Jira a company runs", async () => {
+    const http = fakeHttp((call) => (call.method === "GET" ? { json: TRANSITIONS } : {}));
+    restore = http.restore;
+
+    await client({
+      site: "https://jira.example.com/jira",
+      auth: "pat",
+      user: "",
+    }).closeIssue("ENG-14", "done");
+
+    expect(http.calls[1].url).toBe(
+      "https://jira.example.com/jira/rest/api/2/issue/ENG-14/transitions",
+    );
+  });
+});
+
+describe("pickTransition", () => {
+  const done = { id: "2", name: "Done", to: { statusCategory: { key: "done" } } };
+  const wont = { id: "3", name: "Won't Do", to: { statusCategory: { key: "done" } } };
+  const start = { id: "1", name: "Start", to: { statusCategory: { key: "indeterminate" } } };
+
+  it("will only ever pick a transition that finishes the issue", () => {
+    expect(pickTransition([start], "done")).toBeNull();
+    expect(pickTransition([], "declined")).toBeNull();
+    expect(pickTransition([start, done], "done")?.id).toBe("2");
+  });
+
+  it("falls back to the other kind rather than leaving the issue open", () => {
+    // Only a refusal available, but the comment was resolved: closed is
+    // closer to the truth than open.
+    expect(pickTransition([start, wont], "done")?.id).toBe("3");
+    expect(pickTransition([start, done], "declined")?.id).toBe("2");
+  });
+
+  it("reads the status name as well as the transition's own", () => {
+    const named = { id: "4", name: "Close", to: { statusCategory: { key: "done" }, name: "Duplicate" } };
+    expect(pickTransition([named, done], "declined")?.id).toBe("4");
   });
 });
 

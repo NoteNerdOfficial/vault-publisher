@@ -28,11 +28,12 @@
  * know about.
  *
  * 2 added the drop point (`x`, `y`, `rx`, `ry`) and `replies`. 3 added
- * `priority` and `agent`. 4 added `external`. An older file still reads:
+ * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
+ * `external` and the document's `withdrawn` list. An older file still reads:
  * every added field is optional and defaults to what a comment without it
  * meant.
  */
-export const OVERLAY_SCHEMA_VERSION = 4;
+export const OVERLAY_SCHEMA_VERSION = 5;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
@@ -68,6 +69,36 @@ export interface OverlayExternalIssue {
   url: string;
   /** ISO 8601. */
   filedAt: string;
+  /**
+   * When this plugin closed the issue, because the comment was resolved or
+   * deleted here. Absent while the issue is still open as far as we know.
+   *
+   * It exists to make closing happen once. Without it, every sync would
+   * close every resolved comment's issue again -- which is harmless on two
+   * of the three trackers and a refused transition on Jira, but it is also a
+   * request per comment per sync, forever.
+   */
+  closedAt?: string | null;
+}
+
+/**
+ * A comment that was deleted after its issue had been filed.
+ *
+ * The issue outlives the comment, and once the comment is gone so is the
+ * only pointer to it -- so a tombstone is left behind instead. The plugin
+ * closes the issue, then drops the tombstone; one that is still here is one
+ * whose tracker could not be reached yet.
+ *
+ * Written by the browser, because only the browser knows the difference
+ * between a comment somebody deleted and a comment this copy of the document
+ * never had.
+ */
+export interface OverlayWithdrawn {
+  /** The comment that was deleted. Kept so a repeat is recognisable. */
+  id: string;
+  external: OverlayExternalIssue;
+  /** ISO 8601. */
+  at: string;
 }
 
 /** A follow-up on a comment, in the thread its pin opens. */
@@ -128,6 +159,8 @@ export interface OverlayExport {
   /** ISO 8601. */
   exportedAt: string;
   comments: OverlayComment[];
+  /** Issues whose comment was deleted, until the issue has been closed. */
+  withdrawn?: OverlayWithdrawn[];
 }
 
 /** How much of a block's text is worth keeping for context. */

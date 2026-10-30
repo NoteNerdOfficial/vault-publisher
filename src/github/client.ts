@@ -1,4 +1,5 @@
 import { requestUrl, RequestUrlResponse } from "obsidian";
+import { bodyText, describeNotJson, jsonBody } from "../platform/response";
 import { encodeUrlPath } from "../publish/urls";
 
 /**
@@ -18,10 +19,26 @@ import { encodeUrlPath } from "../publish/urls";
  *
  * And requests go through Obsidian's `requestUrl` rather than `fetch`, since
  * that bypasses the renderer's CORS rules and honours system proxy settings.
+ *
+ * On a corporate network the thing that answers is not always GitHub. An
+ * Enterprise Server behind a sign-on portal answers with the portal's login
+ * page, which is not JSON and sometimes not even an error, so the body is
+ * read through `platform/response` rather than by reaching for `.json`.
  */
 
 /** Blob mode for a regular file. Git's other modes are not needed here. */
 const FILE_MODE = "100644";
+
+/**
+ * The hint to give when the answer was a web page rather than the API.
+ *
+ * For GitHub that is nearly always one of two things: an Enterprise Server
+ * whose API root was given as the site rather than as the API, or a sign-on
+ * portal in front of it.
+ */
+const ENTERPRISE_HINT =
+  "An Enterprise Server's API root ends in /api/v3, and is not the address " +
+  "its web interface is at.";
 
 export interface GitHubConfig {
   /** Host API root. Non-default values are what support GitHub Enterprise
@@ -127,9 +144,26 @@ export class GitHubClient {
     // out, only explain afterwards.
     if (rateRemaining !== null) this.lastRateRemaining = rateRemaining;
 
+    // Read before the status is judged: a refusal by the API reads nothing
+    // like something else answering in its place, and only one of the two
+    // has a message in it worth repeating.
+    const answer = jsonBody(response);
+    const text = bodyText(response);
+    // Not JSON, and not empty either: whatever answered, it was not the API.
+    // An empty body is left to fall through, because that is a 204 and the
+    // statuses below already describe it.
+    if (answer === undefined && text.trim()) {
+      throw new GitHubError(
+        describeNotJson(text, url, response.status, ENTERPRISE_HINT),
+        response.status,
+        text.slice(0, 500),
+        rateRemaining,
+      );
+    }
+
     if (response.status >= 400) {
       const apiMessage =
-        (response.json as { message?: string } | undefined)?.message ??
+        (answer as { message?: string } | undefined)?.message ??
         `HTTP ${response.status}`;
       // A 403 with nothing left in the quota is a rate limit, not a
       // permissions problem, and GitHub's own message says "rate limit
@@ -141,10 +175,10 @@ export class GitHubClient {
       const message = exhausted
         ? `GitHub API rate limit reached${reset ? `, refills at ${reset}` : ""}. Nothing was committed.`
         : `${method} ${path} failed: ${apiMessage}`;
-      throw new GitHubError(message, response.status, response.json ?? response.text, rateRemaining);
+      throw new GitHubError(message, response.status, answer ?? text, rateRemaining);
     }
 
-    return response.json as T;
+    return answer as T;
   }
 
   // -- repository and Pages setup ------------------------------------------
@@ -385,6 +419,40 @@ export class GitHubClient {
    * them: an issue with no labels is worth a great deal more than no issue,
    * and the caller has a comment in front of someone waiting on it.
    */
+  /**
+   * Closes one issue, saying why.
+   *
+   * "completed" for a comment that was resolved, "not_planned" for one that
+   * was deleted: the second is a different thing to read on a board, and it
+   * is also what stops a later sync counting that issue as done work.
+   */
+  async closeIssue(
+    number: number,
+    reason: "completed" | "not_planned",
+  ): Promise<void> {
+    await this.request("PATCH", `/repos/${this.config.owner}/${this.config.repo}/issues/${number}`, {
+      state: "closed",
+      state_reason: reason,
+    });
+  }
+
+  /**
+   * One issue as it stands now.
+   *
+   * `state_reason` comes back with it because closed and done are not the
+   * same thing: an issue closed as "not planned" is a decision not to do the
+   * work.
+   */
+  async getIssue(
+    number: number,
+  ): Promise<{ state: string; state_reason: string | null }> {
+    const issue = await this.request<{ state?: string; state_reason?: string | null }>(
+      "GET",
+      `/repos/${this.config.owner}/${this.config.repo}/issues/${number}`,
+    );
+    return { state: issue.state ?? "", state_reason: issue.state_reason ?? null };
+  }
+
   async createIssue(options: {
     title: string;
     body: string;

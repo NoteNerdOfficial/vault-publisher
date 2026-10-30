@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OVERLAY_SCRIPT, overlayBundle } from "./overlayScript";
 import { stampBlockIds } from "./anchor";
@@ -1361,7 +1363,7 @@ describe("the overlay against the vault", () => {
     expect(sent.comments).toHaveLength(1);
     expect(sent.comments[0].text).toBe("Send this to the vault.");
     // Shaped like a review file, so the import command reads it unchanged.
-    expect(sent.version).toBe(4);
+    expect(sent.version).toBe(5);
   });
 
   // The point of the whole exercise: a comment left in another browser, or
@@ -1600,6 +1602,52 @@ describe("filing a comment in a tracker", () => {
     );
   });
 
+  /*
+   * Deleting a comment that has an issue behind it.
+   *
+   * The issue outlives the comment, so the record of it is handed to the
+   * plugin on the way out -- otherwise the issue is left open with nothing
+   * anywhere pointing at it. Only this browser knows the difference between
+   * a comment somebody deleted and one this copy never had, which is why it
+   * is said here rather than worked out from the document.
+   */
+  it("hands over the issue of a filed comment it deletes", async () => {
+    stub(null);
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "filed", external: ISSUE })]),
+    );
+    mountPage({ tracker: "GitHub" });
+    const shadow = run();
+    await flush();
+
+    openMore(shadow);
+    click(menuItem(shadow, "Delete"));
+    await flush();
+
+    const last = JSON.parse(sent[sent.length - 1].body ?? "{}");
+    expect(last.comments).toHaveLength(0);
+    expect(last.withdrawn).toHaveLength(1);
+    expect(last.withdrawn[0]).toMatchObject({ id: "filed", external: ISSUE });
+    expect(typeof last.withdrawn[0].at).toBe("string");
+  });
+
+  // Nothing to hand over for a comment that was never filed, and an empty
+  // list is not a thing for the plugin to go looking at.
+  it("hands over nothing when the comment it deletes has no issue", async () => {
+    stub(null);
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ id: "plain" })]));
+    mountPage({ tracker: "GitHub" });
+    const shadow = run();
+    await flush();
+
+    openMore(shadow);
+    click(menuItem(shadow, "Delete"));
+    await flush();
+
+    expect(JSON.parse(sent[sent.length - 1].body ?? "{}").withdrawn).toEqual([]);
+  });
+
   it("shows the issue in the panel, where it is the one thing the sort cannot say", () => {
     stub(null);
     localStorage.setItem(
@@ -1672,6 +1720,40 @@ describe("filing a comment in a tracker", () => {
     expect(stored()[0].external).toEqual(ISSUE);
     mode(shadow, "review");
     expect(shadow.querySelector("a.co-tag[data-ext]")?.textContent).toBe("#41");
+  });
+
+  /*
+   * And the same again for a resolve, which is what the plugin writes after
+   * the tracker says the work is done. One way only: the vault can tick a
+   * comment off here, and nothing from the vault can untick one.
+   */
+  it("takes a resolve the vault knows about, but never a reopen", async () => {
+    const open_ = row({ id: "shared", text: "Mine." });
+    const mineDone = row({ id: "done-here", text: "Done here." });
+    mineDone.resolved = true;
+    localStorage.setItem(STORE_KEY, JSON.stringify([open_, mineDone]));
+    stub(null);
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            comments: [
+              { ...open_, external: ISSUE, resolved: true },
+              // Resolved here, still open in the vault: this browser wins.
+              { ...mineDone, resolved: false },
+            ],
+          }),
+      } as Response),
+    );
+
+    mountPage({ tracker: "GitHub" });
+    run();
+    await flush();
+
+    const rows = stored();
+    expect(rows.find((r) => r.id === "shared")?.resolved).toBe(true);
+    expect(rows.find((r) => r.id === "done-here")?.resolved).toBe(true);
   });
 });
 

@@ -7,7 +7,7 @@ import {
   describeTokenState,
   storageMode,
 } from "../platform/secrets";
-import { RelayProvider } from "../overlay/relay";
+import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
 
 /**
  * The settings screen.
@@ -54,6 +54,20 @@ const OFFERED_MODES: { value: AutoRunMode; label: string }[] = [
   { value: "publish", label: "Publish to GitHub" },
 ];
 
+/** What the Jira credential field is called, per way of signing in. */
+const JIRA_CREDENTIAL_NAME_UI: Record<JiraAuth, string> = {
+  cloud: "API token",
+  pat: "Personal access token",
+  basic: "Password",
+};
+
+/** Where that credential comes from, since each one is made somewhere else. */
+const JIRA_CREDENTIAL_SOURCE: Record<JiraAuth, string> = {
+  cloud: "Made at id.atlassian.com, under Security. It is not your password.",
+  pat: "Made in Jira itself, under your profile, Personal Access Tokens.",
+  basic: "The password you sign in to Jira with.",
+};
+
 export interface SettingsHost {
   /** Set by this tab so a running build can report what it is doing. */
   progress: ((step: string, done?: number, total?: number) => void) | null;
@@ -91,9 +105,18 @@ export interface SettingsHost {
     };
     relay: {
       provider: RelayProvider;
+      sync: boolean;
       labels: string;
       github: { owner: string; repo: string };
-      jira: { site: string; project: string; issueType: string; email: string };
+      jira: {
+        site: string;
+        browseUrl: string;
+        project: string;
+        issueType: string;
+        auth: JiraAuth;
+        email: string;
+        username: string;
+      };
       asana: { project: string; workspace: string };
       token: string;
     };
@@ -115,6 +138,8 @@ export interface SettingsHost {
   importReview(): Promise<void>;
   /** Files every open review comment in the tracker. */
   relayOpenComments(): Promise<void>;
+  /** Puts the review and the tracker back in step, both ways. */
+  syncWithTracker(): Promise<void>;
   /** Serves the built preview locally and opens it in the browser. */
   openPreview(): Promise<void>;
   /** Where the review server is listening, or null while it is not running. */
@@ -946,6 +971,49 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }
         }),
       );
+
+    new Setting(root)
+      .setName("Keep the two in step")
+      .setDesc(
+        "Resolving a comment here closes its issue, deleting one closes its " +
+          "issue as not done, and an issue finished in the tracker resolves " +
+          "its comment. Nothing is ever deleted in the tracker and nothing " +
+          "is ever reopened. Turn this off to leave all of it to the button " +
+          "below.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(relay.sync).onChange(async (value) => {
+          relay.sync = value;
+          await this.host.saveSettings();
+          this.display();
+        }),
+      );
+
+    this.note(
+      root,
+      relay.sync
+        ? "It runs when a preview is built and while one is open, at most " +
+            "once a minute, so a page reloaded twice is one round of requests."
+        : "Nothing is kept in step until you press Sync.",
+    );
+
+    new Setting(root)
+      .setName("Sync now")
+      .setDesc(
+        "Does the same round immediately: closes issues for comments " +
+          "resolved or deleted here, and resolves comments whose issue is " +
+          "done. An issue closed without the work being done is left for you.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Sync").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.host.syncWithTracker();
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
   }
 
   private renderGitHubRelay(root: HTMLElement): void {
@@ -989,12 +1057,25 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     );
   }
 
+  /**
+   * Jira, which is two products with one name.
+   *
+   * The first question is which one, because the answer decides the rest:
+   * Cloud takes an email and an API token, a Jira a company runs takes a
+   * personal access token on its own, and the API underneath is a different
+   * version with a different idea of what a description is. Asking it once,
+   * in words rather than in jargon, is cheaper than three fields that are
+   * each right in one case and a 401 in the others.
+   */
   private renderJiraRelay(root: HTMLElement): void {
     const jira = this.host.settings.relay.jira;
 
     new Setting(root)
       .setName("Jira site")
-      .setDesc("The address you open Jira at.")
+      .setDesc(
+        "The address you open Jira at. Keep the path if your company serves " +
+          "it under one, such as jira.example.com/jira.",
+      )
       .addText((text) =>
         text
           .setPlaceholder("acme.atlassian.net")
@@ -1004,6 +1085,37 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await this.host.saveSettings();
           }),
       );
+
+    new Setting(root)
+      .setName("How you sign in")
+      .setDesc(
+        "Cloud has no personal access tokens, and a Jira your company runs " +
+          "has no Atlassian account to make an API token in. The wrong choice " +
+          "here is a rejected credential with nothing in the refusal to say " +
+          "that the credential was fine.",
+      )
+      .addDropdown((dropdown) => {
+        for (const auth of ["cloud", "pat", "basic"] as const) {
+          dropdown.addOption(auth, JIRA_AUTH_LABEL[auth]);
+        }
+        dropdown.setValue(jira.auth);
+        dropdown.onChange(async (value) => {
+          jira.auth = value as JiraAuth;
+          await this.host.saveSettings();
+          this.display();
+        });
+      });
+
+    // Said where it can be acted on, because the request it saves is a 401
+    // with nothing in it about the scheme being the thing that was wrong.
+    if (jira.auth !== "cloud" && /(^|\.)atlassian\.net$/i.test(hostOnly(jira.site))) {
+      this.warning(
+        root,
+        "That looks like a Jira Cloud site, and Cloud issues no personal " +
+          "access tokens. Choose the Cloud option above and use an API token " +
+          "with your account email.",
+      );
+    }
 
     new Setting(root)
       .setName("Project key")
@@ -1031,24 +1143,66 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }),
       );
 
+    if (jira.auth === "cloud") {
+      new Setting(root)
+        .setName("Atlassian account email")
+        .setDesc("The account the API token belongs to. Cloud needs both.")
+        .addText((text) =>
+          text
+            .setPlaceholder("you@example.com")
+            .setValue(jira.email)
+            .onChange(async (value) => {
+              jira.email = value.trim();
+              await this.host.saveSettings();
+            }),
+        );
+    }
+
+    if (jira.auth === "basic") {
+      new Setting(root)
+        .setName("Username")
+        .setDesc("The account the password belongs to, as Jira spells it.")
+        .addText((text) =>
+          text
+            .setPlaceholder("yourname")
+            .setValue(jira.username)
+            .onChange(async (value) => {
+              jira.username = value.trim();
+              await this.host.saveSettings();
+            }),
+        );
+    }
+
+    this.renderRelayToken(
+      root,
+      JIRA_CREDENTIAL_NAME_UI[jira.auth],
+      JIRA_CREDENTIAL_SOURCE[jira.auth],
+    );
+
     new Setting(root)
-      .setName("Atlassian account email")
-      .setDesc("The account the API token belongs to. Jira needs both.")
+      .setName("Browser address")
+      .setDesc(
+        "Optional, and only for a Jira whose API sits behind a gateway: the " +
+          "address a person opens an issue at, when it is not the one above.",
+      )
       .addText((text) =>
         text
-          .setPlaceholder("you@example.com")
-          .setValue(jira.email)
+          .setPlaceholder("optional")
+          .setValue(jira.browseUrl)
           .onChange(async (value) => {
-            jira.email = value.trim();
+            jira.browseUrl = value.trim();
             await this.host.saveSettings();
           }),
       );
 
-    this.renderRelayToken(
-      root,
-      "API token",
-      "Made at id.atlassian.com, under Security. It is not your password.",
-    );
+    if (jira.auth !== "cloud") {
+      this.note(
+        root,
+        "A Jira your company runs answers on the older API, whose issue " +
+          "description is wiki markup rather than a document. Comments are " +
+          "sent that way, so they arrive formatted either way.",
+      );
+    }
   }
 
   private renderAsanaRelay(root: HTMLElement): void {
@@ -1289,5 +1443,21 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         : kind === "error"
           ? "var(--text-error)"
           : "var(--text-muted)";
+  }
+}
+
+/**
+ * The host out of whatever was typed into the site field.
+ *
+ * Its own small function because that field holds anything a person can paste
+ * out of a browser, and a warning is not worth a thrown URL error.
+ */
+function hostOnly(site: string): string {
+  const raw = site.trim();
+  if (!raw) return "";
+  try {
+    return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname;
+  } catch {
+    return "";
   }
 }

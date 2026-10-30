@@ -13,6 +13,7 @@
  */
 
 import { requestUrl, RequestUrlResponse } from "obsidian";
+import { bodyText, describeNotJson, hostOf, jsonBody } from "../platform/response";
 
 /** An issue or task that now exists in a tracker. */
 export interface FiledIssue {
@@ -47,6 +48,11 @@ export async function trackerRequest<T>(options: {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        // Named rather than left as Electron's. A company gateway in front of
+        // a tracker logs this, and some of them refuse what they cannot
+        // identify; a request that arrives as a browser is also the kind a
+        // cross-site check is built to stop.
+        "User-Agent": USER_AGENT,
         ...options.headers,
       },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -63,15 +69,45 @@ export async function trackerRequest<T>(options: {
     );
   }
 
-  if (response.status >= 400) {
-    throw new TrackerError(
-      describeFailure(response.json, response.status),
-      response.status,
-    );
+  // Read before the status is judged, because what came back decides which
+  // failure this is: a tracker's own refusal reads nothing like a gateway
+  // answering for it.
+  const body = jsonBody(response);
+  const text = bodyText(response);
+
+  if (body === undefined) {
+    // Something that is not JSON and not empty: whatever answered, it was
+    // not the API. An empty body on a success is a different thing entirely
+    // -- a 204, which is what Jira answers a transition with -- and the
+    // caller is expected to know it asked for something with no answer.
+    if (text.trim() || response.status >= 400) {
+      throw new TrackerError(
+        describeNotJson(text, options.url, response.status, JIRA_PATH_HINT),
+        response.status,
+      );
+    }
+    return undefined as T;
   }
 
-  return response.json as T;
+  if (response.status >= 400) {
+    throw new TrackerError(describeFailure(body, response.status), response.status);
+  }
+
+  return body as T;
 }
+
+const USER_AGENT = "obsidian-vault-publisher";
+
+/**
+ * The hint to give when the answer was a web page.
+ *
+ * For a tracker it is nearly always this one: a Jira a company runs is served
+ * under a path more often than not, and the front page of the proxy in front
+ * of it is exactly what comes back when that path is missing.
+ */
+const JIRA_PATH_HINT =
+  "Check the address: a Jira a company runs is often served under a path, " +
+  "such as /jira.";
 
 /**
  * The failure in the API's own words.
@@ -113,12 +149,4 @@ export function describeFailure(json: unknown, status: number): string {
   }
 
   return fallback;
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
 }

@@ -119,3 +119,39 @@ describe("createTask", () => {
     );
   });
 });
+
+/** Reading a task back, which is what catching up on a comment does. */
+describe("taskStatus", () => {
+  it("asks for the one field it reads", async () => {
+    const http = fakeHttp(() => ({ json: { data: { completed: true } } }));
+    restore = http.restore;
+
+    const status = await client().taskStatus("1209");
+
+    expect(http.calls[0].method).toBe("GET");
+    expect(http.calls[0].url).toBe(
+      "https://app.asana.com/api/1.0/tasks/1209?opt_fields=completed",
+    );
+    expect(status).toEqual({ completed: true });
+  });
+
+  it("treats anything but a plain yes as not done", async () => {
+    const http = fakeHttp(() => ({ json: { data: {} } }));
+    restore = http.restore;
+
+    expect(await client().taskStatus("1209")).toEqual({ completed: false });
+  });
+});
+
+describe("completeTask", () => {
+  it("ticks the task off, and says nothing else about it", async () => {
+    const http = fakeHttp(() => ({ json: { data: { gid: "1209" } } }));
+    restore = http.restore;
+
+    await client().completeTask("1209");
+
+    expect(http.calls[0].method).toBe("PUT");
+    expect(http.calls[0].url).toBe("https://app.asana.com/api/1.0/tasks/1209");
+    expect(http.calls[0].body).toEqual({ data: { completed: true } });
+  });
+});

@@ -104,7 +104,7 @@ export const OVERLAY_SCRIPT = `(function () {
   var PREFS_KEY = "osp-overlay-prefs";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 4;
+  var SCHEMA = 5;
 
   /*
    * The mark: a tag with three rounded corners and one sharp one, and the
@@ -323,12 +323,33 @@ export const OVERLAY_SCRIPT = `(function () {
   var syncing = false;
   var syncAgain = false;
 
+  /*
+   * Issues whose comment has just been deleted here.
+   *
+   * The plugin closes them and then drops them from the document, so this is
+   * a handover and not a record: it is held only until a save lands, and it
+   * is in memory because the save goes out in the same tick as the delete.
+   * A page closed in between loses the deletion and the comment with it,
+   * which is the same outcome as never having deleted anything.
+   */
+  var withdrawn = [];
+
+  function withdraw(comment) {
+    if (!comment || !comment.external) return;
+    withdrawn.push({
+      id: comment.id,
+      external: comment.external,
+      at: new Date().toISOString(),
+    });
+  }
+
   function payload() {
     return JSON.stringify({
       version: SCHEMA,
       site: SITE,
       exportedAt: new Date().toISOString(),
       comments: all,
+      withdrawn: withdrawn,
     });
   }
 
@@ -346,6 +367,9 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
     syncing = true;
+    // What this save is handing over. Anything deleted while the request is
+    // in flight is appended after these, and goes with the next one.
+    var handed = withdrawn.length;
     fetch(API, {
       method: "POST",
       // text/plain keeps this a simple request. application/json would earn
@@ -353,6 +377,11 @@ export const OVERLAY_SCRIPT = `(function () {
       headers: { "Content-Type": "text/plain" },
       body: payload(),
     })
+      .then(function (response) {
+        // Kept on a failure, so a deletion that never reached the vault is
+        // still waiting to be handed over.
+        if (response && response.ok) withdrawn.splice(0, handed);
+      })
       .catch(function () {})
       .then(function () {
         syncing = false;
@@ -368,9 +397,12 @@ export const OVERLAY_SCRIPT = `(function () {
    *
    * A comment this browser already knows about wins: the person sitting here
    * is the one who just acted on it, and their resolve should not be undone
-   * by a copy saved before they did. Anything the vault has and this browser
-   * does not is new here -- another browser, another machine, or this one
-   * before its storage was cleared -- and is taken as is.
+   * by a copy saved before they did. The two exceptions are the fields only
+   * the plugin writes -- the issue a comment was filed as, and a resolve
+   * that came from that issue being finished -- and neither can undo
+   * anything done here. Anything the vault has and this browser does not is
+   * new here -- another browser, another machine, or this one before its
+   * storage was cleared -- and is taken as is.
    */
   function adopt(incoming) {
     if (!incoming || !incoming.length) return false;
@@ -382,12 +414,20 @@ export const OVERLAY_SCRIPT = `(function () {
       var row = tidy(incoming[j]);
       if (!row) continue;
       if (known[row.id]) {
-        // One field the vault is authoritative for. Only the plugin ever
-        // sets it, so a local copy without it is out of date rather than
-        // disagreeing, and taking it cannot undo anything done here.
+        // Two fields the vault is authoritative for. Only the plugin ever
+        // sets them, so a local copy without one is out of date rather than
+        // disagreeing, and taking either cannot undo anything done here.
         var held = byId(row.id);
         if (held && !held.external && row.external) {
           held.external = row.external;
+          added = true;
+        }
+        // A resolve travels one way only. The plugin sets this when the
+        // tracker says the work is done, and a resolve cannot undo a
+        // resolve; reopening stays the decision of whoever is looking at
+        // the page.
+        if (held && !held.resolved && row.resolved) {
+          held.resolved = true;
           added = true;
         }
         continue;
@@ -1559,7 +1599,10 @@ export const OVERLAY_SCRIPT = `(function () {
     remove.addEventListener("click", function () {
       closePopMenu();
       var index = all.indexOf(comment);
-      if (index !== -1) all.splice(index, 1);
+      if (index !== -1) {
+        withdraw(comment);
+        all.splice(index, 1);
+      }
       selected = null;
       writeAll();
       popup.hidden = true;
@@ -2031,7 +2074,10 @@ export const OVERLAY_SCRIPT = `(function () {
       go.disabled = !rows.length;
       go.addEventListener("click", function () {
         for (var i = all.length - 1; i >= 0; i--) {
-          if (all[i].sourcePath === SOURCE_PATH) all.splice(i, 1);
+          if (all[i].sourcePath === SOURCE_PATH) {
+            withdraw(all[i]);
+            all.splice(i, 1);
+          }
         }
         selected = null;
         popup.hidden = true;

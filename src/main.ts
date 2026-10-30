@@ -47,16 +47,30 @@ import {
   DEFAULT_JIRA_ISSUE_TYPE,
   DEFAULT_RELAY_LABELS,
   IssueDraft,
+  IssueRef,
+  IssueState,
+  JIRA_CREDENTIAL_NAME,
+  JiraAuth,
   RelayProvider,
   RelayTarget,
+  SyncResults,
   TRACKER_NAME,
   applyExternals,
+  applySync,
+  asanaState,
+  closableComments,
   externalFor,
+  filedComments,
+  githubState,
   issueDraft,
   issueKey,
+  issueRef,
+  jiraDescription,
+  jiraSite,
+  jiraState,
   pendingComments,
   resolveTarget,
-  toAdf,
+  withdrawnIssues,
   toMarkdown,
   toText,
 } from "./overlay/relay";
@@ -129,6 +143,16 @@ interface Settings {
    */
   relay: {
     provider: RelayProvider;
+    /**
+     * Whether the review and the tracker are kept in step on their own.
+     *
+     * On means a comment resolved here closes its issue, a comment deleted
+     * here closes its issue, and an issue finished there resolves its
+     * comment -- without anybody asking for it. Off leaves all of that to
+     * the command and the button, and changes nothing else: filing is a
+     * separate action either way.
+     */
+    sync: boolean;
     /** Comma-separated labels every filed issue carries. */
     labels: string;
     github: {
@@ -138,14 +162,20 @@ interface Settings {
       repo: string;
     };
     jira: {
-      /** Site root, e.g. https://acme.atlassian.net */
+      /** Where the API is, context path included. */
       site: string;
+      /** Optional. Where a person opens Jira, if the API is somewhere else. */
+      browseUrl: string;
       /** Project key, e.g. ENG */
       project: string;
       /** Issue type name. Blank means Task. */
       issueType: string;
-      /** The account the API token belongs to. */
+      /** Which Jira this is, which decides the credential and the API. */
+      auth: JiraAuth;
+      /** The Atlassian account, on Cloud. */
       email: string;
+      /** The account, with basic auth on a Jira somebody runs themselves. */
+      username: string;
     };
     asana: {
       /** Project gid tasks are created in. */
@@ -154,7 +184,7 @@ interface Settings {
       workspace: string;
     };
     /**
-     * The Jira API token or the Asana token, encrypted on disk.
+     * The Jira credential or the Asana token, encrypted on disk.
      *
      * GitHub is not in here: it files with the token the publish already
      * uses, since it is the same kind of credential for the same account and
@@ -172,6 +202,16 @@ interface Settings {
     private: boolean;
   };
 }
+
+/**
+ * How long an automatic sync stays quiet for afterwards.
+ *
+ * Long enough that reloading a preview a few times is one round of requests
+ * rather than five, short enough that someone resolving a comment and
+ * looking at their board sees it closed. The command and the button ignore
+ * it: asking explicitly means now.
+ */
+const AUTO_SYNC_INTERVAL = 60_000;
 
 const DEFAULT_SETTINGS: Settings = {
   autoRun: "none",
@@ -194,9 +234,22 @@ const DEFAULT_SETTINGS: Settings = {
   },
   relay: {
     provider: "none",
+    // On, because a tracker that is configured at all is one somebody wants
+    // to be right. It does nothing at all while the provider is "none".
+    sync: true,
     labels: DEFAULT_RELAY_LABELS,
     github: { owner: "", repo: "" },
-    jira: { site: "", project: "", issueType: DEFAULT_JIRA_ISSUE_TYPE, email: "" },
+    jira: {
+      site: "",
+      browseUrl: "",
+      project: "",
+      issueType: DEFAULT_JIRA_ISSUE_TYPE,
+      // Cloud, because it is the Jira most people have, and because it is
+      // what this did before the other two existed.
+      auth: "cloud",
+      email: "",
+      username: "",
+    },
     asana: { project: "", workspace: "" },
     token: "",
   },
@@ -227,6 +280,17 @@ export default class VaultPublisherPlugin extends Plugin {
    * registers a sink here and shows the steps as they happen.
    */
   progress: ((step: string, done?: number, total?: number) => void) | null = null;
+
+  /**
+   * One sync at a time, and not too often.
+   *
+   * Both of these guard the same thing: a tracker being asked the same
+   * questions twice over because two triggers fired close together. A
+   * preview page that loads, pulls and saves within a second is three
+   * triggers for one person opening one page.
+   */
+  private syncing = false;
+  private lastSync = 0;
 
   /**
    * The local server that serves the preview and holds its comments.
@@ -269,6 +333,11 @@ export default class VaultPublisherPlugin extends Plugin {
       id: "relay-review-comments",
       name: "Send open review comments to the tracker",
       callback: () => void this.relayOpenComments(),
+    });
+    this.addCommand({
+      id: "catch-up-filed-comments",
+      name: "Sync review comments with the tracker now",
+      callback: () => void this.syncWithTracker(),
     });
 
     // Rendering before the workspace is ready gives Dataview no index to
@@ -613,6 +682,11 @@ export default class VaultPublisherPlugin extends Plugin {
     new Notice(
       `Built ${result.pages.length} pages in ${Math.round(result.totalMs)}ms${removed} -> ${PREVIEW_FOLDER}/`,
     );
+
+    // The other moment worth syncing on: a build is somebody about to look
+    // at the review, and the overlay in the page they open reads the
+    // document this is about to update.
+    this.autoSync();
   }
 
   /** Reports which Electron paths exist. Reads only; changes nothing. */
@@ -752,6 +826,11 @@ export default class VaultPublisherPlugin extends Plugin {
         // started once and the setting can change under it, so "is there a
         // tracker" is a question answered per request rather than per socket.
         relay: (id) => this.relayComment(id),
+        // Hung off the overlay's own reads and writes: a page being opened
+        // or a comment being resolved is exactly when the two sides are
+        // worth putting back in step, and it costs nothing when there is
+        // nothing to do.
+        touched: () => this.autoSync(),
       });
     }
     return this.reviewServer.start();
@@ -929,10 +1008,15 @@ export default class VaultPublisherPlugin extends Plugin {
     }
 
     if (this.settings.relay.token) return null;
-    const name = TRACKER_NAME[target.provider];
+    // Named as the thing the panel asks for: a Jira set up for a personal
+    // access token has no "Jira token" field for somebody to go looking for.
+    const name =
+      target.provider === "jira"
+        ? `Jira ${JIRA_CREDENTIAL_NAME[target.auth]}`
+        : `${TRACKER_NAME[target.provider]} token`;
     return this.relayTokenState === "none"
-      ? `Add your ${name} token in settings before filing anything.`
-      : `The stored ${name} token could not be read. Restart Obsidian, or paste it again.`;
+      ? `Add your ${name} in settings before filing anything.`
+      : `The stored ${name} could not be read. Restart Obsidian, or paste it again.`;
   }
 
   /**
@@ -967,14 +1051,16 @@ export default class VaultPublisherPlugin extends Plugin {
     if (target.provider === "jira") {
       const client = new JiraClient({
         site: target.site,
+        browseUrl: target.browseUrl,
         project: target.project,
         issueType: target.issueType,
-        email: target.email,
+        auth: target.auth,
+        user: target.user,
         token: this.settings.relay.token,
       });
       return client.createIssue({
         summary: draft.title,
-        description: toAdf(draft.blocks),
+        description: jiraDescription(draft.blocks, target.auth),
         labels: draft.labels,
       });
     }
@@ -1120,6 +1206,283 @@ export default class VaultPublisherPlugin extends Plugin {
   }
 
   /** Puts the issue records onto the saved comments. False if it could not. */
+  /**
+   * Keeps the review and the trackers in step, in both directions, once.
+   *
+   * Three things happen here, in this order, because the order is what makes
+   * the result stable: issues are closed for comments resolved here, issues
+   * are closed for comments deleted here, and comments are resolved for
+   * issues finished there. Writing first means a comment resolved in the
+   * browser a second ago is not read straight back as "still open over
+   * there" and left alone.
+   *
+   * The safety rules are the same in both directions, and neither is
+   * negotiable. A comment can be resolved from a tracker but never reopened.
+   * An issue can be closed from here but never deleted and never reopened.
+   * An issue closed *without* the work being done -- not planned, won't do,
+   * duplicate -- does not resolve its comment: it is counted in the report
+   * instead, because a review that ticks itself off on the strength of a
+   * decision not to act is worse than one that is out of date.
+   *
+   * `quiet` is what makes an automatic run bearable: it reports only when
+   * something changed or something failed, so a preview opened twice does
+   * not produce two notices saying nothing happened.
+   */
+  async syncWithTracker(options: { quiet?: boolean } = {}): Promise<void> {
+    if (this.syncing) return;
+    this.syncing = true;
+    try {
+      await this.runSync(Boolean(options.quiet));
+    } finally {
+      this.syncing = false;
+      this.lastSync = Date.now();
+    }
+  }
+
+  /**
+   * The automatic run, which is the same work with a gate in front of it.
+   *
+   * Hung off the two moments that matter -- a preview being built, and the
+   * overlay in a browser reading or writing the review -- rather than off a
+   * timer, because those are the moments somebody is actually looking at the
+   * thing being kept in step. The interval is what stops a page reloaded
+   * five times firing five rounds of requests at somebody's board.
+   */
+  private autoSync(): void {
+    if (!this.settings.relay.sync) return;
+    if (this.settings.relay.provider === "none") return;
+    if (this.syncing) return;
+    if (Date.now() - this.lastSync < AUTO_SYNC_INTERVAL) return;
+    // Not awaited: this runs behind a request a browser is waiting on, and a
+    // round of HTTP to a tracker is not worth holding a page open for.
+    void this.syncWithTracker({ quiet: true });
+  }
+
+  private async runSync(quiet: boolean): Promise<void> {
+    const store = this.reviewStore();
+    const raw = await store.readComments();
+    if (!raw) {
+      if (!quiet) {
+        new Notice("Vault Publisher: no review comments have reached the vault yet.", 8000);
+      }
+      return;
+    }
+
+    let document: OverlayExport;
+    try {
+      document = parseExport(raw);
+    } catch (error) {
+      if (!quiet) {
+        new Notice(
+          `Vault Publisher: ${error instanceof ReviewImportError ? error.message : String(error)}`,
+          12000,
+        );
+      }
+      return;
+    }
+
+    const withdrawn = withdrawnIssues(document.withdrawn);
+    const closable = closableComments(document.comments);
+    const askable = filedComments(document.comments);
+
+    const resolved = new Set<string>();
+    const closed = new Set<string>();
+    const settled = new Set<string>();
+    const refused = new Set<string>();
+    const failures: string[] = [];
+    let declined = 0;
+
+    // Closing, for the comments somebody resolved here.
+    for (const comment of closable) {
+      const ref = comment.external ? issueRef(comment.external) : null;
+      if (!ref || refused.has(ref.provider)) continue;
+      try {
+        await this.closeIssue(ref, "done");
+        closed.add(comment.id);
+      } catch (error) {
+        this.noteFailure(error, ref.provider, refused, failures);
+      }
+    }
+
+    // And for the ones somebody deleted. Closed as not done: the comment
+    // that asked for the work is gone, so nobody here is claiming it was.
+    for (const row of withdrawn) {
+      const ref = issueRef(row.external);
+      if (!ref || refused.has(ref.provider)) continue;
+      try {
+        await this.closeIssue(ref, "declined");
+        settled.add(`${row.external.provider}:${row.external.key}`);
+      } catch (error) {
+        this.noteFailure(error, ref.provider, refused, failures);
+      }
+    }
+
+    // Reading, for the comments still open here.
+    let asked = 0;
+    for (const comment of askable) {
+      const ref = comment.external ? issueRef(comment.external) : null;
+      if (!ref || refused.has(ref.provider)) continue;
+      // Closed by this same run, so the answer is already known.
+      if (closed.has(comment.id)) continue;
+      try {
+        const state = await this.issueState(ref);
+        asked += 1;
+        if (state === "done") resolved.add(comment.id);
+        else if (state === "declined") declined += 1;
+      } catch (error) {
+        this.noteFailure(error, ref.provider, refused, failures);
+      }
+    }
+
+    const results: SyncResults = {
+      resolved,
+      closed,
+      settled,
+      at: new Date().toISOString(),
+    };
+    const changed = resolved.size + closed.size + settled.size;
+    const saved = changed === 0 || (await this.writeSync(store, results));
+
+    if (quiet && !changed && !failures.length) return;
+
+    const parts: string[] = [];
+    if (closed.size) parts.push(`closed ${closed.size} issue(s) for resolved comment(s)`);
+    if (settled.size) {
+      parts.push(`closed ${settled.size} issue(s) whose comment was deleted`);
+    }
+    if (resolved.size) {
+      parts.push(`resolved ${resolved.size} comment(s) finished in the tracker`);
+    }
+    if (!parts.length) parts.push(`checked ${asked} filed comment(s), nothing to change`);
+    if (declined) {
+      parts.push(
+        `${declined} closed without the work being done, left open for you to look at`,
+      );
+    }
+    parts.push(...failures);
+    if (!saved) parts.push("the review document could not be updated");
+    if (resolved.size && saved) parts.push("reload the preview to see them");
+
+    new Notice(
+      `Vault Publisher: ${parts.join(" — ")}`,
+      failures.length || !saved ? 14000 : 8000,
+    );
+  }
+
+  /**
+   * Records a tracker's refusal, once.
+   *
+   * One refusal from a tracker is the whole answer about that tracker:
+   * asking again for every remaining comment would turn one wrong setting
+   * into a hundred requests.
+   */
+  private noteFailure(
+    error: unknown,
+    provider: Exclude<RelayProvider, "none">,
+    refused: Set<string>,
+    failures: string[],
+  ): void {
+    const name = TRACKER_NAME[provider];
+    refused.add(provider);
+    failures.push(`${name} refused: ${relayFailure(error, name)}`);
+  }
+
+  /** Closes one issue, in whichever tracker holds it. */
+  private async closeIssue(ref: IssueRef, as: "done" | "declined"): Promise<void> {
+    if (ref.provider === "github") {
+      await this.githubFor(ref).closeIssue(
+        ref.number,
+        as === "done" ? "completed" : "not_planned",
+      );
+      return;
+    }
+
+    if (ref.provider === "jira") {
+      await this.jiraClient().closeIssue(ref.key, as);
+      return;
+    }
+
+    // Asana has one notion of finished and no reason to attach to it, so a
+    // withdrawn task and a done one arrive looking the same. The task's body
+    // says where it came from, which is the only place that can say more.
+    await this.asanaClient().completeTask(ref.gid);
+  }
+
+  /** What one tracker says about one issue. */
+  private async issueState(ref: IssueRef): Promise<IssueState> {
+    if (ref.provider === "github") {
+      return githubState(await this.githubFor(ref).getIssue(ref.number));
+    }
+    if (ref.provider === "jira") {
+      return jiraState(await this.jiraClient().issueStatus(ref.key));
+    }
+    return asanaState(await this.asanaClient().taskStatus(ref.gid));
+  }
+
+  /**
+   * A GitHub client for the repository the issue is actually in.
+   *
+   * Built per issue rather than once, because the comment carries the
+   * repository it was filed in: a review whose relay settings have moved on
+   * since is still talking about the issue it created.
+   */
+  private githubFor(ref: { owner: string; repo: string }): GitHubClient {
+    if (!this.settings.github.token) {
+      throw new TrackerError("no GitHub token is stored", 0);
+    }
+    return new GitHubClient({
+      apiBase: this.settings.github.apiBase,
+      token: this.settings.github.token,
+      owner: ref.owner,
+      repo: ref.repo,
+    });
+  }
+
+  private jiraClient(): JiraClient {
+    if (!this.settings.relay.token) {
+      throw new TrackerError("no token is stored for it", 0);
+    }
+    const jira = this.settings.relay.jira;
+    const site = jiraSite(jira.site);
+    if (!site) throw new TrackerError("its site is not set in settings", 0);
+    return new JiraClient({
+      site,
+      browseUrl: jira.browseUrl,
+      project: jira.project,
+      issueType: jira.issueType || DEFAULT_JIRA_ISSUE_TYPE,
+      auth: jira.auth,
+      user: jira.auth === "basic" ? jira.username : jira.email,
+      token: this.settings.relay.token,
+    });
+  }
+
+  private asanaClient(): AsanaClient {
+    if (!this.settings.relay.token) {
+      throw new TrackerError("no token is stored for it", 0);
+    }
+    return new AsanaClient({
+      token: this.settings.relay.token,
+      project: this.settings.relay.asana.project,
+      workspace: this.settings.relay.asana.workspace,
+    });
+  }
+
+  /** The sibling of `writeExternals`, for the fields a sync sets. */
+  private async writeSync(store: ReviewStore, results: SyncResults): Promise<boolean> {
+    try {
+      // Read again, for the same reason: a reviewer in a browser may have
+      // saved over the document while the requests were in flight.
+      const fresh = await store.readComments();
+      if (!fresh) return false;
+      const next = applySync(fresh, results);
+      if (!next) return false;
+      await store.writeComments(next);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async writeExternals(
     store: ReviewStore,
     filed: Map<string, OverlayExternalIssue>,
