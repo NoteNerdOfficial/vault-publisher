@@ -277,8 +277,16 @@ export const CLIENT_SCRIPT = `(function () {
   /* Whatever rows the panel is showing right now: the recent list before
      anything is typed, the matches after. One list, so the arrow keys do not
      have to know which state they are in. */
+  /* Open means open and staying: a panel in the middle of leaving is still
+     in the document for another frame or two, and nothing -- not the arrow
+     keys, not the click that would close it again -- should be able to
+     reach into it on the way out. */
+  function jumpOpen() {
+    return !!jump && !jump.hidden && !jump.hasAttribute("data-osp-leaving");
+  }
+
   function rows() {
-    if (!jump || jump.hidden) return [];
+    if (!jumpOpen()) return [];
     var all = jump.querySelectorAll(".osp-row[href]");
     var open = [];
     for (var i = 0; i < all.length; i++) if (visible(all[i])) open.push(all[i]);
@@ -300,10 +308,41 @@ export const CLIENT_SCRIPT = `(function () {
     if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
   }
 
+  /* Opening the panel is also what puts the page into search: the attribute
+     on the root is what the stylesheet reads to grow the field, lift it off
+     the bar and dim everything behind it. The name is data-osp-searching
+     rather than the panel's own, because the panel is found by walking up
+     from the click with closest("[data-osp-jump]") -- an attribute of that
+     name on <html> would make every element on the page answer yes,
+     starting with the scrim, whose whole job is to be outside it. Driving all of that from one flag
+     rather than from :focus-within is what lets the mode end while the caret
+     is still in the field -- Escape once, or a click on the scrim. */
+  var jumpLeaving = null;
+
   function openJump(open) {
     if (!jump) return;
-    jump.hidden = !open;
-    if (!open) selected = -1;
+    if (jumpLeaving) { clearTimeout(jumpLeaving); jumpLeaving = null; }
+    jump.removeAttribute("data-osp-leaving");
+    if (open) {
+      jump.hidden = false;
+      root.setAttribute("data-osp-searching", "");
+      return;
+    }
+    root.removeAttribute("data-osp-searching");
+    selected = -1;
+    if (jump.hidden) return;
+    /* Hiding it outright would take display away on the same frame and
+       cancel the fade with it, so it is marked instead and hidden once the
+       stylesheet has had its 110ms. The timer is cleared at the top of this
+       function, which is what makes re-opening mid-exit safe: the mark comes
+       off, the pending hide never lands, and the panel comes back rather
+       than disappearing a moment after it returned. */
+    jump.setAttribute("data-osp-leaving", "");
+    jumpLeaving = setTimeout(function () {
+      jumpLeaving = null;
+      jump.removeAttribute("data-osp-leaving");
+      jump.hidden = true;
+    }, 120);
   }
 
   function search(query) {
@@ -429,10 +468,17 @@ export const CLIENT_SCRIPT = `(function () {
     });
   }
 
+  /* Anywhere that is not the field or its panel ends the search -- which,
+     while the scrim is up, is every pixel the reader can see of the page
+     underneath. The caret goes with it: leaving the field focused would
+     leave it standing open at its typing width over a panel that had just
+     closed. */
   document.addEventListener("pointerdown", function (event) {
-    if (!jump || jump.hidden) return;
+    if (!jumpOpen()) return;
     if (event.target.closest("[data-osp-jump], [data-osp-search]")) return;
     openJump(false);
+    var active = document.activeElement;
+    if (active && active.hasAttribute("data-osp-search-input")) active.blur();
   });
 
   /* A slash opens the field that is actually on screen.

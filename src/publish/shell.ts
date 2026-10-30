@@ -7,6 +7,12 @@
  * off -- the tree is real links, the outline is real anchors, and the search
  * field is the one thing that degrades (to a label nobody can type into,
  * which is why it is hidden when scripting is unavailable).
+ *
+ * There are two search fields in the markup and never two on screen: the
+ * bar's, which is the one at every width that draws a bar worth the name,
+ * and the panel's, which is the same field inside the drawer on a phone.
+ * `theme.ts` shows one and hides the other; `clientScript.ts` wires both the
+ * same way, so neither is a second implementation of the first.
  */
 
 import { Mention } from "./backlinks";
@@ -160,6 +166,14 @@ export function themeSwitch(): string {
  * well as last on the row -- it is the only control the narrow bar keeps, and
  * a tab order that reached it before the site's own name would be describing
  * a different row than the one on screen.
+ *
+ * The field sits between the two, in the middle of the window rather than the
+ * middle of the free space: search is the one control on this page that is
+ * used more than everything else combined, and the centre of the top row is
+ * where a reader looks for it without being told. See `.osp-bar` in
+ * `theme.ts` for the grid that holds it there -- the two side columns are
+ * equal fractions so the field is centred on the viewport, not on whatever
+ * the brand happens to leave over.
  */
 export function commandBar(input: ShellInput): string {
   const initial = (input.siteName.trim()[0] ?? "V").toUpperCase();
@@ -437,6 +451,8 @@ export function vaultPanel(input: ShellInput): string {
     `<div class="osp-scrim" data-osp-scrim hidden></div>` +
     `<aside class="osp-panel" id="osp-panel" aria-label="Browse the vault">` +
     `<div class="osp-panel-head">` +
+    // The drawer's copy of the bar's field, and the only one on screen at a
+    // width where the bar has room for the site's name and nothing else.
     searchField("Search or jump to…", "osp-panel-search") +
     // Light or dark lives here and only here on a phone: the bar no longer
     // carries it below 56rem, where the bar is the site's name and the way
@@ -467,8 +483,16 @@ export function vaultPanel(input: ShellInput): string {
  * then tags, because a tag is a place to go as much as a note is.
  *
  * It sits outside the vault panel and is positioned against the viewport,
- * because below 56rem the panel is gone and the field that needs it is the
- * one in the command bar.
+ * because the field it answers to is in the command bar and the panel it
+ * would otherwise live in is gone at the widths where that matters most.
+ * Centred under the field, at the field's own open width, so the two read as
+ * one surface that grew downwards rather than as a box that appeared.
+ *
+ * The scrim in front of it is what makes the field feel like a mode rather
+ * than a widget: the page behind steps back, the bar does not, and the one
+ * lit thing left on screen is the thing being typed into. It is drawn by CSS
+ * off `data-osp-searching` on the root, so with scripting off it is a div that
+ * never paints.
  *
  * All of it is rendered at build time rather than assembled in the browser:
  * the recency buckets are fact the build knows and the script cannot, and the
@@ -476,6 +500,7 @@ export function vaultPanel(input: ShellInput): string {
  */
 export function jumpPanel(input: ShellInput): string {
   return (
+    `<div class="osp-search-scrim" data-osp-search-scrim aria-hidden="true"></div>` +
     `<div class="osp-jump" data-osp-jump hidden>` +
     `<div class="osp-jump-recent" data-osp-jump-recent>` +
     recencySection(input) +

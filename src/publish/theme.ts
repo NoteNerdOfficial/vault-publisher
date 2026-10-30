@@ -854,6 +854,26 @@ body {
   --osp-inpage-h: 0rem;
   --osp-panel-w: 17rem;
   --osp-rail-w: 19rem;
+  /* The field at rest and the field being typed into, and with it the
+     width of the panel that drops out of it -- one number for both, because
+     a dropdown a few pixels off the box it belongs to is the detail that
+     makes the pair read as two things instead of one.
+
+     Both are clamped against the window rather than fixed: the centre
+     column may not grow so far that the brand on one side and the controls
+     on the other have nowhere to be. 14rem is those two plus the gaps. */
+  --osp-search-w: min(24rem, calc(100vw - 20rem));
+  /* The open width is also the width of the bar's middle track, which the
+     field floats over rather than occupies -- so it is the number that
+     decides how much room the name and the controls keep. 26rem is both of
+     them with air, which is why the clamp is so much larger than the field
+     itself needs. */
+  --osp-search-w-open: min(36rem, calc(100vw - 26rem));
+  /* How far the field drops out of the bar when it is being typed into.
+     Enough to clear the bar and the rule under it with air to spare, so
+     the field is plainly no longer part of the row it came from -- and not
+     so far that it loses the place the reader just clicked. */
+  --osp-search-drop: 4rem;
   --osp-hover: color-mix(in srgb, var(--osp-text) 6%, transparent);
   --osp-press: color-mix(in srgb, var(--osp-text) 11%, transparent);
   --osp-selected: color-mix(in srgb, var(--osp-accent) 15%, transparent);
@@ -910,9 +930,28 @@ body {
   grid-area: bar;
   position: sticky;
   top: 0;
+  /* Above the scrim, which matters less than it sounds: while the search is
+     open the bar gives up its background and its rule, so what is painted
+     at this level is the field and two faded labels. The bar is still on
+     top; there is just almost nothing left of it. */
   z-index: 30;
   display: grid;
-  grid-template-columns: var(--osp-panel-w) minmax(0, 1fr) auto;
+  /* Equal fractions either side of a constant middle. The middle track is
+     empty -- the field floats over it, out of flow -- and it is held at
+     the field's *open* width at all times.
+
+     This is a correctness change, not a speed one. A track sized to the
+     field meant the bar rearranged itself every time someone clicked into
+     a search box: the two fractions re-resolved and the brand gave up
+     characters to its ellipsis, because of where the caret was. Nothing
+     outside the field should move when the field is focused.
+
+     It was worth measuring whether it was also faster, and it is not: in
+     flow and out of flow both run at a 17ms median with the p95 inside a
+     frame of each other. The layout is too small to cost anything. Keep
+     the arrangement for the stability, and do not reintroduce the old one
+     believing you are undoing an optimisation. */
+  grid-template-columns: minmax(0, 1fr) var(--osp-search-w-open) minmax(0, 1fr);
   align-items: center;
   gap: 1rem;
   height: var(--osp-bar-h);
@@ -921,6 +960,9 @@ body {
   padding: 0 max(0.75rem, env(safe-area-inset-right)) 0 max(0.75rem, env(safe-area-inset-left));
   background: var(--osp-surface);
   border-bottom: var(--osp-rule) solid var(--osp-border);
+  transition:
+    background 160ms var(--osp-ease),
+    border-color 160ms var(--osp-ease);
 }
 
 .osp-brand {
@@ -937,6 +979,7 @@ body {
   text-decoration: none;
 }
 .osp-brand:hover { background: var(--osp-hover); }
+.osp-brand, .osp-bar-actions { transition: opacity 160ms var(--osp-ease); }
 .osp-mark {
   width: 1.45rem;
   height: 1.45rem;
@@ -951,7 +994,14 @@ body {
 }
 .osp-brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.osp-bar-actions { grid-column: 3; display: flex; align-items: center; gap: 0.5rem; }
+.osp-bar .osp-brand { grid-column: 1; justify-self: start; min-width: 0; }
+.osp-bar-actions {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 
 .osp-btn {
   display: inline-flex;
@@ -1137,12 +1187,145 @@ body {
   cursor: pointer;
 }
 .osp-search-clear:active { color: var(--osp-text); }
-/* The vault's search lives in the panel. The bar keeps one only for the
-   screens too narrow to show that panel -- and below 56rem not even that:
-   there the drawer holds the field, and the menu button that opens the
-   drawer is the one way in. A second control in the bar promising the same
-   field was two doors into one room. */
-.osp-bar-search { display: none; }
+/* The bar's field: the site's search, in the middle of the top row.
+
+   It used to live at the top of the vault panel, which put it in the corner
+   of the window and tied it to a column that three of the four layouts take
+   away. The middle of the bar is the one place that survives every width,
+   and it is where a reader looks first. The panel's copy stays in the
+   markup for the drawer -- see the 56rem block -- but two of the same field
+   on screen at once would be two doors into one room, so above that width
+   only this one is drawn. */
+.osp-bar-search {
+  /* Out of flow, centred on the bar's padding box -- which is centred on
+     the window, since the bar runs the full width and its padding is
+     symmetric at every size that draws this field. Absolute is what makes
+     the constant middle track above possible: the field can take whatever
+     width it likes without the grid having an opinion about it.
+
+     Containment states the same boundary to the engine rather than
+     leaving it to be inferred. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  contain: layout;
+  width: var(--osp-search-w);
+  /* Larger than the site's other boxes on purpose: at this size the radius
+     reads as a field you drop into rather than a cell in a form. */
+  border-radius: max(10px, var(--osp-radius));
+  /* Width is animated, which a grid item can do because the column it is in
+     is intrinsic -- the two fractions either side give back what it takes.
+     The shadow and the ring come along at the same pace so the lift and the
+     growth are one movement. */
+  /* The timings on the resting rule are the ones the field leaves on, and
+     they are shorter than the ones it arrives on below: going back is not
+     an event, and a dismissal that takes as long as an opening feels like
+     the page is reluctant. */
+  transition:
+    width 170ms var(--osp-ease),
+    transform 170ms var(--osp-ease),
+    background 150ms var(--osp-ease),
+    border-color 150ms var(--osp-ease),
+    box-shadow 150ms var(--osp-ease);
+}
+.osp-panel-search { display: none; }
+
+/* Typing into it is a mode, not a keystroke.
+
+   The field leaves the bar: it grows, drops clear of the row it was sitting
+   in, and lifts onto its own shadow, while everything else on the page --
+   the note, the tree, the rail, and the bar it just left -- goes behind the
+   scrim. What is left on screen is the field, the list under it, and a dim
+   impression of where the reader was.
+
+   The bar goes with the page rather than staying lit under the field, which
+   is the correction that made this read right. A field still welded to an
+   opaque bar is a widget on a toolbar however bright it is; a field floating
+   over a dimmed page with the toolbar dimmed behind it is a search. So the
+   bar gives up its surface and its rule, the scrim behind shows straight
+   through it, and the two things it carries fade with everything else.
+
+   This hangs off the root attribute rather than :focus-within because the
+   panel can be dismissed -- clicking away, Escape -- while the caret is
+   still in the field, and a field left standing open over a closed panel
+   would be the widest thing on the page pointing at nothing. */
+:root[data-osp-searching] .osp-bar-search {
+  width: var(--osp-search-w-open);
+  transform: translate(-50%, calc(-50% + var(--osp-search-drop)));
+  transition:
+    width 220ms var(--osp-ease),
+    transform 220ms var(--osp-ease),
+    background 180ms var(--osp-ease),
+    border-color 180ms var(--osp-ease),
+    box-shadow 180ms var(--osp-ease);
+  background: var(--osp-bg);
+  border-color: var(--osp-focus);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--osp-focus) 16%, transparent),
+    0 1px 2px color-mix(in srgb, var(--osp-shadow) 10%, transparent),
+    0 20px 40px -16px color-mix(in srgb, var(--osp-shadow) 40%, transparent);
+}
+:root[data-osp-searching] .osp-bar {
+  background: transparent;
+  border-bottom-color: transparent;
+}
+/* Faded, and inert with it. The scrim is behind the bar rather than over it,
+   so without this the one strip of the page a reader could still click into
+   would be the one strip that is meant to have stepped back. Turning them
+   off hands the click to the bar underneath, which is outside the field and
+   outside the panel, which is to say: it closes the search, exactly as a
+   click on the dimmed note does. */
+:root[data-osp-searching] .osp-brand,
+:root[data-osp-searching] .osp-bar-actions {
+  opacity: 0.3;
+  pointer-events: none;
+}
+/* The slash was an invitation. Once the field is open it is a key the
+   reader has already pressed, so it goes -- but it fades out where it
+   stands rather than being taken out of the row. display:none relaid the
+   flex line on the first frame of the move, so the input jumped twenty
+   pixels wider before the field had travelled anywhere: one pop at the
+   start of an animation whose whole job is to not have one. The 1.4rem it
+   keeps is cheaper than that. */
+.osp-bar-search kbd { transition: opacity 120ms var(--osp-ease); }
+:root[data-osp-searching] .osp-bar-search kbd { opacity: 0; }
+
+/* Dimmed in and out, not switched on and off.
+
+   It used to arrive on an entrance animation and leave by having its
+   display taken away, which is a fade in and a hard cut out -- and the cut
+   landed while the field was still gliding back up, so the page snapped
+   bright under a box that was still moving. Transitioning it means the two
+   halves of the gesture are mirror images.
+
+   Visibility is stepped rather than interpolated, and at which end depends
+   on the direction: on in, at once, so the scrim is catching clicks from
+   the first frame; on out, after the fade, or it would stop catching them
+   while still visible. This is the pattern the drawer panel already uses
+   below 56rem, for the same reason. */
+.osp-search-scrim {
+  position: fixed;
+  inset: 0;
+  /* Under the bar (30) and the panel it dims for (40), over everything the
+     page itself draws. */
+  z-index: 25;
+  background: color-mix(in srgb, var(--osp-shadow) 30%, transparent);
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 130ms var(--osp-ease),
+    visibility 0s linear 130ms;
+}
+:root[data-osp-searching] .osp-search-scrim {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 160ms var(--osp-ease),
+    visibility 0s linear 0s;
+}
 
 /* --- vault panel ------------------------------------------------------ */
 
@@ -1158,10 +1341,15 @@ body {
   border-right: var(--osp-rule) solid var(--osp-border);
   font-family: var(--osp-font-ui);
 }
+/* Everything this row used to hold has gone somewhere a column can reach
+   more directly: the field to the middle of the bar, light/dark to the
+   switch beside it. It comes back as the drawer's top row below 56rem,
+   where the bar has none of that. An empty strip of padding above the tree
+   is not a layout, it is a leftover. */
 .osp-panel-head {
   flex: none;
   position: relative;
-  display: flex;
+  display: none;
   align-items: center;
   gap: 0.4rem;
   padding: 0.75rem 0.65rem 0.5rem;
@@ -1285,25 +1473,71 @@ body {
 
 .osp-jump {
   position: fixed;
-  left: 0.5rem;
-  top: calc(var(--osp-bar-h) + 3.05rem);
+  /* Centred the way the field is centred, and by the same arithmetic: two
+     pinned edges and auto margins rather than a translate, so the drop-in
+     animation below has the transform to itself. */
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  /* Pinned under the field at its dropped height, by the same two terms the
+     field is moved by, so the gap between the two is a constant rather than
+     something to keep in step by hand. */
+  top: calc(var(--osp-bar-h) + var(--osp-search-drop) + 0.6rem);
   z-index: 40;
-  width: calc(var(--osp-panel-w) - 1rem);
-  max-height: min(28rem, calc(100vh - var(--osp-bar-h) - 4.5rem));
-  max-height: min(28rem, calc(100dvh - var(--osp-bar-h) - 4.5rem));
+  width: var(--osp-search-w-open);
+  max-height: min(30rem, calc(100vh - var(--osp-bar-h) - var(--osp-search-drop) - 2.5rem));
+  max-height: min(30rem, calc(100dvh - var(--osp-bar-h) - var(--osp-search-drop) - 2.5rem));
   overflow-y: auto;
   padding: 0.5rem;
   background: var(--osp-bg);
   border: var(--osp-rule) solid var(--osp-border);
-  border-radius: max(7px, var(--osp-radius));
+  /* The same radius as the open field, so the two stack as one surface
+     with a seam rather than as a box under a box. */
+  border-radius: max(12px, var(--osp-radius));
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--osp-shadow) 10%, transparent),
-    0 16px 32px -12px color-mix(in srgb, var(--osp-shadow) 28%, transparent);
+    0 24px 48px -16px color-mix(in srgb, var(--osp-shadow) 32%, transparent);
   font-family: var(--osp-font-ui);
-  animation: osp-drop 180ms var(--osp-ease);
+  /* Behind the field, not with it.
+
+     The field takes 220ms to grow and drop into place. A panel that starts
+     fading in at the same instant finishes first -- the easing is heavily
+     front-loaded, so the field is still visibly travelling at 100ms while
+     the panel is already solid underneath it -- and what that looks like is
+     a panel that arrived first and dragged the field down after it, which
+     is backwards.
+
+     So it waits -- but the wait is measured against the curve the field is
+     on, and this curve is quick. The field is past nine tenths of its
+     travel by 70ms, so 80ms is already a field that has visibly flown and
+     is settling. A longer wait does not read as a better stagger, it reads
+     as the page thinking: the whole sequence lands at 240ms now, and it
+     was 310ms when it was tuned against a slower curve.
+
+     The backwards fill is what holds the panel at opacity 0 through the
+     wait. Without it the panel paints in full for those 80ms and then
+     fades in from nothing, which is the delay doing the opposite of what
+     it is for. */
+  animation: osp-drop 160ms var(--osp-ease) 80ms backwards;
+}
+
+/* On the way out it goes first and goes quickly, which is the open
+   sequence read backwards: the field was last to arrive, so it is last to
+   leave. The panel cannot simply have its hidden attribute set here --
+   display:none cancels the frame it would have faded on -- so the script
+   marks it, waits, and hides it once this has run. Pointer events go at
+   once: a list that is on its way out must not still be clickable. */
+.osp-jump[data-osp-leaving] {
+  animation: none;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.985);
+  pointer-events: none;
+  transition:
+    opacity 110ms var(--osp-ease),
+    transform 110ms var(--osp-ease);
 }
 @keyframes osp-drop {
-  from { opacity: 0; transform: translateY(-4px); }
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
   to { opacity: 1; transform: none; }
 }
 .osp-jump .osp-row.osp-selected { background: var(--osp-selected); color: var(--osp-text); }
@@ -1319,6 +1553,10 @@ body {
   margin: 0.4rem 0 -0.5rem;
   padding: 0.4rem 0.5rem 0.5rem;
   background: var(--osp-bg);
+  /* It runs into the two bottom corners, so it has to carry their curve:
+     a square-cornered strip inside a rounded box reads as a rendering
+     mistake rather than as a footer. */
+  border-radius: 0 0 max(11px, var(--osp-radius)) max(11px, var(--osp-radius));
   border-top: var(--osp-rule) solid var(--osp-faint);
   font-size: var(--osp-ui-xs);
   white-space: nowrap;
@@ -1510,20 +1748,15 @@ body {
 }
 :root[data-osp-width="full"] .osp-panel,
 :root[data-osp-width="full"] .osp-rail { display: none; }
-:root[data-osp-width="full"] .osp-bar { grid-template-columns: auto minmax(0, 1fr) auto; }
-:root[data-osp-width="full"] .osp-bar-search { display: flex; }
+/* The bar needs no override here: its middle column is the field at every
+   width, and the two fractions either side close up on their own once the
+   panel under the left one is gone. */
 /* And the context the rail was holding goes under the note instead, rather
    than off the page. */
 :root[data-osp-width="full"] .osp-mentions { display: block; }
 /* The rail is gone, so the note's own copy of the stats is the only one
    left -- the same arrangement the narrow breakpoint arrives at. */
 :root[data-osp-width="full"] .osp-stats-top { display: flex; }
-:root[data-osp-width="full"] .osp-jump {
-  left: 1rem;
-  right: 1rem;
-  width: auto;
-  top: calc(var(--osp-bar-h) + 0.6rem);
-}
 
 /* --- read, or read the markdown --------------------------------------- *
  * Two panes, one showing. Which one is an attribute on <html> that only the
@@ -1925,10 +2158,16 @@ body {
      first and at full width, then the two controls a reader should not have
      to close the menu to reach. */
   .osp-panel-head {
+    display: flex;
     gap: 0.5rem;
     padding: 0.6rem max(0.75rem, env(safe-area-inset-right)) 0.6rem 0.75rem;
     border-bottom: var(--osp-rule) solid var(--osp-faint);
   }
+  /* The bar is the site's name and the way into the drawer and nothing
+     else at this width, so the field changes places: out of the middle of
+     the bar, which no longer has a middle, and back into the drawer's top
+     row where it was before. One field on screen either way. */
+  .osp-panel-search { display: flex; }
   /* The field in the drawer is the whole of the search here, and there is
      no key to press to empty it. */
   .osp-search-clear:not([hidden]) { display: inline-flex; }
@@ -1970,6 +2209,20 @@ body {
      -- so what is left is an empty box taking a grid cell. */
   .osp-bar-actions { display: none; }
   .osp-bar-search { display: none; }
+  /* The drawer brings a scrim of its own, and the field is inside it, so
+     none of what the open field does to the bar applies here: the bar keeps
+     its surface, the name stays lit, and the whole lot is behind the
+     drawer's scrim anyway. */
+  /* Written at the same weight as the rule that turns it on, because that
+     one carries the root attribute and a bare class here would lose to it
+     -- a media query is not specificity. Two scrims over one page is not a
+     subtle bug: it is visibly twice as dark. */
+  :root[data-osp-searching] .osp-search-scrim { display: none; }
+  :root[data-osp-searching] .osp-bar {
+    background: var(--osp-surface);
+    border-bottom-color: var(--osp-border);
+  }
+  :root[data-osp-searching] .osp-brand { opacity: 1; pointer-events: auto; }
   .osp-doc { padding: 1.5rem 1.25rem 4rem; }
   .osp-crumb { padding-left: 1.25rem; padding-right: 1.25rem; }
 
@@ -2002,6 +2255,11 @@ body {
   .osp-jump {
     right: max(0.75rem, env(safe-area-inset-right));
     left: auto;
+    margin-inline: 0;
+    /* Nothing to fall in behind here: the drawer's field is already where
+       it is going to be, so the wait would be a pause rather than a
+       stagger. */
+    animation-delay: 0s;
     width: calc(min(100vw, 26rem) - 1.5rem);
     top: 3.9rem;
     max-height: calc(100dvh - 4.75rem);
@@ -2209,7 +2467,19 @@ html { scroll-behavior: smooth; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+    /* A delay outlives a duration that has been zeroed, and on its own it
+       is not motion -- it is a wait for motion that is no longer coming. */
+    animation-delay: 0s !important;
+    transition-delay: 0s !important;
   }
+  /* The search's reduced path, and the reason it is one line: the drop is
+     the only part of opening the field that is travel across the screen,
+     and every other measurement is built from the same token. Zero it and
+     the field grows where it stands, the panel stays pinned under it, and
+     what is left -- the page dimming, the bar stepping back, the list
+     appearing -- is state the reader still needs told. Reduced motion is
+     less movement, not less feedback. */
+  :root { --osp-search-drop: 0rem; }
 }
 
 @media print {
