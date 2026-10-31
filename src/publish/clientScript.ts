@@ -37,8 +37,26 @@ export const THEME_BOOT =
 export const CLIENT_SCRIPT = `(function () {
   var root = document.documentElement;
 
+  /* Whether a box is laid out, which is not a question offsetParent can
+     answer. It is null for every position:fixed element, so a fixed box
+     standing over the whole viewport reported itself as not there.
+
+     The drawer's scrim is exactly that box, and the resize guard below
+     asked it whether this width still wants a drawer -- so the answer was
+     always no, and any resize at all closed an open drawer. On a phone the
+     gesture that opens it is also one that resizes: taking the page's
+     scroll away lets the browser's own chrome back, which fires resize
+     inside the same tap, so the drawer opened and shut again before it
+     could be seen and the button looked dead.
+
+     getClientRects answers for every case the callers here have: empty for
+     display:none, for an unrendered ancestor and for a detached node, and
+     non-empty for a fixed box. It keeps saying yes to a box that is merely
+     translated off the edge, which is the drawer's own panel -- see the
+     slash handler, which asks the toggle rather than the field for exactly
+     that reason. */
   function visible(el) {
-    return !!el && !el.hidden && !!el.offsetParent;
+    return !!el && !el.hidden && el.getClientRects().length > 0;
   }
 
   /* --- theme ------------------------------------------------------- */
