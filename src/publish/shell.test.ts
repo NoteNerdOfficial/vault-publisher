@@ -91,6 +91,68 @@ describe("the bar", () => {
   });
 });
 
+/**
+ * The way out to the repository, which is one control in two places: the bar
+ * at desktop width, the drawer below 56rem, and nowhere at all unless an
+ * address has been set.
+ */
+describe("the source link", () => {
+  const SOURCE = "https://github.com/someone/vault";
+
+  it("is absent from both places when no address is set", () => {
+    expect(commandBar(shell())).not.toContain("osp-bar-source");
+    expect(vaultPanel(shell())).not.toContain("osp-panel-source");
+  });
+
+  it("sits beside light and dark in the bar, before it", () => {
+    const bar = commandBar(shell({ sourceUrl: SOURCE }));
+    expect(bar).toContain(`href="${SOURCE}"`);
+    expect(bar.indexOf("osp-bar-actions")).toBeLessThan(bar.indexOf("osp-bar-source"));
+    expect(bar.indexOf("osp-bar-source")).toBeLessThan(bar.indexOf("osp-switch"));
+  });
+
+  // It leaves the site, and a reader who clicks it is going to come back to
+  // the page they were reading.
+  it("opens in a tab of its own, and hands nothing on", () => {
+    const bar = commandBar(shell({ sourceUrl: SOURCE }));
+    expect(bar).toContain('target="_blank"');
+    expect(bar).toContain('rel="noreferrer noopener"');
+  });
+
+  // Icon-only, like every other control in this bar that has no room for a
+  // word.
+  it("names itself on the attributes, because it carries no word", () => {
+    const bar = commandBar(shell({ sourceUrl: SOURCE }));
+    expect(bar).toContain('aria-label="Source repository"');
+    expect(bar).toContain('title="Source repository"');
+  });
+
+  // A branch rather than a service's own mark: the address is a setting, and
+  // a vault whose source is not on GitHub would be wearing the wrong logo.
+  it("is drawn as a branch rather than anybody's logo", () => {
+    expect(commandBar(shell({ sourceUrl: SOURCE }))).toContain('d="M6 3v12"');
+  });
+
+  it("comes back in the drawer, where the bar's controls are gone", () => {
+    const panel = vaultPanel(shell({ sourceUrl: SOURCE }));
+    expect(panel).toContain("osp-panel-source");
+    expect(panel.indexOf("data-osp-search-input")).toBeLessThan(
+      panel.indexOf("osp-panel-source"),
+    );
+    expect(panel.indexOf("osp-panel-source")).toBeLessThan(
+      panel.indexOf("osp-panel-theme"),
+    );
+    expect(panel.indexOf("osp-panel-theme")).toBeLessThan(
+      panel.indexOf("data-osp-panel-close"),
+    );
+  });
+
+  it("escapes the address, which is a value somebody typed", () => {
+    const bar = commandBar(shell({ sourceUrl: 'https://example.com/a?b=1&c="x"' }));
+    expect(bar).toContain('href="https://example.com/a?b=1&amp;c=&quot;x&quot;"');
+  });
+});
+
 describe("the drawer's head", () => {
   it("puts the search field above the tree", () => {
     const panel = vaultPanel(shell());

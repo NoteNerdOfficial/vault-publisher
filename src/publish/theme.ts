@@ -1025,16 +1025,17 @@ body {
 .osp-btn[aria-pressed="true"] { background: var(--osp-selected); color: var(--osp-text); }
 
 /* A button drawn as a square.
-   The three controls that wear this -- the menu, the drawer's light/dark,
-   the drawer's close -- are the only ones on screen when they appear, and a
+   The controls that wear this carry no word -- the menu, the drawer's
+   light/dark, the drawer's close, the link out to the repository -- and a
    bare glyph alone on a row reads as a mark rather than as something to
    press. The box is the word they do not have room to carry. Square because
    the content is one icon: a pill around a single glyph says the glyph is a
    label, and it is not.
 
-   Only ever visible below 56rem, since all three are; it is written out here
-   rather than inside that query because what it describes is the shape of a
-   button, not a width. */
+   Three of the four are only ever visible below 56rem. The source link is
+   the exception and is the reason this is written out here rather than
+   inside that query: what it describes is the shape of a button, not a
+   width. */
 .osp-btn-sq {
   width: 2.25rem;
   height: 2.25rem;
@@ -1357,6 +1358,9 @@ body {
 .osp-panel-head .osp-search { flex: 1; min-width: 0; }
 /* Off wherever the panel is a column: the bar's switch is right there. */
 .osp-panel-theme { display: none; flex: none; }
+/* The same for the way out to the repository, and for the same reason: the
+   bar above has it while the bar above has room for it. */
+.osp-panel-source { display: none; flex: none; }
 
 /* The drawer's three parts. Off at every width that keeps the panel open,
    which is why none of them carry a width of their own: the one media query
@@ -2172,6 +2176,12 @@ body {
      no key to press to empty it. */
   .osp-search-clear:not([hidden]) { display: inline-flex; }
   .osp-panel-theme { display: block; }
+  /* The drawer's chrome is a trio at this width rather than a pair. The
+     field keeps the room it is given -- it is the thing most readers opened
+     the drawer for -- so the squares are laid out after it and shrink
+     nothing: three 44px targets and whatever is left is the field's, which
+     on the narrowest phone is still wider than the placeholder it holds. */
+  .osp-panel-source { display: block; }
   .osp-panel-close { display: inline-flex; }
   .osp-panel-toggle { display: inline-flex; }
   .osp-scrim { display: block; }

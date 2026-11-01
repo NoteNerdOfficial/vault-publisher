@@ -11,6 +11,10 @@ import {
   SiteConfig,
   isScopeChosen,
 } from "./publish/buildSite";
+import {
+  SourceLinkSettings,
+  resolveSourceUrl,
+} from "./publish/sourceLink";
 import { formatBytes } from "./publish/drift";
 import { pruneStale } from "./publish/prune";
 import { DEFAULT_THEME } from "./publish/themes";
@@ -135,6 +139,17 @@ interface Settings {
     reviewFolder: string;
   };
   /**
+   * A link from the published site to the repository it came from.
+   *
+   * Outside `site` like the overlay above, but for the opposite reason: this
+   * one is *meant* to reach a published page. It is here because what is
+   * stored is a question -- should there be a link, and to what -- and what
+   * `SiteConfig` carries is the answer. Resolving the two into one address
+   * needs the GitHub section as well, which is a thing the build is
+   * deliberately not handed. See `sourceLink.ts`.
+   */
+  sourceLink: SourceLinkSettings;
+  /**
    * Filing a review comment as an issue in a tracker.
    *
    * Off unless somebody turns it on, and that is the whole of the design: a
@@ -233,6 +248,11 @@ const DEFAULT_SETTINGS: Settings = {
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
   },
+  // Off, and blank. Off because a link in the bar is a decision about the
+  // published site and not one to make on somebody's behalf; blank because
+  // the repository the site publishes to is the right guess once the link is
+  // asked for, and no guess at all before that.
+  sourceLink: { enabled: false, url: "" },
   relay: {
     provider: "none",
     // On, because a tracker that is configured at all is one somebody wants
@@ -443,6 +463,7 @@ export default class VaultPublisherPlugin extends Plugin {
         ...DEFAULT_SETTINGS.commentOverlay,
         ...stored?.commentOverlay,
       },
+      sourceLink: { ...DEFAULT_SETTINGS.sourceLink, ...stored?.sourceLink },
       relay: {
         ...DEFAULT_SETTINGS.relay,
         ...stored?.relay,
@@ -596,6 +617,13 @@ export default class VaultPublisherPlugin extends Plugin {
         // that read its own last output would publish the site inside the
         // site, again on every build.
         outputFolders: [OUTPUT_FOLDER, PREVIEW_FOLDER],
+        // Resolved here rather than in the build, for the same reason the
+        // tracker's name is: the build is given an answer, and the settings
+        // this question needs -- the publish target and its API host -- are
+        // not ones it has. A preview resolves it too, which is the point of
+        // a preview: the link is in the bar where it will be on the site.
+        sourceUrl:
+          resolveSourceUrl(this.settings.sourceLink, this.settings.github) ?? undefined,
         ...overrides,
       };
       const result = await buildSite(this.app, config, (done, total, path) => {

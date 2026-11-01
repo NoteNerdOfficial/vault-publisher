@@ -32,6 +32,7 @@ function host(over: {
   site?: Partial<SettingsHost["settings"]["site"]>;
   github?: Partial<SettingsHost["settings"]["github"]>;
   overlay?: Partial<SettingsHost["settings"]["commentOverlay"]>;
+  sourceLink?: Partial<SettingsHost["settings"]["sourceLink"]>;
   tokenState?: SettingsHost["tokenState"];
   serving?: boolean;
 } = {}): SettingsHost & { app: App } {
@@ -57,6 +58,7 @@ function host(over: {
         reviewFolder: "_vault-publisher/review",
         ...over.overlay,
       },
+      sourceLink: { enabled: false, url: "", ...over.sourceLink },
       relay: {
         provider: "off" as never,
         sync: false,
@@ -238,6 +240,76 @@ describe("the review overlay, as a build option", () => {
     const on = render({ overlay: { enabled: true } });
     expect(row(on, "Review folder")).not.toBeNull();
     expect(row(on, "Import review comments")).not.toBeNull();
+  });
+});
+
+/**
+ * The link out to the source repository.
+ *
+ * Two settings for what reads as one feature, because the address is a guess
+ * the user has to be able to correct: the repository a site is pushed to is
+ * often not the one its source is in.
+ */
+describe("the source repository link", () => {
+  /** The panel's notes and warnings, which is where the answer is printed. */
+  function notes(root: HTMLElement): string {
+    return Array.from(root.querySelectorAll(".osp-settings-note"))
+      .map((node) => node.textContent ?? "")
+      .join("\n");
+  }
+
+  it("is one row until it is switched on", () => {
+    const off = render();
+    expect(row(off, "Link to the source repository")).not.toBeNull();
+    expect(row(off, "Repository address")).toBeNull();
+
+    expect(row(render({ sourceLink: { enabled: true } }), "Repository address")).not.toBeNull();
+  });
+
+  // The common case: a vault published to the repository its source is in,
+  // where the address is already known and should not have to be typed.
+  it("says it will use the repository the site publishes to", () => {
+    expect(notes(render({ sourceLink: { enabled: true } }))).toContain(
+      "https://github.com/acme/handbook, the repository you publish to",
+    );
+  });
+
+  it("says where a typed address leads instead", () => {
+    const panel = render({
+      sourceLink: { enabled: true, url: "https://gitlab.com/team/vault" },
+    });
+    expect(notes(panel)).toContain("https://gitlab.com/team/vault");
+    expect(notes(panel)).not.toContain("the repository you publish to");
+  });
+
+  /*
+   * The value is written into an href on every page of the site, so this is
+   * the row where a scheme a browser would *run* has to be refused -- and
+   * refused out loud, since the build's answer is to leave the button out
+   * and say nothing.
+   */
+  it("warns about an address no browser should follow", () => {
+    const panel = render({
+      sourceLink: { enabled: true, url: "javascript:alert(1)" },
+    });
+    expect(panel.querySelector(".osp-settings-warning")).not.toBeNull();
+    expect(notes(panel)).toContain("http");
+  });
+
+  it("warns about a full address that is not one", () => {
+    expect(notes(render({ sourceLink: { enabled: true, url: "github.com/a/b" } }))).toContain(
+      "https://",
+    );
+  });
+
+  // Switched on with nothing to point at. No address means no button, so the
+  // panel is the only place that can say why.
+  it("says no button will be built when there is no address at all", () => {
+    const panel = render({
+      sourceLink: { enabled: true },
+      github: { owner: "", repo: "" },
+    });
+    expect(notes(panel)).toContain("no button is built");
   });
 });
 

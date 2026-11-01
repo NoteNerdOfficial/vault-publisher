@@ -8,6 +8,11 @@ import {
   storageMode,
 } from "../platform/secrets";
 import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
+import {
+  SourceLinkSettings,
+  resolveSourceUrl,
+  sourceUrlProblem,
+} from "../publish/sourceLink";
 import { openExternal } from "../platform/openExternal";
 
 /**
@@ -183,6 +188,7 @@ export interface SettingsHost {
       reviewer: string;
       reviewFolder: string;
     };
+    sourceLink: SourceLinkSettings;
     relay: {
       provider: RelayProvider;
       sync: boolean;
@@ -1155,6 +1161,97 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     describe(chosen);
     this.renderThemePreview(preview, chosen);
+
+    this.renderSourceLink(root);
+  }
+
+  /**
+   * The link out to the repository the site came from.
+   *
+   * Here rather than in the GitHub section, although the address it falls
+   * back to is named down there. What this decides is whether the published
+   * site carries a control, which is a question about the site's furniture --
+   * the same kind of question as which theme it is built in. The GitHub
+   * section is about reaching GitHub at all.
+   *
+   * Two rows, and only one of them unless the switch is on. The switch is the
+   * decision; the field is a correction to a guess that is right most of the
+   * time, and a site whose source is in the repository it publishes to never
+   * has to look at it.
+   */
+  private renderSourceLink(root: HTMLElement): void {
+    const link = this.host.settings.sourceLink;
+    const github = this.host.settings.github;
+
+    new Setting(root)
+      .setName("Link to the source repository")
+      .setDesc(
+        "Adds a button to the top bar, beside light and dark, and to the menu " +
+          "on a phone. It opens in a new tab.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(link.enabled).onChange(async (value) => {
+          link.enabled = value;
+          await this.host.saveSettings();
+          // The field below and the line that says where the button leads
+          // both exist only while this is on.
+          this.display();
+        }),
+      );
+
+    if (!link.enabled) return;
+
+    const derived = resolveSourceUrl({ enabled: true, url: "" }, github);
+
+    new Setting(root)
+      .setName("Repository address")
+      .setDesc(
+        "Leave this empty to use the repository you publish to. Fill it in " +
+          "when your vault's source is somewhere else -- publishing to a " +
+          "branch of an output-only repository is common, and readers should " +
+          "be sent to the work rather than to the build.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder(derived ?? "https://github.com/you/your-vault")
+          .setValue(link.url)
+          .onChange(async (value) => {
+            link.url = value.trim();
+            await this.host.saveSettings();
+          }),
+      )
+      .addExtraButton((button) =>
+        button
+          .setIcon("refresh-cw")
+          .setTooltip("Check where this leads")
+          .onClick(() => this.display()),
+      );
+
+    // What the button will actually do, which is the only part of this the
+    // reader is really deciding. A typed address no browser would follow is
+    // said as a warning rather than silently dropped at build time.
+    const trouble = sourceUrlProblem(link.url);
+    if (trouble) {
+      this.warning(root, trouble);
+      return;
+    }
+
+    const resolved = resolveSourceUrl(link, github);
+    if (resolved) {
+      this.note(
+        root,
+        link.url
+          ? `The button links to ${resolved}.`
+          : `The button links to ${resolved}, the repository you publish to.`,
+      );
+      return;
+    }
+
+    this.warning(
+      root,
+      "No address yet, so no button is built. Either fill this in or name " +
+        "the repository to publish to in the GitHub section below.",
+    );
   }
 
   /**

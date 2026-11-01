@@ -151,6 +151,16 @@ export interface SiteConfig {
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
   /**
+   * Address of the repository the site came from, for a link in the bar.
+   *
+   * Absent means no link, which is the default. It arrives resolved: the
+   * switch, the typed address and the fall back to the repository the site
+   * publishes to are all settled by `sourceLink.ts` before a build starts,
+   * because two of the three are questions about settings this module is
+   * deliberately not given -- the publish target and its API host.
+   */
+  sourceUrl?: string;
+  /**
    * The note to publish as the homepage, as a vault path.
    *
    * Empty or unset means: the vault's own `README.md` if it is being
@@ -787,6 +797,7 @@ export async function buildSite(
     stats: { words: 0, readingMinutes: 1, sections: 0 },
     today,
     noteCount: navNotes.length,
+    sourceUrl: config.sourceUrl,
   });
 
   if (home.unresolved) {
@@ -853,6 +864,7 @@ export async function buildSite(
           },
           today,
           noteCount: navNotes.length,
+          sourceUrl: config.sourceUrl,
         },
       }),
     });

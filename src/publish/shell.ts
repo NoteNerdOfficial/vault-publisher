@@ -79,6 +79,16 @@ export interface ShellInput {
    * disagree about whether there is something to switch to.
    */
   hasSource: boolean;
+  /**
+   * Where the site came from, as an address to link, or absent for no link.
+   *
+   * Resolved before the build starts -- see `sourceLink.ts` -- so there is
+   * one question here rather than three: either there is an address to put in
+   * the bar or there is not. A page never has to work out whether the switch
+   * is on, which repository was meant, or whether what was typed is something
+   * a browser should follow.
+   */
+  sourceUrl?: string;
 }
 
 export function escapeHtml(value: string): string {
@@ -114,6 +124,12 @@ const PATHS: Record<string, string> = {
   // have to tell the pair apart at a glance.
   book: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H5.5A1.5 1.5 0 0 1 4 15.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h4.5a1.5 1.5 0 0 0 1.5-1.5z"/>',
   code: '<path d="m9 17-5-5 5-5"/><path d="m15 7 5 5-5 5"/>',
+  // The branch, for the way out to the repository. Deliberately not a
+  // service's own mark: the address is a setting, and a vault whose source
+  // is on anything other than GitHub would be wearing the wrong logo. A
+  // branch is what every one of them is holding.
+  branch:
+    '<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   // The three widths, as the same two arrows at three settings: pulled in to
   // the measure, pushed out to the column, and off the edges entirely.
   arrowsIn: '<path d="M12 4v16"/><path d="M2 12h6.5"/><path d="m4.5 8 4 4-4 4"/><path d="M22 12h-6.5"/><path d="m19.5 8-4 4 4 4"/>',
@@ -161,6 +177,33 @@ export function themeSwitch(): string {
 }
 
 /**
+ * The way out to the repository the site came from.
+ *
+ * One square, the same shape as the menu and the close, carrying no word:
+ * the row it sits on has room for the switch beside it and nothing more, and
+ * the name of the thing is in `title` and `aria-label` where every other
+ * icon-only control in this shell keeps it.
+ *
+ * It leaves the site, so it says so the way a link off a site should --
+ * `rel="noreferrer noopener"`, and a new tab. A reader who clicks it is
+ * going to look at the source and then come back to the page they were on,
+ * and losing their place in the vault to do that is the one outcome worth
+ * spending a tab to avoid.
+ *
+ * Returns nothing at all when there is no address, which is the normal case:
+ * the setting is off by default, and a button that leads nowhere would be
+ * worse than no button. See `sourceLink.ts` for what resolves it.
+ */
+export function sourceButton(url: string | undefined, className: string): string {
+  if (!url) return "";
+  return (
+    `<a class="osp-btn osp-btn-sq ${className}" href="${escapeHtml(url)}" ` +
+    `target="_blank" rel="noreferrer noopener" ` +
+    `aria-label="Source repository" title="Source repository">${icon("branch")}</a>`
+  );
+}
+
+/**
  * The bar reads left to right in the order a reader needs it: where you are,
  * then what you can do about it. The menu button is last in the markup as
  * well as last on the row -- it is the only control the narrow bar keeps, and
@@ -183,7 +226,11 @@ export function commandBar(input: ShellInput): string {
     `<span class="osp-mark" aria-hidden="true">${escapeHtml(initial)}</span>` +
     `<span class="osp-brand-name">${escapeHtml(input.siteName)}</span></a>` +
     searchField(`Search ${input.noteCount} notes…`, "osp-bar-search") +
+    // Source first, then light and dark. The switch stays against the end of
+    // the row where it has always been, and the one control that leaves the
+    // site is next to it rather than past it.
     `<div class="osp-bar-actions">` +
+    sourceButton(input.sourceUrl, "osp-bar-source") +
     themeSwitch() +
     `</div>` +
     panelToggle() +
@@ -462,6 +509,14 @@ export function vaultPanel(input: ShellInput): string {
     // Hidden at every width that keeps the panel open, where the bar's
     // switch is a few inches away and two of the same control would be one
     // too many.
+    // And the same for the source link, for the same reason: below 56rem the
+    // bar carries the site's name and the way into this drawer, so a control
+    // that is not here is not anywhere. It keeps the order it has in the bar
+    // -- source, then light and dark -- and is absent entirely when no
+    // address is set, like its copy up there.
+    (input.sourceUrl
+      ? `<div class="osp-panel-source">${sourceButton(input.sourceUrl, "osp-panel-source-btn")}</div>`
+      : "") +
     `<div class="osp-panel-theme">${themeButton()}</div>` +
     `<button class="osp-btn osp-btn-sq osp-panel-close" type="button" data-osp-panel-close ` +
     `aria-label="Close" title="Close">${icon("close", "osp-icon")}</button>` +

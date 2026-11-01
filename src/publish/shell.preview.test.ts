@@ -296,6 +296,8 @@ function page(themeName: string): string {
       stats: { words: 648, readingMinutes: 3, sections: 4 },
       today: TODAY,
       noteCount: NOTES.length,
+      // So the harness shows the control as a published site carries it.
+      sourceUrl: "https://github.com/example-user/a-vault-published",
     },
   });
 }
@@ -330,6 +332,8 @@ function sitePage(
       stats: { words: 0, readingMinutes: 1, sections: 0 },
       today: TODAY,
       noteCount: NOTES.length,
+      // So the harness shows the control as a published site carries it.
+      sourceUrl: "https://github.com/example-user/a-vault-published",
     },
   });
 }
