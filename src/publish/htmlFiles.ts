@@ -184,9 +184,30 @@ export function planCompanions(
   const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
   const seen = new Set<string>();
 
+  const note = (reference: string, why: string) =>
+    plan.broken.push(`${page.url} -> ${reference} (${why})`);
+
+  /*
+   * Named from the root of the server, so there is no vault file to carry
+   * and nothing to rewrite -- but the page will go out asking for it, and a
+   * reader will get nothing. Reported here rather than dropped, which is
+   * what used to happen: a stock bundler build published its HTML, none of
+   * its code, and a report that mentioned neither.
+   */
+  for (const reference of findRootAbsoluteReferences(html)) {
+    note(
+      reference,
+      "resolved from the root of the server, where a site published into a " +
+        "folder has nothing -- build with a relative base",
+    );
+  }
+
   for (const reference of findLocalReferences(html)) {
-    const broken = (why: string) =>
-      plan.broken.push(`${page.url} -> ${reference} (${why})`);
+    const broken = (why: string) => note(reference, why);
+
+    // A folder, which a static host answers with its index. Nothing to
+    // carry, and nothing wrong.
+    if (isDirectoryReference(reference)) continue;
 
     const path = companionVaultPath(page.sourcePath, reference);
     if (!path) {
@@ -278,6 +299,13 @@ export interface HtmlFileStats {
    * published as written. So it is reported instead, and loudly.
    */
   localResourceUrls: string[];
+  /**
+   * Pages whose `<base href>` will not resolve their own files, with why.
+   *
+   * Page-level rather than per-reference, because that is what it is: one
+   * attribute that moves every other reference on the page at once.
+   */
+  baseHrefs: string[];
 }
 
 export function emptyHtmlFileStats(): HtmlFileStats {
@@ -287,6 +315,7 @@ export function emptyHtmlFileStats(): HtmlFileStats {
     companionBytes: 0,
     unresolved: [],
     localResourceUrls: [],
+    baseHrefs: [],
   };
 }
 
@@ -412,6 +441,70 @@ const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/gi;
 /** `app://`, Obsidian's resource scheme, which embeds the vault's own path. */
 const APP_URL = /app:\/\//i;
 
+/** Any `<base>` tag, removed before the reference scan. */
+const BASE_TAG = /<base\b[^>]*>/gi;
+
+/** The `href` of the first `<base>` tag, which is the only one that counts. */
+const BASE_HREF =
+  /<base\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))/i;
+
+/**
+ * The page's `<base href>`, or null when it sets none.
+ *
+ * Worth reading on its own because it is the one reference that decides
+ * every other one. A page whose scripts are all named relatively, and whose
+ * files therefore all travel, is still blank if its base points somewhere
+ * else -- and the two cases are indistinguishable in what gets published,
+ * which is how an Angular build with the default base came to produce output
+ * byte-identical to a working one.
+ */
+export function baseHref(html: string): string | null {
+  const match = BASE_HREF.exec(html.replace(/<!--[\s\S]*?-->/g, " "));
+  if (!match) return null;
+  return (match[1] ?? match[2] ?? match[3] ?? "").trim();
+}
+
+/**
+ * Why a `<base href>` will not work on a published site, or null if it will.
+ *
+ * `./` and `.` resolve against the page's own folder, which is where its
+ * files are, so those are the sound answers. Everything else is reported
+ * rather than refused: `/` is right for a site served from the root of a
+ * domain and wrong for one served from a folder, and this cannot tell which
+ * is being published -- only that the author should look.
+ */
+export function baseHrefHazard(value: string | null): string | null {
+  if (value === null) return null;
+  const base = value.trim();
+  if (base === "./" || base === "." || base === "") return null;
+  if (isRootAbsolute(base)) {
+    return (
+      `base href="${base}" resolves every reference from the root of the ` +
+      `server, so the page's own files are only found when the site is ` +
+      `served from there -- build with a base of "./" to publish into a folder`
+    );
+  }
+  return (
+    `base href="${base}" resolves every reference somewhere other than ` +
+    `beside the page -- build with a base of "./" unless that is meant`
+  );
+}
+
+/**
+ * Whether a reference names a folder rather than a file.
+ *
+ * A static host answers `charts/` with `charts/index.html`, so there is
+ * nothing to carry and nothing broken. Before this, such a reference was
+ * resolved as a path, found to be a folder rather than a file, and reported
+ * as missing -- a broken reference on a page that was working.
+ */
+export function isDirectoryReference(value: string): boolean {
+  const [withoutFragment] = value.split("#");
+  const [raw] = withoutFragment.split("?");
+  if (!raw) return true;
+  return raw.endsWith("/") || raw === "." || raw === "..";
+}
+
 /** True when a page's text holds an `app://` URL. */
 export function hasLocalResourceUrl(html: string): boolean {
   return APP_URL.test(html);
@@ -426,22 +519,61 @@ export function hasLocalResourceUrl(html: string): boolean {
  * comes back is relative references, deduplicated, in the order found.
  */
 export function findLocalReferences(html: string): string[] {
+  return everyReference(html).filter(isLocalReference);
+}
+
+/**
+ * References the page makes from the root of the server.
+ *
+ * Collected separately because they are the commonest reason a published
+ * application is a blank page, and because dropping them quietly is how that
+ * blank page came to have no explanation. Every bundler writes them by
+ * default -- Vite's `base` and Angular's `baseHref` are both `/` until
+ * somebody changes them -- and `/assets/index-a1b2.js` resolves to the root
+ * of the domain, which a site published into a folder is not.
+ *
+ * They cannot be carried: there is no vault file at a server path. So they
+ * are reported, which is all that was ever needed and is what the comment on
+ * `isLocalReference` used to claim happened.
+ */
+export function findRootAbsoluteReferences(html: string): string[] {
+  return everyReference(html).filter(isRootAbsolute);
+}
+
+/** Whether a reference is resolved from the root of the server. */
+export function isRootAbsolute(value: string): boolean {
+  // `//host/path` is protocol-relative, which is a different thing: it names
+  // another server rather than the root of this one.
+  return value.startsWith("/") && !value.startsWith("//");
+}
+
+/**
+ * Every reference in the text, deduplicated, in the order found.
+ *
+ * `<base>` is removed before the scan rather than filtered afterwards. Its
+ * `href` is not a file the page wants -- it is the rule for resolving every
+ * other reference -- and treating it as one made the build report a page
+ * whose base was the sound `./` as having a broken reference to `./`. It is
+ * read separately, by `baseHref`.
+ */
+function everyReference(html: string): string[] {
+  const text = html.replace(BASE_TAG, " ");
   const found = new Set<string>();
 
   const take = (raw: string | undefined) => {
     const value = (raw ?? "").trim();
-    if (isLocalReference(value)) found.add(value);
+    if (value) found.add(value);
   };
 
-  for (const match of html.matchAll(ATTRIBUTE_REFERENCE)) {
+  for (const match of text.matchAll(ATTRIBUTE_REFERENCE)) {
     take(match[1] ?? match[2] ?? match[3]);
   }
 
-  for (const match of html.matchAll(CSS_URL)) {
+  for (const match of text.matchAll(CSS_URL)) {
     take(match[1] ?? match[2] ?? match[3]);
   }
 
-  for (const match of html.matchAll(SRCSET)) {
+  for (const match of text.matchAll(SRCSET)) {
     const value = match[1] ?? match[2] ?? "";
     for (const candidate of value.split(",")) {
       // "pic.png 2x" -- the descriptor is not part of the path.

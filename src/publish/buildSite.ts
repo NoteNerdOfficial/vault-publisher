@@ -82,6 +82,8 @@ import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput, isHiddenPath } from "./outputFol
 import {
   CompanionRef,
   HtmlFileStats,
+  baseHref,
+  baseHrefHazard,
   countHtmlFilesBlockedByFlag,
   emptyHtmlFileStats,
   hasLocalResourceUrl,
@@ -956,6 +958,11 @@ export async function buildSite(
     // home directory. The note pipeline strips those; this one may not touch
     // the file, so the only honest thing left is to say so.
     if (hasLocalResourceUrl(html)) htmlStats.localResourceUrls.push(target.url);
+
+    // One attribute that moves every reference on the page, so it is read
+    // once for the page rather than found among the references.
+    const hazard = baseHrefHazard(baseHref(html));
+    if (hazard) htmlStats.baseHrefs.push(`${target.url}: ${hazard}`);
 
     const companions = planCompanions(target, html, {
       folder: config.folder,

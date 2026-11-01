@@ -9,6 +9,10 @@ import {
   hasLocalResourceUrl,
   isHtmlFilePath,
   isLocalReference,
+  baseHref,
+  baseHrefHazard,
+  findRootAbsoluteReferences,
+  isDirectoryReference,
   mayCarryCompanion,
   planCompanions,
   planHtmlFiles,
@@ -357,6 +361,91 @@ describe("mayCarryCompanion", () => {
   });
 });
 
+describe("baseHref", () => {
+  it("reads the value a page sets", () => {
+    expect(baseHref(`<head><base href="/"></head>`)).toBe("/");
+    expect(baseHref(`<head><base href="./"></head>`)).toBe("./");
+    expect(baseHref(`<base href='/app/'>`)).toBe("/app/");
+    // Unquoted, and with another attribute in the way.
+    expect(baseHref(`<base target=_blank href=./ >`)).toBe("./");
+  });
+
+  it("is null for a page that sets none", () => {
+    expect(baseHref(`<head><title>x</title></head>`)).toBeNull();
+  });
+
+  // A page that documents a base tag is not a page that has one.
+  it("ignores one inside a comment", () => {
+    expect(baseHref(`<!-- <base href="/"> --><head></head>`)).toBeNull();
+  });
+
+  it("takes the first, which is the only one a browser honours", () => {
+    expect(baseHref(`<base href="./"><base href="/">`)).toBe("./");
+  });
+});
+
+describe("baseHrefHazard", () => {
+  /**
+   * The case that produced two byte-identical builds, one working and one
+   * blank: Angular's default base. Every reference on the page is relative,
+   * so every file travels, and the browser then looks for all of them at the
+   * root of the domain.
+   */
+  it("reports a base resolved from the root of the server", () => {
+    const why = baseHrefHazard("/");
+    expect(why).toContain("root of the server");
+    expect(why).toContain('"./"');
+  });
+
+  it("reports a base pointing anywhere else", () => {
+    expect(baseHrefHazard("/app/")).toContain("root of the server");
+    expect(baseHrefHazard("https://example.com/")).toContain("somewhere other than");
+  });
+
+  it("says nothing about the ones that work", () => {
+    expect(baseHrefHazard("./")).toBeNull();
+    expect(baseHrefHazard(".")).toBeNull();
+    expect(baseHrefHazard("")).toBeNull();
+    // No base at all is the commonest sound answer of the lot.
+    expect(baseHrefHazard(null)).toBeNull();
+  });
+});
+
+describe("findRootAbsoluteReferences", () => {
+  it("finds what the local scan deliberately drops", () => {
+    const html = `<script src="/assets/index-a1b2.js"></script>
+      <link rel="stylesheet" href="/assets/index-c3d4.css">
+      <img src="pics/plot.png">
+      <script src="//cdn.example.com/x.js"></script>
+      <a href="https://example.com/">out</a>`;
+    expect(findRootAbsoluteReferences(html)).toEqual([
+      "/assets/index-a1b2.js",
+      "/assets/index-c3d4.css",
+    ]);
+    // The relative one is still the local scan's business, and only its.
+    expect(findLocalReferences(html)).toEqual(["pics/plot.png"]);
+  });
+
+  it("does not count a base tag among them", () => {
+    expect(findRootAbsoluteReferences(`<base href="/">`)).toEqual([]);
+  });
+});
+
+describe("isDirectoryReference", () => {
+  it("claims a path that names a folder", () => {
+    expect(isDirectoryReference("charts/")).toBe(true);
+    expect(isDirectoryReference("./")).toBe(true);
+    expect(isDirectoryReference(".")).toBe(true);
+    expect(isDirectoryReference("..")).toBe(true);
+    expect(isDirectoryReference("charts/?v=2")).toBe(true);
+  });
+
+  it("leaves a file alone", () => {
+    expect(isDirectoryReference("charts/trend.html")).toBe(false);
+    expect(isDirectoryReference("styles.css")).toBe(false);
+  });
+});
+
 describe("hasLocalResourceUrl", () => {
   // Such a URL contains the vault's absolute path, so the author's home
   // directory. The note pipeline strips these; an as-is page cannot be
@@ -535,11 +624,50 @@ describe("planCompanions", () => {
     expect(plan.refused).toHaveLength(1);
   });
 
-  it("leaves external and absolute references entirely alone", () => {
+  it("leaves a reference to somewhere else entirely alone", () => {
     const html = `<link rel="stylesheet" href="https://cdn.example.com/a.css">
-      <script src="/root.js"></script>`;
+      <script src="//cdn.example.com/b.js"></script>`;
     const plan = planCompanions(page, html, context());
     expect(plan).toEqual({ carry: [], broken: [], refused: [] });
+  });
+
+  /**
+   * The silence this exists to end. Every bundler writes root-absolute
+   * references by default, there is no vault file at a server path to carry,
+   * and dropping them quietly is how a stock build came to publish its HTML,
+   * none of its code, and a report that mentioned neither.
+   */
+  it("reports a reference resolved from the root of the server", () => {
+    const html = `<script type="module" src="/assets/index-a1b2c3.js"></script>
+      <link rel="stylesheet" href="/assets/index-d4e5f6.css">`;
+    const plan = planCompanions(page, html, context());
+    expect(plan.carry).toEqual([]);
+    expect(plan.broken).toHaveLength(2);
+    expect(plan.broken[0]).toContain("/assets/index-a1b2c3.js");
+    expect(plan.broken[0]).toContain("root of the server");
+    expect(plan.broken[0]).toContain("relative base");
+  });
+
+  // A static host answers a folder with its index, so there is nothing to
+  // carry and nothing broken. This used to be reported as a missing file.
+  it("says nothing about a reference to a folder", () => {
+    const html = `<a href="charts/">charts</a><a href="./">here</a>
+      <a href="..">up</a>`;
+    const plan = planCompanions(page, html, context());
+    expect(plan).toEqual({ carry: [], broken: [], refused: [] });
+  });
+
+  /**
+   * The false positive that prompted all of this. A page whose base is the
+   * sound `./` was reported as having a broken reference to `./`, because the
+   * scanner matched `href` on any element and then tried to resolve it as a
+   * file.
+   */
+  it("does not treat a base tag as a reference of its own", () => {
+    const html = `<base href="./"><link rel="stylesheet" href="../styles.css">`;
+    const plan = planCompanions(page, html, context());
+    expect(plan.broken).toEqual([]);
+    expect(plan.carry.map((c) => c.url)).toEqual(["styles.css"]);
   });
 
   // With the whole vault in scope the mirror is exact, so nothing can be

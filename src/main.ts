@@ -1614,6 +1614,12 @@ export default class VaultPublisherPlugin extends Plugin {
               : ""),
         );
       }
+      if (result.htmlFiles.baseHrefs.length) {
+        say(
+          `WARNING: ${result.htmlFiles.baseHrefs.length} HTML file(s) set a base href ` +
+            `that will not find their own files -- see the build report`,
+        );
+      }
       if (result.htmlFiles.localResourceUrls.length) {
         say(
           `WARNING: ${result.htmlFiles.localResourceUrls.length} HTML file(s) hold an ` +
@@ -1921,6 +1927,19 @@ export default class VaultPublisherPlugin extends Plugin {
           "",
         );
         for (const page of html.localResourceUrls) lines.push(`- ${page}`);
+      }
+      if (html.baseHrefs.length) {
+        lines.push(
+          "",
+          `**${html.baseHrefs.length} page(s) set a \`<base href>\` that will not find ` +
+            "their own files.** This is the one that looks like nothing is wrong: " +
+            "every reference on such a page can be relative, so every file it " +
+            "needs is published beside it, and the browser then resolves all of " +
+            "them somewhere else and the page is blank. A build with a relative " +
+            "base and one without produce output that is otherwise identical.",
+          "",
+        );
+        for (const page of html.baseHrefs) lines.push(`- ${page}`);
       }
       if (html.unresolved.length) {
         lines.push(
