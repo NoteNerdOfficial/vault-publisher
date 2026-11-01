@@ -654,7 +654,7 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}">`
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}">` : ""}
 <link rel="stylesheet" href="${root}assets/obsidian.css">
 <link rel="stylesheet" href="${root}assets/site.css">
-${overlay ? `<meta name="osp-review" content="${escapeHtml(JSON.stringify({ sourcePath: overlay.sourcePath, page: meta.url, site: meta.siteName, reviewer: overlay.reviewer ?? "", tracker: overlay.tracker ?? "" }))}">` : ""}
+${overlay ? reviewOverlayMeta({ sourcePath: overlay.sourcePath, url: meta.url, siteName: meta.siteName, reviewer: overlay.reviewer, tracker: overlay.tracker }) : ""}
 <script>${THEME_BOOT}</script>
 </head>
 <body>
@@ -732,6 +732,74 @@ function propertiesBlock(properties: PageMeta["properties"], root: string): stri
       )
       .join("") +
     `</div>`
+  );
+}
+
+/**
+ * What the review overlay needs in a page, as the one place that says it.
+ *
+ * Two tags: a `<meta>` carrying the configuration, and the bundle itself. It
+ * is a function rather than a template fragment because two different kinds
+ * of page need the same pair -- a page this module builds, and a page it does
+ * not build at all. `htmlFiles.ts` publishes a vault's own HTML byte for
+ * byte, and a reviewer has as much to say about one of those as about a note,
+ * so the overlay has to be able to reach a document whose markup we never
+ * touched.
+ *
+ * `stamp` is the only difference between the two callers. A page built here
+ * has already had `stampBlockIds` run over its live DOM, so its blocks carry
+ * the `data-osp-block` attribute a pin anchors to. A page published as-is has
+ * not been through any DOM pass -- that is its whole contract -- so the
+ * overlay is asked to stamp the blocks itself, in the browser, from the same
+ * content-derived hash. Anchoring is content-derived precisely so that it can
+ * be computed anywhere and still agree.
+ */
+export interface ReviewOverlayConfig {
+  /** Vault path of the file behind the page. The overlay will not start
+   * without one: a comment has to be about something in the vault. */
+  sourcePath: string;
+  /** Published URL of the page, for a comment to name. */
+  url: string;
+  siteName: string;
+  reviewer?: string;
+  tracker?: string;
+  /** Stamp block anchors in the browser, for a page we did not render. */
+  stamp?: boolean;
+}
+
+/** The configuration meta tag. Carries the vault path, so preview only. */
+export function reviewOverlayMeta(config: ReviewOverlayConfig): string {
+  const content = JSON.stringify({
+    sourcePath: config.sourcePath,
+    page: config.url,
+    site: config.siteName,
+    reviewer: config.reviewer ?? "",
+    tracker: config.tracker ?? "",
+    ...(config.stamp ? { stamp: true } : {}),
+  });
+  return `<meta name="osp-review" content="${escapeHtml(content)}">`;
+}
+
+/**
+ * The overlay as a block to append to a page this module did not build.
+ *
+ * Appended rather than inserted. A hand-written document may have no
+ * `<head>`, no `</body>`, those strings inside a comment or a `<pre>`, or any
+ * capitalisation of them -- so there is no insertion point that can be found
+ * reliably by looking at the text, and finding one by parsing would mean the
+ * round trip `htmlFiles.ts` exists to avoid. Appending needs no insertion
+ * point: the HTML parser puts a tag that follows `</html>` into the body, so
+ * the meta is still found by a document-wide query and the script still runs.
+ *
+ * Delimited by comments so that what was added is visible in a diff, and so
+ * that a reader who finds it in a preview can see at a glance what it is.
+ */
+export function reviewOverlayAppendix(config: ReviewOverlayConfig): string {
+  return (
+    `\n<!-- osp-review:start -- added to this preview only; not published -->\n` +
+    reviewOverlayMeta(config) +
+    `\n<script>${overlayBundle()}</script>\n` +
+    `<!-- osp-review:end -->\n`
   );
 }
 

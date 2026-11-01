@@ -1,0 +1,20 @@
+/*
+ * This page's own stylesheet, beside this page.
+ *
+ * It is carried separately from ../styles.css, and both are carried once
+ * however many pages reference them.
+ */
+
+.chart {
+  margin: 2rem 0;
+  padding: 1rem;
+  background: #fff;
+  border: 1px solid var(--line, #d8cdb8);
+  border-radius: 10px;
+}
+
+.chart svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}

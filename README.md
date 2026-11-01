@@ -32,6 +32,7 @@ src/publish/    turning rendered HTML into a site
   links.ts        wikilinks to relative URLs; unpublished targets degrade safely
   page.ts         document shell, heading ids, table of contents
   source.ts       a note's markdown, minus what the rendering hides
+  htmlFiles.ts    the vault's own .html pages, published untouched
   landing.ts      the pages no note wrote: homepage, browse, a page per tag
   theme.ts        the site's own stylesheet (placeholder; design work pending)
   harvestCss.ts   lifts layout-critical rules from the running app

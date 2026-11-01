@@ -1,0 +1,86 @@
+/*
+ * The stylesheet this page brings with it.
+ *
+ * Deliberately unlike the site's own look: a serif face, a warm paper, a
+ * narrow measure. If the published page looks like this, the page kept its
+ * own styling. If it looks like the rest of the site, something rewrote it.
+ */
+
+:root {
+  --paper: #fbf7ef;
+  --ink: #23201b;
+  --line: #d8cdb8;
+  --accent: #7a5c2e;
+}
+
+body {
+  margin: 0;
+  padding: 3rem 1.25rem 5rem;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Iowan Old Style", Palatino, Georgia, serif;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 2rem;
+  line-height: 1.15;
+  margin: 0 0 1rem;
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin: 2.5rem 0 0.75rem;
+  color: var(--accent);
+}
+
+.lede {
+  font-size: 1.1rem;
+  color: #4a443a;
+  margin: 0 0 2rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: #f1e9db;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+figure {
+  margin: 1.5rem 0;
+}
+
+figcaption {
+  font-size: 0.9rem;
+  color: #6b6358;
+  margin-top: 0.4rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.4em 0.9em;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+
+.note {
+  font-size: 0.9rem;
+  color: #6b6358;
+  margin-left: 0.5rem;
+}

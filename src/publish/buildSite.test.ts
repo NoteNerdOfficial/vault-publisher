@@ -38,6 +38,9 @@ const VAULT = [
   { path: "notes/nested/deep.md" },
   { path: "private/salary.md", frontmatter: { publish: true } },
   { path: "inbox.md" },
+  // What the plugin itself writes into the vault.
+  { path: "_vault-publisher/build-report.md" },
+  { path: "_vault-publisher/review/notes-on-the-review.md" },
 ];
 
 describe("isScopeChosen", () => {
@@ -62,13 +65,40 @@ describe("isScopeChosen", () => {
 });
 
 describe("selectNotes", () => {
-  it("takes the whole vault for an empty folder", () => {
+  /**
+   * The whole vault means the vault's content, not the build's own output.
+   * Publishing it whole otherwise put `_vault-publisher/build-report.md` on
+   * the site as a page of the build that had just made it, along with the
+   * publish log and every imported review.
+   */
+  it("takes the whole vault for an empty folder, minus the build's output", () => {
     const selected = selectNotes(stubApp(VAULT), config({ folder: "" }));
     expect(selected.map((f) => f.path)).toEqual([
       "inbox.md",
       "notes/nested/deep.md",
       "notes/public.md",
       "private/salary.md",
+    ]);
+  });
+
+  it("takes the caller's output folders over the default", () => {
+    const selected = selectNotes(
+      stubApp([{ path: "out/report.md" }, { path: "notes/a.md" }]),
+      config({ folder: "", outputFolders: ["out"] }),
+    );
+    expect(selected.map((f) => f.path)).toEqual(["notes/a.md"]);
+  });
+
+  // Somebody who points the scope at that folder has asked for it by name,
+  // and a build that silently matched nothing would be worse.
+  it("publishes an output folder when the scope is aimed at it", () => {
+    const selected = selectNotes(
+      stubApp(VAULT),
+      config({ folder: "_vault-publisher" }),
+    );
+    expect(selected.map((f) => f.path)).toEqual([
+      "_vault-publisher/build-report.md",
+      "_vault-publisher/review/notes-on-the-review.md",
     ]);
   });
 
@@ -91,6 +121,19 @@ describe("selectNotes", () => {
   it("does not match a folder whose name is a prefix of another", () => {
     const selected = selectNotes(stubApp(VAULT), config({ folder: "note" }));
     expect(selected).toEqual([]);
+  });
+
+  it("keeps the output folders out even with a frontmatter flag set", () => {
+    // The flag is not a way back in: a report that happened to carry the
+    // flag in its frontmatter is still the build's own output.
+    const selected = selectNotes(
+      stubApp([
+        { path: "_vault-publisher/build-report.md", frontmatter: { publish: true } },
+        { path: "notes/a.md", frontmatter: { publish: true } },
+      ]),
+      config({ folder: "", requireFrontmatterFlag: "publish" }),
+    );
+    expect(selected.map((f) => f.path)).toEqual(["notes/a.md"]);
   });
 
   it("applies the frontmatter flag across the whole vault", () => {

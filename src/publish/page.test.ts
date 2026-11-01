@@ -7,6 +7,8 @@ import {
   prepareCodeBlocks,
   prepareCollapsibleCallouts,
   prepareTables,
+  reviewOverlayAppendix,
+  reviewOverlayMeta,
   stripFrontmatter,
 } from "./page";
 
@@ -259,6 +261,61 @@ describe("neutralizeMermaidColours", () => {
 
     expect(neutralizeMermaidColours(root)).toBe(0);
     expect(root.querySelector("path")?.getAttribute("fill")).toBe("#123456");
+  });
+});
+
+describe("the overlay on a page this module did not build", () => {
+  /**
+   * The appendix is what lets a reviewer comment on a page published as-is.
+   * It has to stand on its own: no head to put a tag in, no body to wrap, no
+   * stylesheet of ours, and a document that may have none of those either.
+   */
+  const config = {
+    sourcePath: "pages/hand-written.html",
+    url: "hand-written.html",
+    siteName: "Handbook",
+    reviewer: "Reviewer",
+    stamp: true,
+  };
+
+  it("carries the config and the bundle, and nothing else", () => {
+    const appendix = reviewOverlayAppendix(config);
+    expect(appendix).toContain(`<meta name="osp-review"`);
+    expect(appendix).toContain("pages/hand-written.html");
+    expect(appendix).toContain("<script>");
+    // No stylesheet and no shell: the overlay carries its own CSS inside the
+    // bundle and mounts into a shadow root, which is what makes it safe to
+    // drop onto markup with its own styling.
+    expect(appendix).not.toContain("assets/site.css");
+    expect(appendix).not.toContain("osp-shell");
+  });
+
+  // Delimited so a reader of a preview, or a diff of one, can see exactly
+  // what was added and that nothing else was.
+  it("marks itself off from the author's own markup", () => {
+    const appendix = reviewOverlayAppendix(config);
+    expect(appendix).toContain("<!-- osp-review:start");
+    expect(appendix).toContain("<!-- osp-review:end -->");
+    expect(appendix).toContain("not published");
+  });
+
+  // The flag is the whole difference between the two callers: a rendered note
+  // was stamped while its DOM was live, an as-is page never had a DOM pass.
+  it("asks the browser to stamp anchors, which a rendered page does not", () => {
+    // The JSON payload is HTML-escaped into the attribute, so the quotes
+    // around the key arrive as entities.
+    expect(reviewOverlayAppendix(config)).toContain("stamp&quot;:true");
+    expect(reviewOverlayMeta({ ...config, stamp: false })).not.toContain("stamp");
+  });
+
+  it("escapes a vault path that would break out of the attribute", () => {
+    const appendix = reviewOverlayAppendix({
+      ...config,
+      sourcePath: `pages/He said "hi" <x>.html`,
+    });
+    expect(appendix).not.toContain(`content="{"`);
+    expect(appendix).not.toContain("<x>");
+    expect(appendix).toContain("&quot;");
   });
 });
 

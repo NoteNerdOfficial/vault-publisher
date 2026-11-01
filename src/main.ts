@@ -588,9 +588,16 @@ export default class VaultPublisherPlugin extends Plugin {
     // is restored afterwards even if it throws.
     const restoreThrottling = suspendBackgroundThrottling();
     try {
-      const config: SiteConfig = overrides
-        ? { ...this.settings.site, ...overrides }
-        : this.settings.site;
+      const config: SiteConfig = {
+        ...this.settings.site,
+        // Named here rather than stored in settings, because these are this
+        // plugin's own folders and not the user's business. Publishing HTML
+        // files as-is makes the preview folder selectable input, and a build
+        // that read its own last output would publish the site inside the
+        // site, again on every build.
+        outputFolders: [OUTPUT_FOLDER, PREVIEW_FOLDER],
+        ...overrides,
+      };
       const result = await buildSite(this.app, config, (done, total, path) => {
         this.progress?.(`Rendering ${path}`, done, total);
         if (done % 25 === 0) new Notice(`Rendering ${done + 1}/${total}`, 1000);
@@ -649,7 +656,7 @@ export default class VaultPublisherPlugin extends Plugin {
     // A preview is how someone checks a filter, so an empty one is a result
     // rather than a fault. It still has to say so: an empty preview folder
     // and a preview that was never written look identical on disk.
-    if (result.selectedCount === 0) {
+    if (result.selectedCount === 0 && result.htmlFiles.published === 0) {
       new Notice(
         `Vault Publisher: no notes matched (${this.describeScope()}).`,
         8000,
@@ -680,8 +687,14 @@ export default class VaultPublisherPlugin extends Plugin {
     const removed = pruned.removed.length
       ? `, removed ${pruned.removed.length} stale ${pruned.removed.length === 1 ? "file" : "files"}`
       : "";
+    // Counted separately because they are built differently: an as-is page
+    // was copied, not rendered, so folding it into the page count would
+    // report a render that never happened.
+    const asIs = result.htmlFiles.published
+      ? `, ${result.htmlFiles.published} as-is`
+      : "";
     new Notice(
-      `Built ${result.pages.length} pages in ${Math.round(result.totalMs)}ms${removed} -> ${PREVIEW_FOLDER}/`,
+      `Built ${result.pages.length} pages${asIs} in ${Math.round(result.totalMs)}ms${removed} -> ${PREVIEW_FOLDER}/`,
     );
 
     // The other moment worth syncing on: a build is somebody about to look
@@ -1575,7 +1588,10 @@ export default class VaultPublisherPlugin extends Plugin {
       // committing a build that selected nothing does not publish an empty
       // site -- it replaces a live one with an empty site. The likeliest
       // cause is a folder that does not exist, which is a typo away.
-      if (result.selectedCount === 0) {
+      // A site of nothing but hand-written HTML pages is a real site, so
+      // the guard asks whether the build produced *any* page -- it exists to
+      // stop an empty tree replacing a live site, not to insist on notes.
+      if (result.selectedCount === 0 && result.htmlFiles.published === 0) {
         say(`ABORTED: no notes matched (${this.describeScope()})`);
         await this.writePublishLog(log);
         return;
@@ -1586,6 +1602,29 @@ export default class VaultPublisherPlugin extends Plugin {
       // without going looking.
       for (const skip of result.skipped) {
         say(`SKIPPED ${skip.path}: ${skip.reason}`);
+      }
+
+      // Said for the same reason as the skips: a page that went out
+      // untouched is a page none of the checks below apply to.
+      if (result.htmlFiles.published) {
+        say(
+          `published ${result.htmlFiles.published} HTML file(s) as-is` +
+            (result.htmlFiles.companions
+              ? `, with ${result.htmlFiles.companions} referenced file(s)`
+              : ""),
+        );
+      }
+      if (result.htmlFiles.localResourceUrls.length) {
+        say(
+          `WARNING: ${result.htmlFiles.localResourceUrls.length} HTML file(s) hold an ` +
+            `app:// URL, which contains the path of your vault -- see the build report`,
+        );
+      }
+      if (result.htmlFilesBlockedByFlag) {
+        say(
+          `${result.htmlFilesBlockedByFlag} HTML file(s) not published: a frontmatter ` +
+            `flag is required and an HTML file cannot carry one`,
+        );
       }
 
       // Every one of these means the built site differs from what Obsidian
@@ -1679,6 +1718,12 @@ export default class VaultPublisherPlugin extends Plugin {
         message: `Publish ${result.pages.length} pages from Obsidian`,
         files,
         expectedHeadSha: baseSha,
+        // One request per changed file, so a whole-vault publish is a few
+        // hundred of them. Said through `progress` rather than `say`, which
+        // would put a few hundred notices on screen.
+        onProgress: (done, total, path) => {
+          this.progress?.(`Uploading ${path}`, done, total);
+        },
       });
       say(`committed ${commit.commitSha.slice(0, 7)} to ${github.branch}`);
 
@@ -1839,6 +1884,55 @@ export default class VaultPublisherPlugin extends Plugin {
       if (result.basesTruncated.length) {
         lines.push("", "Truncated views (emitted/total):", "");
         for (const v of result.basesTruncated) lines.push(`- ${v}`);
+      }
+    }
+
+    const html = result.htmlFiles;
+    if (html.published || result.htmlFilesBlockedByFlag) {
+      lines.push("", "## HTML files published as-is", "");
+      lines.push(
+        `Pages: ${html.published}, referenced files carried: ${html.companions} ` +
+          `(${formatBytes(html.companionBytes)})`,
+      );
+      lines.push("");
+      lines.push(
+        "These are published byte for byte, at their own path, with the files they",
+        "reference copied to matching paths. Nothing else in this report applies to",
+        "them: they are not rendered, not wrapped in the site's shell, not scanned",
+        "for content from unpublished notes, and not styled by the site's CSS.",
+      );
+      if (result.htmlFilesBlockedByFlag) {
+        lines.push(
+          "",
+          `**${result.htmlFilesBlockedByFlag} HTML file(s) were not published.** ` +
+            "A frontmatter flag is required to publish, and an HTML file has no " +
+            "frontmatter to carry it. Clear the flag to publish them, or leave it " +
+            "set and publish them from a folder scope instead.",
+        );
+      }
+      if (html.localResourceUrls.length) {
+        lines.push(
+          "",
+          `**${html.localResourceUrls.length} page(s) hold an \`app://\` URL.** That is ` +
+            "Obsidian's own resource scheme: it contains the absolute path of your " +
+            "vault, so your home directory and account name, and it resolves for " +
+            "nobody but you. These pages are published as written, so this one is " +
+            "yours to fix:",
+          "",
+        );
+        for (const page of html.localResourceUrls) lines.push(`- ${page}`);
+      }
+      if (html.unresolved.length) {
+        lines.push(
+          "",
+          "References that will not reach what the page meant by them. Each one",
+          "is published exactly as written, so these are yours to fix:",
+          "",
+        );
+        for (const reference of html.unresolved.slice(0, 40)) lines.push(`- ${reference}`);
+        if (html.unresolved.length > 40) {
+          lines.push(`- ... and ${html.unresolved.length - 40} more`);
+        }
       }
     }
 

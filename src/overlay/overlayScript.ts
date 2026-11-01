@@ -122,6 +122,67 @@ export const OVERLAY_SCRIPT = `(function () {
   var SCHEMA = 6;
 
   /*
+   * Stamping block anchors here, for a page the build did not render.
+   *
+   * A note's page arrives with every block already carrying BLOCK_ATTR,
+   * stamped by \`stampBlockIds\` while the rendered DOM was still live. A page
+   * published as-is arrives with none: it was never parsed, which is the
+   * whole point of that path, so there was no DOM to stamp.
+   *
+   * It can be done here instead because the anchor is derived from content
+   * rather than position -- a hash of the block's tag and its normalized
+   * text. That is computable from the live document in the browser, and it
+   * agrees with what the build would have produced because it is the same
+   * function over the same text in the same document order. \`anchor.ts\` holds
+   * the other copy, and a test asserts the two agree; if they ever drift, a
+   * pin on an as-is page reattaches to nothing.
+   *
+   * Runs before anything reads BLOCK_ATTR, so a restored pin finds its block.
+   *
+   * \`squash\` further down does the same thing to a string and is
+   * deliberately not used here. That one is for display -- clipping a line of
+   * context to fit a panel -- and this one is half of the anchor contract, so
+   * sharing them would mean a tweak made for a tooltip silently moving every
+   * anchor on every as-is page. The TypeScript side keeps them apart for the
+   * same reason.
+   */
+  function normalizeBlockText(value) {
+    return value.replace(/\\s+/g, " ").trim();
+  }
+
+  function hashBlockText(value) {
+    var hash = 0x811c9dc5;
+    for (var i = 0; i < value.length; i++) {
+      hash ^= value.charCodeAt(i);
+      hash =
+        (hash +
+          ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>>
+        0;
+    }
+    return hash.toString(36);
+  }
+
+  function stampBlocks() {
+    var selector =
+      "p, h1, h2, h3, h4, h5, h6, li, blockquote, table, figure, pre, .callout";
+    var nodes = document.querySelectorAll(selector);
+    var seen = {};
+    for (var i = 0; i < nodes.length; i++) {
+      var text = normalizeBlockText(nodes[i].textContent || "");
+      if (!text) continue;
+      /* The tag joins the text through a separator that cannot occur in
+         either, so an <li> and the <p> it wraps do not hash alike. */
+      var base = hashBlockText(nodes[i].tagName.toLowerCase() + "\\u0000" + text);
+      var key = "k" + base;
+      var count = Object.prototype.hasOwnProperty.call(seen, key) ? seen[key] : 0;
+      seen[key] = count + 1;
+      nodes[i].setAttribute(BLOCK_ATTR, count === 0 ? base : base + "-" + count);
+    }
+  }
+
+  if (config.stamp) stampBlocks();
+
+  /*
    * The mark: a tag with three rounded corners and one sharp one, and the
    * sharp corner is the point being marked. It sits at (5, 27) in a 32 unit
    * box, which is where the offset in the stylesheet comes from.

@@ -173,6 +173,7 @@ export interface SettingsHost {
       updatedProperty?: string;
       pinnedProperty?: string;
       theme?: string;
+      publishHtmlFiles?: boolean;
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
       customDomain?: string;
@@ -929,6 +930,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }),
       );
 
+    // Placed under the flag rather than with the publishing options, because
+    // the flag is what decides whether this does anything at all.
+    new Setting(root)
+      .setName("Publish HTML files as-is")
+      .setDesc(this.describeHtmlFiles())
+      .addToggle((toggle) =>
+        toggle.setValue(site.publishHtmlFiles ?? false).onChange(async (value) => {
+          site.publishHtmlFiles = value;
+          await this.host.saveSettings();
+          // The description changes with the value: with a flag set, the
+          // answer is that this publishes nothing, and that belongs on
+          // screen rather than in the build report.
+          this.display();
+        }),
+      );
+
     // The field is a path, but the useful half is the answer: this says
     // which note the front page is actually going to be, including when the
     // field is empty and the vault's own README is winning.
@@ -1016,6 +1033,37 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await this.host.saveSettings();
           }),
       );
+  }
+
+  /**
+   * What publishing HTML files does, given the rest of the scope.
+   *
+   * The second sentence is the one worth the method: with a frontmatter flag
+   * set, this setting publishes nothing at all, and a toggle that is on and
+   * inert is worse than one that explains itself.
+   */
+  private describeHtmlFiles(): string {
+    const site = this.host.settings.site;
+    const base =
+      "An .html file in the published folder goes out exactly as written -- " +
+      "its own markup, its own CSS, no page of ours around it -- at its own " +
+      "path, with the files it references copied beside it. Links to it from " +
+      "a note resolve.";
+
+    if (site.requireFrontmatterFlag) {
+      return (
+        `${base} Right now this publishes nothing: "${site.requireFrontmatterFlag}: true" ` +
+        "is required to publish and an HTML file has no frontmatter to put it in."
+      );
+    }
+    if (site.folder === "") {
+      return (
+        `${base} Your scope is the whole vault, which usually holds HTML nobody ` +
+        "wrote as a web page -- saved articles, plugin help, old exports. Check " +
+        "the build report before publishing."
+      );
+    }
+    return base;
   }
 
   /**

@@ -13,6 +13,7 @@ import {
   prepareCollapsibleCallouts,
   prepareTables,
   prepareTaskStatuses,
+  reviewOverlayAppendix,
   stripFrontmatter,
 } from "./page";
 import {
@@ -43,6 +44,7 @@ import {
 import {
   AssetStats,
   DEFAULT_MAX_ASSET_BYTES,
+  assetSkipReason,
   assetUrl,
   collectAssets,
   emptyAssetStats,
@@ -72,6 +74,17 @@ import {
   tagsIndexContent,
 } from "./landing";
 import { noteSource } from "./source";
+import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "./outputFolders";
+import {
+  CompanionRef,
+  HtmlFileStats,
+  countHtmlFilesBlockedByFlag,
+  emptyHtmlFileStats,
+  hasLocalResourceUrl,
+  planCompanions,
+  planHtmlFiles,
+  selectHtmlFiles,
+} from "./htmlFiles";
 import { stampBlockIds } from "../overlay/anchor";
 import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
@@ -103,6 +116,32 @@ export interface SiteConfig {
   folder: string | null;
   /** When set, a note must also have this frontmatter key set to true. */
   requireFrontmatterFlag: string | null;
+  /**
+   * Publish the vault's own `.html` files, exactly as they are.
+   *
+   * Off by default, and that default is the point rather than caution. A
+   * vault scoped to the whole vault is a common setup, and vaults are full
+   * of HTML nobody wrote as a web page: saved articles, a plugin's bundled
+   * help, an export somebody made once. Selection has never looked at
+   * anything but Markdown, so turning this on silently would publish all of
+   * it on the next build, and the user would find out from the live site.
+   *
+   * On, an HTML file in scope publishes byte for byte at its own path, with
+   * the files it references carried beside it. See `htmlFiles.ts`.
+   */
+  publishHtmlFiles?: boolean;
+  /**
+   * Folders holding this build's own output, which are never its input.
+   *
+   * The preview is written into the vault as HTML, so without this the next
+   * build selects the last preview and publishes it inside the new site.
+   * Notes were immune by accident -- `getMarkdownFiles()` cannot see an HTML
+   * file -- and `publishHtmlFiles` is what removes that immunity.
+   *
+   * The caller owns these names because the caller is what writes to them.
+   * `DEFAULT_OUTPUT_FOLDERS` covers a caller that forgets.
+   */
+  outputFolders?: string[];
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
   /**
@@ -306,6 +345,17 @@ export interface BuildResult {
   assetBytes: number;
   /** References that looked like vault media but could not be resolved. */
   assetsUnresolved: string[];
+  /** What publishing the vault's own HTML files did. */
+  htmlFiles: HtmlFileStats;
+  /**
+   * HTML files the scope matched that a frontmatter flag excluded.
+   *
+   * Zero unless `publishHtmlFiles` is on with a flag set, which is the one
+   * configuration where the toggle is on and publishes nothing. An HTML file
+   * cannot carry frontmatter, so it cannot pass the gate; saying so is the
+   * difference between a rule and a bug.
+   */
+  htmlFilesBlockedByFlag: number;
   /**
    * Whether the build got slower as it ran, measured from control notes.
    *
@@ -427,6 +477,9 @@ export async function buildSite(
 
   const selected = selectNotes(app, config);
   const home = resolveHomeNote(selected, config);
+  // The vault's own pages, which take no part in rendering: they are already
+  // pages. Selected here so their URLs are known before anything claims one.
+  const htmlSelected = selectHtmlFiles(app, config);
 
   /**
    * Where a note is published.
@@ -451,7 +504,22 @@ export async function buildSite(
     sourcePath: file.path,
     url: urlFor(file.path),
   }));
-  const resolver = new LinkResolver(targets);
+  /**
+   * The vault's HTML files, and where each one lands.
+   *
+   * Planned against the notes' URLs rather than beside them, because a
+   * collision has to be decided by something: a note's page wins, and the
+   * HTML file is reported rather than published over it.
+   */
+  const htmlPlan = planHtmlFiles(htmlSelected, config.folder, targets.map((t) => t.url));
+  const htmlByPath = new Map(htmlSelected.map((file) => [file.path, file]));
+
+  // Both kinds of page go into the resolver, so `[[chart.html]]` in a note
+  // becomes a working link instead of the dead span it used to be. Nothing
+  // in `LinkResolver` needed teaching: it strips `.md` and nothing else, so
+  // an HTML file's key is its name with the extension still on it, which is
+  // exactly how Obsidian writes a link to a file that is not a note.
+  const resolver = new LinkResolver([...targets, ...htmlPlan.targets]);
 
   // Everything in the vault that is *not* being published, by name, so a
   // query result can be recognised as belonging to a note the reader was
@@ -467,7 +535,7 @@ export async function buildSite(
 
   const files: PublishFile[] = [];
   const pages: PageResult[] = [];
-  const skipped: { path: string; reason: string }[] = [];
+  const skipped: { path: string; reason: string }[] = [...htmlPlan.collisions];
 
   /**
    * Rendered notes, held until the whole site is known.
@@ -648,9 +716,14 @@ export async function buildSite(
   const backlinks = buildBacklinkIndex(outgoing);
   const outgoingByUrl = new Map(outgoing.map((page) => [page.url, page]));
 
-  // The pages the build invents, named around the notes rather than over
-  // them, and every tag's own page.
-  const paths: SitePaths = sitePaths(rendered.map((page) => page.url));
+  // The pages the build invents, named around what is published rather than
+  // over it, and every tag's own page. The vault's own HTML counts as
+  // published here: a `browse.html` in the vault keeps its name, and our
+  // listing becomes `all-notes.html`.
+  const paths: SitePaths = sitePaths([
+    ...rendered.map((page) => page.url),
+    ...htmlPlan.targets.map((target) => target.url),
+  ]);
   const counted = collectTags(rendered.map((page) => ({ url: page.url, tags: page.tags })));
   const tagUrlByName = tagUrls(counted, paths);
   const tags: TagLink[] = counted.map((tag) => ({
@@ -798,6 +871,134 @@ export async function buildSite(
     }
   }
 
+  /**
+   * The vault's own HTML files, published as they are.
+   *
+   * Read as text and pushed unchanged. Nothing here parses the markup,
+   * rewrites a reference or links a stylesheet of ours into it -- the whole
+   * contract of this path is that the file a reader gets is the file the
+   * author wrote. What it does do is work out which files travel with it,
+   * and refuse the handful of references that cannot honestly be carried.
+   */
+  const htmlStats = emptyHtmlFileStats();
+  const wantedCompanions = new Map<string, CompanionRef>();
+  // Reported once per file rather than once per page that referenced it: one
+  // shared stylesheet outside the scope would otherwise fill the report.
+  const refusedCompanions = new Set<string>();
+
+  // Which HTML files are going out, so a link from one to another is
+  // recognised as the working link it is rather than reported as broken --
+  // and, for one that is not going out, why, so the report says what the
+  // link will actually open.
+  const publishedHtml = new Set(htmlPlan.targets.map((target) => target.sourcePath));
+  const refusedPages = new Map(
+    htmlPlan.collisions.map((collision) => [collision.path, collision.reason]),
+  );
+
+  for (const target of htmlPlan.targets) {
+    const file = htmlByPath.get(target.sourcePath);
+    if (!file) continue;
+
+    let html: string;
+    try {
+      html = await app.vault.cachedRead(file);
+    } catch (error) {
+      skipped.push({
+        path: target.sourcePath,
+        reason: `could not read HTML file: ${error instanceof Error ? error.message : error}`,
+      });
+      continue;
+    }
+
+    /**
+     * The review overlay, on a page we did not build.
+     *
+     * Appended to the preview's copy, never to a published one: the only
+     * caller that sets `reviewOverlay` is `buildToPreview`, which is the
+     * same structural guarantee the note pages rely on, and the meta carries
+     * the vault path that must never be published.
+     *
+     * It costs the one thing this path otherwise promises. While the overlay
+     * is on, a preview copy of an as-is page is the vault's file plus a
+     * delimited block at the end of it, so a byte-for-byte check against the
+     * vault has to be done with the overlay off -- or by ignoring what sits
+     * between the two `osp-review` comments. A publish is unaffected either
+     * way, which is where the promise actually matters.
+     *
+     * `stamp` is set because nothing stamped this document's blocks: there
+     * was no render pass to do it in, so the overlay does it in the browser
+     * from the same content-derived hash.
+     */
+    const overlay = config.reviewOverlay;
+    const content = overlay
+      ? html +
+        reviewOverlayAppendix({
+          sourcePath: target.sourcePath,
+          url: target.url,
+          siteName: config.siteName,
+          reviewer: overlay.reviewer,
+          tracker: overlay.tracker,
+          stamp: true,
+        })
+      : html;
+
+    // The scans below read `html`, never `content`: what the report says
+    // about a page is about the author's file, not about anything of ours
+    // that a preview added to it.
+    files.push({ path: target.url, content });
+    htmlStats.published++;
+
+    // An `app://` URL carries the vault's absolute path, so the author's
+    // home directory. The note pipeline strips those; this one may not touch
+    // the file, so the only honest thing left is to say so.
+    if (hasLocalResourceUrl(html)) htmlStats.localResourceUrls.push(target.url);
+
+    const companions = planCompanions(target, html, {
+      folder: config.folder,
+      statFile: (path) => {
+        const referenced = app.vault.getAbstractFileByPath(path);
+        // `?? 0` publishes when the size is unknown rather than refusing on
+        // a guess, exactly as `collectAssets` does for an attachment.
+        return referenced instanceof TFile ? (referenced.stat?.size ?? 0) : null;
+      },
+      isPublishedPage: (path) => publishedHtml.has(path),
+      pageRefused: (path) => refusedPages.get(path) ?? null,
+      publishedNoteUrl: (path) => (published.has(path) ? urlFor(path) : null),
+      maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
+      tooBigReason: assetSkipReason,
+    });
+
+    htmlStats.unresolved.push(...companions.broken);
+    for (const refusal of companions.refused) {
+      // One shared stylesheet outside the scope would otherwise be reported
+      // once per page that referenced it.
+      if (refusedCompanions.has(refusal.path)) continue;
+      refusedCompanions.add(refusal.path);
+      skipped.push(refusal);
+    }
+    for (const companion of companions.carry) {
+      wantedCompanions.set(companion.sourcePath, companion);
+    }
+  }
+
+  // Deduplicated across every page, like media: one stylesheet shared by
+  // forty pages is carried once.
+  for (const [path, companion] of wantedCompanions) {
+    const referenced = app.vault.getAbstractFileByPath(path);
+    if (!(referenced instanceof TFile)) continue;
+    try {
+      const data = await app.vault.readBinary(referenced);
+      htmlStats.companions++;
+      htmlStats.companionBytes += data.byteLength;
+      files.push({ path: companion.url, content: data });
+    } catch (error) {
+      skipped.push({
+        path,
+        reason: `could not read referenced file: ${error instanceof Error ? error.message : error}`,
+      });
+    }
+  }
+
   // Harvested first, site.css second: ours must win where both have an
   // opinion, since the harvest is for layout we cannot re-author, not for
   // Obsidian's typography or colours.
@@ -809,10 +1010,21 @@ export async function buildSite(
   });
   files.push({ path: "assets/site.css", content: siteCss(config.theme) });
 
-  // The homepage, when no note is standing in for it. A note that is -- the
-  // vault's README, or whatever the user chose -- was published at
-  // `index.html` by the loop above.
-  if (!home.path) {
+  /**
+   * The homepage, when nothing else is standing in for it.
+   *
+   * A note that is -- the vault's README, or whatever the user chose -- was
+   * published at `index.html` by the loop above. So was a vault's own
+   * `index.html` file, and that counts for the same reason: somebody who
+   * writes a front page by hand and calls it `index.html` has said what they
+   * want the front page to be about as plainly as it can be said. Writing
+   * the generated overview over the top of it would be the silent overwrite
+   * this logic exists to prevent, one path along.
+   */
+  const htmlClaimsHome = htmlPlan.targets.some(
+    (target) => target.url.toLowerCase() === "index.html",
+  );
+  if (!home.path && !htmlClaimsHome) {
     files.push({
       path: "index.html",
       content: buildPage({
@@ -872,12 +1084,23 @@ export async function buildSite(
   const domain = config.customDomain?.trim();
   if (domain) files.push({ path: "CNAME", content: `${domain}\n` });
 
-  const htmlFiles = files.filter((f) => f.path.endsWith(".html"));
-  const invalidNesting = htmlFiles.reduce(
+  /**
+   * The two standing assertions, over our own pages only.
+   *
+   * A file published as-is is not ours to assert about. Its markup was
+   * written by hand, so an empty `.internal-embed` in it means nothing, and
+   * counting one would fail a build over a page this plugin deliberately
+   * does not touch.
+   */
+  const publishedAsIs = new Set(htmlPlan.targets.map((target) => target.url));
+  const ourPages = files.filter(
+    (f) => f.path.endsWith(".html") && !publishedAsIs.has(f.path),
+  );
+  const invalidNesting = ourPages.reduce(
     (sum, f) => sum + countInvalidNesting(f.content as string),
     0,
   );
-  const loadingPlaceholders = htmlFiles.reduce(
+  const loadingPlaceholders = ourPages.reduce(
     (sum, f) => sum + countLoadingPlaceholders(f.content as string),
     0,
   );
@@ -904,17 +1127,28 @@ export async function buildSite(
     assetsUnresolved: Array.from(
       new Set(pages.flatMap((p) => p.assets.unresolved)),
     ),
+    htmlFiles: htmlStats,
+    htmlFilesBlockedByFlag: countHtmlFilesBlockedByFlag(app, config),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
     selectedCount: selected.length,
   };
 }
 
 export function selectNotes(app: App, config: SiteConfig): TFile[] {
+  const excluded = config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS;
+
   return app.vault
     .getMarkdownFiles()
     .filter((file) => {
       if (config.folder && !file.path.startsWith(`${config.folder}/`))
         return false;
+      // The build's own folders are output, not input. A vault published
+      // whole otherwise publishes `_vault-publisher/build-report.md` as a
+      // page of the site that build just made, along with the publish log
+      // and every imported review -- none of which anyone chose to publish.
+      // A scope aimed inside one of those folders is exempt, which is the
+      // one case where somebody asked for it by name.
+      if (isBuildOutput(file.path, excluded, config.folder)) return false;
       if (!config.requireFrontmatterFlag) return true;
       const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
       return frontmatter?.[config.requireFrontmatterFlag] === true;

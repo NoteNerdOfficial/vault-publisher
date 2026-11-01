@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A page that styles itself</title>
+
+<!-- 1. A separate stylesheet, referenced by a relative path. The file travels
+     with this page and the path is never rewritten, so this keeps working. -->
+<link rel="stylesheet" href="styles.css">
+
+<!-- 2. A style block. Published exactly as written, including the url(). -->
+<style>
+  .panel {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    /* 3. url() inside a style block. The file it names travels too, even
+       though no src or href attribute mentions it anywhere. */
+    background-image: url(art/texture.svg);
+    background-repeat: repeat;
+  }
+
+  .swatch {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    vertical-align: -0.3rem;
+  }
+</style>
+</head>
+
+<body>
+<main>
+
+<h1 style="letter-spacing: -0.02em; font-weight: 650">A page that styles itself</h1>
+
+<p class="lede">
+  This file is published byte for byte. Nothing on this page was rendered,
+  wrapped in the site's shell, or styled by the site's stylesheet &mdash; what
+  you are reading is the file as it sits in the vault.
+</p>
+
+<div class="panel">
+  <h2>Four ways to style a page, all of them kept</h2>
+  <ol>
+    <li>A separate stylesheet: the type on this page comes from
+      <code>styles.css</code>.</li>
+    <li>A <code>&lt;style&gt;</code> block: this panel's border and radius.</li>
+    <li>A <code>url()</code> in that block: the panel's background texture.</li>
+    <li>A <code>style</code> attribute: the heading's letter-spacing, and the
+      circle below.
+      <!-- 4. url() in a style attribute. Found the same way. -->
+      <span class="swatch" style="background-image: url(art/badge.svg)"></span>
+    </li>
+  </ol>
+</div>
+
+<h2>Images, including the ones only srcset names</h2>
+
+<figure>
+  <img src="art/panel.svg" alt="A placeholder panel" width="320" height="120">
+  <figcaption>Referenced by <code>src</code>.</figcaption>
+</figure>
+
+<figure>
+  <img srcset="art/panel.svg 1x, art/panel-wide.svg 2x"
+       src="art/panel.svg"
+       alt="A placeholder panel" width="320" height="120">
+  <figcaption>
+    Both candidates in the <code>srcset</code> travel, descriptors and all.
+  </figcaption>
+</figure>
+
+<h2>Links, and which ones work</h2>
+
+<ul>
+  <li>
+    <a href="charts/trend.html">A second page in a subfolder</a> &mdash; another
+    file published as-is. The folder structure is mirrored, so this link needs
+    no rewriting and the build report says nothing about it.
+  </li>
+  <li>
+    <a href="page-linked-from-a-note.md">A link written to a note's Markdown</a>
+    &mdash; <strong>deliberately wrong.</strong> A note is published as its
+    <code>.html</code> page, never as source, so this one cannot resolve. Look
+    for it by name in the build report, which says where to point it instead.
+  </li>
+  <li>
+    <a href="https://example.com/">An external link</a> &mdash; left exactly as
+    written, like every absolute URL.
+  </li>
+</ul>
+
+<h2>Scripts run too</h2>
+
+<p>
+  <button type="button" data-count>Clicked 0 times</button>
+  <span class="note">Driven by <code>app.js</code>, which travels as well.</span>
+</p>
+
+</main>
+
+<!-- 5. A script beside the page. Carried like any other referenced file. -->
+<script src="app.js"></script>
+</body>
+</html>

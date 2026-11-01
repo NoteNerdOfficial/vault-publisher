@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A second page, one folder down</title>
+
+<!-- The page above this one, reached with `..`. The folder structure is
+     mirrored into the site, so a reference that climbs out of this folder
+     lands in the same place it does in the vault. -->
+<link rel="stylesheet" href="../styles.css">
+
+<!-- And a stylesheet of its own, beside it. Two pages can share one
+     stylesheet and still have their own. -->
+<link rel="stylesheet" href="trend.css">
+</head>
+
+<body>
+<main>
+
+<h1>A second page, one folder down</h1>
+
+<p class="lede">
+  This file lives in a subfolder and reaches back out of it with
+  <code>../styles.css</code>. If the type here matches the first page, the
+  <code>..</code> survived the move into the site.
+</p>
+
+<figure class="chart">
+  <svg viewBox="0 0 320 140" width="320" height="140" role="img"
+       aria-label="A placeholder line, rising then falling">
+    <polyline points="8,124 60,96 112,104 164,52 216,64 268,20 312,34"
+              fill="none" stroke="#7a5c2e" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="8" y1="132" x2="312" y2="132" stroke="#d8cdb8"/>
+  </svg>
+  <figcaption>
+    Inline SVG, which is part of the document rather than a file: nothing to
+    carry, nothing to resolve.
+  </figcaption>
+</figure>
+
+<p><a href="../index.html">Back to the first page</a></p>
+
+</main>
+</body>
+</html>

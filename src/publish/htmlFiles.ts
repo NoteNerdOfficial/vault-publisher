@@ -1,0 +1,561 @@
+import { App, TFile } from "obsidian";
+import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "./outputFolders";
+
+/**
+ * Publishing a vault's own HTML files, exactly as they are.
+ *
+ * Everything else in `publish/` takes a note, renders it the way Obsidian
+ * would, and assembles a page around it: shell, rail, backlinks, our
+ * stylesheet. That is the whole design, and it is the wrong thing to do to a
+ * file that is already a page. An HTML file in a vault was written by
+ * someone who had an opinion about its markup and its styling, and the only
+ * useful thing a publisher can do with it is get out of the way.
+ *
+ * So these files take a different path through the build:
+ *
+ *   - **Byte-for-byte.** The file's text is published unchanged. Nothing is
+ *     parsed, nothing is reserialized, no stylesheet of ours is linked into
+ *     it. A round trip through `DOMParser` would be a round trip we would
+ *     have to prove lossless on markup we did not write, for no benefit.
+ *
+ *     One exception, and only outside a publish: a *preview* build appends
+ *     the review overlay, so a page that carries its own styling can still
+ *     be commented on. It is appended rather than inserted and delimited by
+ *     comments, the overlay stamps its own anchors in the browser rather
+ *     than having them written into the file, and `publish()` never asks for
+ *     it -- see `reviewOverlayAppendix` in `page.ts`. What goes to the site
+ *     is still the author's file and nothing else.
+ *   - **At its own path.** `site/demo/chart.html` publishes to
+ *     `demo/chart.html` -- the same scope-relative path as a note, with the
+ *     extension left alone. That is what makes the next point possible.
+ *   - **With what it points at.** A page that carries its own styling
+ *     usually carries it in a sibling file, so the files it references are
+ *     copied to their mirrored paths as well. Because both ends of the
+ *     reference move the same way, `href="styles.css"` and
+ *     `href="../lib/chart.js"` keep working without a single character being
+ *     rewritten.
+ *
+ * The references are found by scanning the text rather than by walking a
+ * parsed tree, which is the one place this module looks lazier than it is.
+ * We are not editing the file, so we do not need a tree -- we need the list
+ * of things to carry alongside it, and over-matching that list is harmless:
+ * a reference that resolves to no vault file is counted and the file it
+ * sits in is published regardless. Under-matching is the failure that
+ * matters, and a scan over the raw text cannot miss a reference because of
+ * markup we failed to anticipate.
+ */
+
+/** `.html` and `.htm`, which are the same thing to every web server. */
+const HTML_EXTENSION = /\.html?$/i;
+
+/**
+ * Extensions a referenced file is never published under this rule.
+ *
+ * Two different reasons, and both are the kind of thing that would be a leak
+ * rather than a bug:
+ *
+ * `.md` is the one that matters. A Markdown file published as a companion
+ * would reach the site as raw source, which means with its frontmatter on
+ * it -- bypassing `stripFrontmatter`, the privacy scan, and the entire
+ * reason selection exists. An `<a href="notes/salary.md">` in a hand-written
+ * page must not be a way to publish `notes/salary.md`.
+ *
+ * `.html` is subtler. An HTML file is published when the *scope* matches it,
+ * and copying one because another page linked to it would publish a file the
+ * user excluded. A page in scope is already being published at the path the
+ * link expects, so there is nothing to do for it here either way.
+ *
+ * `.canvas` and `.base` are Obsidian's own data files. They are JSON
+ * describing a view of the vault, they can name notes that are not
+ * published, and nothing reads them on a static site.
+ */
+const COMPANION_DENIED = /\.(?:md|html?|canvas|base)$/i;
+
+/**
+ * Paths the build writes itself, which nothing from the vault may claim.
+ *
+ * `assets/` holds the harvested stylesheet, the site's own stylesheet, the
+ * MathJax fonts and every note's media. A vault with a folder called
+ * `assets` at the top of its published scope would otherwise mirror
+ * `assets/site.css` straight over ours -- two entries for one path, with the
+ * winner decided by whichever loop ran last. `.nojekyll` and `CNAME` are
+ * single files with the same problem and a worse failure: losing either one
+ * breaks the whole site rather than one page.
+ *
+ * The site's generated pages are not here, because they do not need to be:
+ * `sitePaths` already picks names around what is published, so a vault page
+ * called `browse.html` moves the build's own listing to `all-notes.html`.
+ */
+export function reservedPathReason(url: string): string | null {
+  const path = url.toLowerCase();
+  if (path === ".nojekyll" || path === "cname") {
+    return `${url} is a file the site itself needs, so it cannot be published from the vault`;
+  }
+  if (path === "assets" || path.startsWith("assets/")) {
+    return (
+      `${url} is inside assets/, where the build writes its own stylesheets, ` +
+      `fonts and media -- publish it from a differently named folder`
+    );
+  }
+  return null;
+}
+
+export interface HtmlFileTarget {
+  /** Vault path, e.g. "site/demo/chart.html". */
+  sourcePath: string;
+  /** Published path, e.g. "demo/chart.html". */
+  url: string;
+}
+
+/** A file carried because a published page referenced it. */
+export interface CompanionRef {
+  /** Vault path of the referenced file. */
+  sourcePath: string;
+  /** Published path, mirroring the vault path the same way its page does. */
+  url: string;
+}
+
+/** What one page's references came to. */
+export interface CompanionPlan {
+  /** Files to carry beside the page. */
+  carry: CompanionRef[];
+  /**
+   * References that will not resolve on the site, as "page -> ref (why)".
+   *
+   * The page publishes anyway. A broken reference is the author's to fix,
+   * and refusing the page over one would replace a missing image with a
+   * missing page.
+   */
+  broken: string[];
+  /**
+   * Files this will not carry, with why, to be reported once per file.
+   *
+   * Distinct from `broken` because the reference is sound and the file is
+   * real -- it is this publisher declining to move it, which is a thing the
+   * user can act on.
+   */
+  refused: { path: string; reason: string }[];
+}
+
+/** What `planCompanions` has to ask about the vault around a page. */
+export interface CompanionContext {
+  /** The published folder, as `SiteConfig.folder`. */
+  folder: string | null;
+  /** Size of a vault file in bytes, or null when the path is not a file. */
+  statFile: (path: string) => number | null;
+  /** Whether this path is an HTML file being published as-is. */
+  isPublishedPage: (path: string) => boolean;
+  /**
+   * Why an HTML file in the vault is not being published, when it is not.
+   *
+   * A link to a page that lost a collision is the case this exists for. The
+   * page is not published, so the generic "this will 404" is wrong -- the
+   * path is occupied by whatever won it, and the link now opens that
+   * instead. Saying which is the difference between a warning someone can
+   * act on and one they have to investigate.
+   */
+  pageRefused: (path: string) => string | null;
+  /** Where a note is published, or null when it is not a published note. */
+  publishedNoteUrl: (path: string) => string | null;
+  /** Ceiling for one file, as `SiteConfig.maxAssetBytes`. */
+  maxBytes: number;
+  /** Why a file this big is not published. Supplied, so the wording is
+   * identical to the one attachments get. */
+  tooBigReason: (size: number, limit: number) => string | null;
+}
+
+/**
+ * Everything one page points at, sorted into carry, broken and refused.
+ *
+ * The decision table of this whole feature, kept away from the build's I/O
+ * so it can be read and tested as a table. Every branch here is a rule about
+ * what a page is allowed to drag into a published site, and two of them are
+ * the difference between a feature and a leak -- see `COMPANION_DENIED`.
+ */
+export function planCompanions(
+  page: HtmlFileTarget,
+  html: string,
+  context: CompanionContext,
+): CompanionPlan {
+  const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
+  const seen = new Set<string>();
+
+  for (const reference of findLocalReferences(html)) {
+    const broken = (why: string) =>
+      plan.broken.push(`${page.url} -> ${reference} (${why})`);
+
+    const path = companionVaultPath(page.sourcePath, reference);
+    if (!path) {
+      broken("does not resolve to a path inside the vault");
+      continue;
+    }
+
+    // Another page going out as-is. Both files mirror the same way, so the
+    // reference is already true: nothing to carry, nothing to report.
+    if (context.isPublishedPage(path)) continue;
+
+    if (!mayCarryCompanion(path)) {
+      const noteUrl = context.publishedNoteUrl(path);
+      if (noteUrl) {
+        broken(`that note is published at ${noteUrl} -- point the link there`);
+      } else if (/\.md$/i.test(path)) {
+        broken("a note is published as its .html page, not as Markdown");
+      } else if (HTML_EXTENSION.test(path)) {
+        broken(context.pageRefused(path) ?? "that page is not published");
+      } else {
+        broken("not a file this publishes beside a page");
+      }
+      continue;
+    }
+
+    const size = context.statFile(path);
+    if (size === null) {
+      broken("no such file in the vault");
+      continue;
+    }
+
+    // Everything past here is about one file rather than one reference, so
+    // it is decided once however many pages point at it.
+    if (seen.has(path)) continue;
+    seen.add(path);
+
+    if (!withinScope(path, context.folder)) {
+      plan.refused.push({
+        path,
+        reason:
+          `referenced by ${page.url} but outside the published folder, so it ` +
+          `has no path inside the site -- move it in, or point the page at a ` +
+          `copy that is`,
+      });
+      continue;
+    }
+
+    const url = urlForVaultFile(path, context.folder);
+    const reserved = reservedPathReason(url);
+    if (reserved) {
+      plan.refused.push({ path, reason: `referenced by ${page.url}: ${reserved}` });
+      continue;
+    }
+
+    const tooBig = context.tooBigReason(size, context.maxBytes);
+    if (tooBig) {
+      plan.refused.push({ path, reason: tooBig });
+      continue;
+    }
+
+    plan.carry.push({ sourcePath: path, url });
+  }
+
+  return plan;
+}
+
+export interface HtmlFileStats {
+  /** Pages published as-is. */
+  published: number;
+  /** Files carried because a page referenced them. */
+  companions: number;
+  /** Total bytes of those companions. */
+  companionBytes: number;
+  /**
+   * References that resolved to no vault file, as "page -> reference".
+   *
+   * Reported rather than repaired. The file is published either way, because
+   * a broken reference is the author's to fix and refusing the page over one
+   * would be worse than the broken image it causes.
+   */
+  unresolved: string[];
+  /**
+   * Pages holding an `app://` URL, which is Obsidian's own resource scheme.
+   *
+   * Worth saying out loud, because such a URL contains the absolute path of
+   * the vault -- so the author's home directory, so their account name --
+   * and it works in the app and nowhere else. The note pipeline strips these
+   * (see `disarm` in `assets.ts`); this one cannot, because this file is
+   * published as written. So it is reported instead, and loudly.
+   */
+  localResourceUrls: string[];
+}
+
+export function emptyHtmlFileStats(): HtmlFileStats {
+  return {
+    published: 0,
+    companions: 0,
+    companionBytes: 0,
+    unresolved: [],
+    localResourceUrls: [],
+  };
+}
+
+export function isHtmlFilePath(path: string): boolean {
+  return HTML_EXTENSION.test(path);
+}
+
+/**
+ * Where a vault file lands in the site, keeping its name and its extension.
+ *
+ * The same rule `urlForNote` uses, minus the extension swap: the path
+ * relative to the published folder. Keeping the structure is not tidiness
+ * here, it is the mechanism -- a page and the stylesheet beside it stay
+ * beside each other, so the reference between them is still true.
+ */
+export function urlForVaultFile(sourcePath: string, folder: string | null): string {
+  return folder && sourcePath.startsWith(`${folder}/`)
+    ? sourcePath.slice(folder.length + 1)
+    : sourcePath;
+}
+
+/**
+ * Whether a file is inside what is being published.
+ *
+ * A companion outside the scope has no honest published path: mirroring it
+ * would put it outside the site root, and putting it inside the root would
+ * break the very relative reference we are trying to preserve. So it is
+ * refused and reported rather than published somewhere that cannot work.
+ */
+export function withinScope(path: string, folder: string | null): boolean {
+  if (!folder) return true;
+  return path.startsWith(`${folder}/`);
+}
+
+/**
+ * The HTML files the scope matches.
+ *
+ * `getFiles()` rather than `getMarkdownFiles()`, which is the first time
+ * anything in this plugin has looked at the rest of the vault, so the
+ * filtering is deliberately conservative: the scope folder, the build's own
+ * output folders, and nothing hidden.
+ *
+ * **A frontmatter flag excludes every one of them.** An HTML file has no
+ * frontmatter to carry the flag, so there is no way for it to opt in, and
+ * publishing it anyway would mean the user's gate applied to notes and not
+ * to pages. The caller reports the count -- a toggle that silently does
+ * nothing is its own kind of bug.
+ */
+export function selectHtmlFiles(
+  app: App,
+  config: {
+    folder: string | null;
+    requireFrontmatterFlag: string | null;
+    publishHtmlFiles?: boolean;
+    outputFolders?: string[];
+  },
+): TFile[] {
+  if (!config.publishHtmlFiles) return [];
+  if (config.requireFrontmatterFlag) return [];
+
+  const excluded = config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS;
+
+  return app.vault
+    .getFiles()
+    .filter((file) => {
+      if (!isHtmlFilePath(file.path)) return false;
+      if (config.folder && !file.path.startsWith(`${config.folder}/`)) return false;
+      if (isBuildOutput(file.path, excluded, config.folder)) return false;
+      // Obsidian does not index dotfolders, so this is belt and braces --
+      // but `.obsidian/plugins/**` holds a great deal of HTML that is
+      // nobody's web page.
+      if (file.path.split("/").some((segment) => segment.startsWith("."))) return false;
+      return true;
+    })
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/**
+ * How many HTML files the scope would have matched but for the flag.
+ *
+ * Counted separately from selection so the caller can say why a toggle that
+ * is on published nothing, which is the one thing the user cannot work out
+ * from the result.
+ */
+export function countHtmlFilesBlockedByFlag(
+  app: App,
+  config: {
+    folder: string | null;
+    requireFrontmatterFlag: string | null;
+    publishHtmlFiles?: boolean;
+    outputFolders?: string[];
+  },
+): number {
+  if (!config.publishHtmlFiles || !config.requireFrontmatterFlag) return 0;
+  return selectHtmlFiles(app, { ...config, requireFrontmatterFlag: null }).length;
+}
+
+/* --- what a page points at -------------------------------------------- */
+
+/**
+ * Attribute values that can name a file: `src`, `href`, `poster` and the
+ * `data` of an `<object>`.
+ *
+ * Unquoted values are matched too, because hand-written HTML has them and a
+ * reference we do not see is a file that does not travel.
+ */
+const ATTRIBUTE_REFERENCE =
+  /\b(?:src|href|poster|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))/gi;
+
+/** `srcset`, whose value is a comma-separated list of candidates. */
+const SRCSET = /\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+
+/**
+ * `url(...)` anywhere in the text.
+ *
+ * One pattern covers both places CSS can live in a self-contained page: a
+ * `<style>` block and a `style` attribute. Neither is reachable by scanning
+ * attributes alone, and a page that carries its own styling is precisely the
+ * page whose fonts and background images are referenced this way.
+ */
+const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/gi;
+
+/** `app://`, Obsidian's resource scheme, which embeds the vault's own path. */
+const APP_URL = /app:\/\//i;
+
+/** True when a page's text holds an `app://` URL. */
+export function hasLocalResourceUrl(html: string): boolean {
+  return APP_URL.test(html);
+}
+
+/**
+ * Every reference in the text that could name a file beside the page.
+ *
+ * Absolute URLs, protocol-relative URLs, `data:` URIs, root-absolute paths
+ * and bare fragments are all dropped here: none of them names a file in the
+ * vault, and each one is the author pointing somewhere deliberately. What
+ * comes back is relative references, deduplicated, in the order found.
+ */
+export function findLocalReferences(html: string): string[] {
+  const found = new Set<string>();
+
+  const take = (raw: string | undefined) => {
+    const value = (raw ?? "").trim();
+    if (isLocalReference(value)) found.add(value);
+  };
+
+  for (const match of html.matchAll(ATTRIBUTE_REFERENCE)) {
+    take(match[1] ?? match[2] ?? match[3]);
+  }
+
+  for (const match of html.matchAll(CSS_URL)) {
+    take(match[1] ?? match[2] ?? match[3]);
+  }
+
+  for (const match of html.matchAll(SRCSET)) {
+    const value = match[1] ?? match[2] ?? "";
+    for (const candidate of value.split(",")) {
+      // "pic.png 2x" -- the descriptor is not part of the path.
+      take(candidate.trim().split(/\s+/)[0]);
+    }
+  }
+
+  return Array.from(found);
+}
+
+/** Whether a reference could name a file in the vault at all. */
+export function isLocalReference(value: string): boolean {
+  if (!value) return false;
+  if (value.startsWith("#")) return false;
+  // A scheme of any kind, `//cdn...`, and a root-absolute path. The last one
+  // is not resolvable to a vault file, and on a project site it does not
+  // resolve to anything on the server either -- reported by its absence
+  // rather than guessed at.
+  if (value.startsWith("//")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return false;
+  if (value.startsWith("/")) return false;
+  return true;
+}
+
+/**
+ * The vault path a reference points at, or null if it does not point at one.
+ *
+ * Resolved against the page's own folder, with `.` and `..` applied, because
+ * that is what a browser will do with the same string once both files are
+ * published. A reference that climbs above the vault root is null: there is
+ * no file there to carry, and a `..` that escapes is the author's mistake
+ * rather than ours to interpret.
+ */
+export function companionVaultPath(htmlPath: string, reference: string): string | null {
+  const [withoutFragment] = reference.split("#");
+  const [raw] = withoutFragment.split("?");
+  if (!raw) return null;
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    // A reference that is not valid percent-encoding is not a path we can
+    // look up. Left alone in the file and reported unresolved.
+    return null;
+  }
+
+  const base = htmlPath.split("/").slice(0, -1);
+  const segments: string[] = [...base];
+
+  for (const segment of decoded.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (!segments.length) return null;
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  const path = segments.join("/");
+  return path || null;
+}
+
+/** Whether a referenced file may be carried beside the page. */
+export function mayCarryCompanion(path: string): boolean {
+  return !COMPANION_DENIED.test(path);
+}
+
+/**
+ * Which published paths an HTML file may not claim.
+ *
+ * A note's page wins every collision. Markdown is what this plugin is for,
+ * the note was already rendered by the time we get here, and an HTML file
+ * quietly overwriting a note's page is the same silent overwrite the
+ * homepage logic in `buildSite` exists to prevent -- discovered there as a
+ * vault whose `index.md` was replaced by the generated index.
+ *
+ * Compared case-insensitively. GitHub Pages serves case-sensitively, so
+ * `Page.html` and `page.html` are two URLs there, but they are one file on
+ * the two filesystems most vaults live on -- and a collision that depends on
+ * which machine built the site is not one to resolve by being clever.
+ */
+export function planHtmlFiles(
+  files: Array<{ path: string }>,
+  folder: string | null,
+  takenUrls: Iterable<string>,
+): { targets: HtmlFileTarget[]; collisions: { path: string; reason: string }[] } {
+  const taken = new Map<string, string>();
+  for (const url of takenUrls) taken.set(url.toLowerCase(), url);
+
+  const targets: HtmlFileTarget[] = [];
+  const collisions: { path: string; reason: string }[] = [];
+
+  for (const file of files) {
+    const url = urlForVaultFile(file.path, folder);
+    const key = url.toLowerCase();
+    const claimed = taken.get(key);
+
+    const reserved = reservedPathReason(url);
+    if (reserved) {
+      collisions.push({ path: file.path, reason: reserved });
+      continue;
+    }
+
+    if (claimed !== undefined) {
+      collisions.push({
+        path: file.path,
+        reason:
+          `would publish to ${url}, which ${claimed} already occupies -- ` +
+          `a note's page wins, so the HTML file is not published`,
+      });
+      continue;
+    }
+
+    taken.set(key, url);
+    targets.push({ sourcePath: file.path, url });
+  }
+
+  return { targets, collisions };
+}

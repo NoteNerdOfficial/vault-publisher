@@ -213,6 +213,119 @@ describe("the overlay bundle", () => {
   });
 });
 
+/**
+ * Anchoring on a page the build never rendered.
+ *
+ * A page published as-is has no `data-osp-block` on anything: it was never
+ * parsed, so there was no DOM pass to stamp it in. The overlay stamps those
+ * itself when the config says to, and the only thing that makes that safe is
+ * that the two implementations of the anchor agree -- `stampBlockIds` in
+ * TypeScript for a rendered note, and the copy inside the script for
+ * everything else. These tests are what keeps them from drifting: if they
+ * ever disagree, every pin on an as-is page reattaches to nothing.
+ */
+describe("stamping anchors in the browser", () => {
+  /** A page as published as-is: no shell, no stamps, somebody else's markup. */
+  function mountAsIs(body: string, over: Record<string, unknown> = {}): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML = body;
+    // The meta is appended after `</html>` on a real as-is page, which the
+    // parser puts in the body. Either way a document-wide query finds it.
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "pages/hand-written.html",
+        page: "hand-written.html",
+        site: "Handbook",
+        reviewer: "Reviewer",
+        stamp: true,
+        ...over,
+      }),
+    );
+    document.body.appendChild(meta);
+  }
+
+  const MARKUP =
+    `<h1 style="letter-spacing:-1px">A page that styles itself</h1>` +
+    `<p>The first paragraph.</p>` +
+    `<ul><li>A bullet.</li><li>The same.</li><li>The same.</li></ul>` +
+    `<blockquote><p>Quoted.</p></blockquote>` +
+    `<table><tr><td>A cell.</td></tr></table>` +
+    `<p></p>`;
+
+  it("stamps exactly what the build would have stamped", () => {
+    // The same markup twice: one document stamped by the TypeScript pass the
+    // note path uses, one by the script. Every attribute must match.
+    const built = document.implementation.createHTMLDocument("built");
+    built.body.innerHTML = MARKUP;
+    stampBlockIds(built.body);
+    const expected = Array.from(built.body.querySelectorAll("[data-osp-block]")).map(
+      (el) => `${el.tagName}:${el.getAttribute("data-osp-block")}`,
+    );
+
+    mountAsIs(MARKUP);
+    run();
+    const actual = Array.from(document.body.querySelectorAll("[data-osp-block]")).map(
+      (el) => `${el.tagName}:${el.getAttribute("data-osp-block")}`,
+    );
+
+    expect(actual).toEqual(expected);
+    expect(actual.length).toBeGreaterThan(6);
+  });
+
+  // Three identical bullets are the case a content-derived anchor has to
+  // handle by numbering, and both copies have to number them alike.
+  it("numbers repeated blocks the same way on both sides", () => {
+    mountAsIs(MARKUP);
+    run();
+    // "A bullet.", then "The same." twice: the second of a pair keeps the
+    // hash and gains a suffix, exactly as `stampBlockIds` numbers them.
+    const bullets = Array.from(document.querySelectorAll("li")).map((el) =>
+      el.getAttribute("data-osp-block"),
+    );
+    expect(bullets[0]).not.toBe(bullets[1]);
+    expect(bullets[2]).toBe(`${bullets[1]}-1`);
+  });
+
+  it("leaves a block with no text alone, having nothing to hash", () => {
+    mountAsIs(MARKUP);
+    run();
+    const empty = Array.from(document.querySelectorAll("p")).find(
+      (el) => !el.textContent?.trim(),
+    );
+    expect(empty?.hasAttribute("data-osp-block")).toBe(false);
+  });
+
+  // The whole point of doing it in the browser: the overlay has to work on a
+  // document that none of our own markup is in.
+  it("mounts and takes a pin on a page with no shell at all", () => {
+    mountAsIs(MARKUP);
+    const shadow = run();
+    boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
+    leaveComment(shadow, { x: 100, y: 20 }, "A note on somebody else's page.");
+
+    const rows = stored();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].sourcePath).toBe("pages/hand-written.html");
+    expect(rows[0].page).toBe("hand-written.html");
+    // Anchored to a block, not merely to a point, which is what the runtime
+    // stamping buys: this is what survives a rebuild and a reflow.
+    expect(rows[0].block).toBeTruthy();
+    expect(rows[0].blockText).toContain("The first paragraph.");
+  });
+
+  // A note's page arrives already stamped, so the script must not stamp it
+  // again -- doing so is harmless only as long as it is idempotent, and not
+  // running at all is the stronger guarantee.
+  it("does not stamp when the config does not ask it to", () => {
+    mountAsIs(`<p>Unstamped.</p>`, { stamp: undefined });
+    run();
+    expect(document.querySelector("p")?.hasAttribute("data-osp-block")).toBe(false);
+  });
+});
+
 describe("the notch", () => {
   it("mounts behind a shadow root so the page's CSS cannot reach it", () => {
     mountPage();

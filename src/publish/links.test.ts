@@ -48,6 +48,25 @@ describe("LinkResolver", () => {
     expect(resolver.resolve("nowhere")).toBeNull();
   });
 
+  /**
+   * A page published as-is is a target like any other, and it needed no
+   * change here to become one: only `.md` is stripped, so an HTML file's key
+   * keeps its extension -- which is how Obsidian writes a link to a file
+   * that is not a note. Before HTML files could be published, such a link
+   * resolved to nothing and was downgraded to a span.
+   */
+  it("resolves a link to a published html file, extension and all", () => {
+    const withHtml = new LinkResolver([
+      target("notes/basics.md", "basics.html"),
+      target("site/demo/chart.html", "demo/chart.html"),
+    ]);
+    expect(withHtml.resolve("chart.html")?.url).toBe("demo/chart.html");
+    expect(withHtml.resolve("site/demo/chart.html")?.url).toBe("demo/chart.html");
+    // Without the extension it is not a link to that file, which is also
+    // Obsidian's reading of it.
+    expect(withHtml.resolve("chart")).toBeNull();
+  });
+
   // A "%" that does not begin a valid escape used to throw URIError out of
   // normalizeKey, which failed the entire publish.
   it("handles a name containing a bare percent sign", () => {
