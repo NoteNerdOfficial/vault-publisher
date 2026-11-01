@@ -1,5 +1,14 @@
 /**
- * Telling the build's own output apart from the vault's content.
+ * The folders neither selector looks at, whatever the scope says.
+ *
+ * Two rules, and the same shape to both: a folder nobody meant to publish,
+ * skipped before anything else is considered, with one exemption -- a scope
+ * aimed inside such a folder is somebody naming the path, and refusing it
+ * would mean a build that matched nothing and could not say why.
+ *
+ * The first rule is the build's own output; the second is anything hidden.
+ *
+ * **The build's own output.**
  *
  * The plugin writes two folders *into the vault*: the preview site and the
  * reports. Both are build output, and neither is input -- but nothing used to
@@ -53,4 +62,38 @@ export function isBuildOutput(
     return true;
   }
   return false;
+}
+
+/**
+ * Whether a path is inside something hidden, by the leading-dot convention.
+ *
+ * Obsidian keeps dot-folders out of its own interface and indexes their
+ * contents anyway, which is a combination worth stating plainly: a note in
+ * `.archive/` cannot be seen in the app and *was* published by a vault
+ * published whole. The author would have found out from the live site, which
+ * is the class of failure the unchosen-scope default exists to prevent.
+ *
+ * `.obsidian` is the obvious one -- a plugin's own folder holds a great deal
+ * of HTML and the occasional Markdown file, none of it anybody's page -- but
+ * the rule is the convention rather than that one name. `.trash` is where
+ * Obsidian puts a deleted note, and publishing those would be worse than
+ * merely untidy.
+ *
+ * The exemption is the same as above, and for the same reason: somebody
+ * whose scope *is* `.archive` has said what they want.
+ */
+export function isHiddenPath(path: string, scope?: string | null): boolean {
+  if (!isHidden(path)) return false;
+  // Only a hidden scope can exempt a hidden path, and only what is under it.
+  // A scope of "" is the whole vault, which is where this rule matters most,
+  // and must not exempt anything.
+  if (scope && isHidden(scope) && (path === scope || path.startsWith(`${scope}/`))) {
+    return false;
+  }
+  return true;
+}
+
+/** Any segment beginning with a dot makes the whole path hidden. */
+function isHidden(path: string): boolean {
+  return path.split("/").some((segment) => segment.startsWith("."));
 }

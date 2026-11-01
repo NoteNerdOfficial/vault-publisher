@@ -41,6 +41,9 @@ const VAULT = [
   // What the plugin itself writes into the vault.
   { path: "_vault-publisher/build-report.md" },
   { path: "_vault-publisher/review/notes-on-the-review.md" },
+  // Hidden from Obsidian's own interface, indexed by it all the same.
+  { path: ".trash/deleted.md" },
+  { path: ".archive/old-note.md" },
 ];
 
 describe("isScopeChosen", () => {
@@ -79,6 +82,21 @@ describe("selectNotes", () => {
       "notes/public.md",
       "private/salary.md",
     ]);
+  });
+
+  /**
+   * Published by a vault published whole until now, and invisible in the app
+   * that published it -- which is the worst combination for a leak.
+   */
+  it("leaves hidden folders out of the whole vault", () => {
+    const selected = selectNotes(stubApp(VAULT), config({ folder: "" }));
+    expect(selected.map((f) => f.path)).not.toContain(".trash/deleted.md");
+    expect(selected.map((f) => f.path)).not.toContain(".archive/old-note.md");
+  });
+
+  it("publishes a hidden folder when the scope is aimed at it", () => {
+    const selected = selectNotes(stubApp(VAULT), config({ folder: ".archive" }));
+    expect(selected.map((f) => f.path)).toEqual([".archive/old-note.md"]);
   });
 
   it("takes the caller's output folders over the default", () => {

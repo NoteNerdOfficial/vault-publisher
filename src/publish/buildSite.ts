@@ -74,7 +74,7 @@ import {
   tagsIndexContent,
 } from "./landing";
 import { noteSource } from "./source";
-import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "./outputFolders";
+import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput, isHiddenPath } from "./outputFolders";
 import {
   CompanionRef,
   HtmlFileStats,
@@ -1149,6 +1149,11 @@ export function selectNotes(app: App, config: SiteConfig): TFile[] {
       // A scope aimed inside one of those folders is exempt, which is the
       // one case where somebody asked for it by name.
       if (isBuildOutput(file.path, excluded, config.folder)) return false;
+      // Obsidian hides a dot-folder and indexes it anyway, so a note in
+      // `.archive` or `.trash` was invisible in the app and published by a
+      // vault published whole. HTML selection has always skipped these;
+      // notes never did, which was an asymmetry rather than a decision.
+      if (isHiddenPath(file.path, config.folder)) return false;
       if (!config.requireFrontmatterFlag) return true;
       const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
       return frontmatter?.[config.requireFrontmatterFlag] === true;

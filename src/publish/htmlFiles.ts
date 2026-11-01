@@ -1,5 +1,9 @@
 import { App, TFile } from "obsidian";
-import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "./outputFolders";
+import {
+  DEFAULT_OUTPUT_FOLDERS,
+  isBuildOutput,
+  isHiddenPath,
+} from "./outputFolders";
 
 /**
  * Publishing a vault's own HTML files, exactly as they are.
@@ -351,10 +355,10 @@ export function selectHtmlFiles(
       if (!isHtmlFilePath(file.path)) return false;
       if (config.folder && !file.path.startsWith(`${config.folder}/`)) return false;
       if (isBuildOutput(file.path, excluded, config.folder)) return false;
-      // Obsidian does not index dotfolders, so this is belt and braces --
-      // but `.obsidian/plugins/**` holds a great deal of HTML that is
-      // nobody's web page.
-      if (file.path.split("/").some((segment) => segment.startsWith("."))) return false;
+      // `.obsidian/plugins/**` alone holds a great deal of HTML that is
+      // nobody's web page. Shared with note selection, which needed the same
+      // rule and did not have it.
+      if (isHiddenPath(file.path, config.folder)) return false;
       return true;
     })
     .sort((a, b) => a.path.localeCompare(b.path));
