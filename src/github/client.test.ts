@@ -194,6 +194,130 @@ describe("commitFiles head check", () => {
   });
 });
 
+/**
+ * How a file's content reaches the repository.
+ *
+ * This was one inline tree request until a whole-vault publish failed on it:
+ * a page carries the client script inlined, so it weighs around 150 KB
+ * whatever the note says, and 231 of them made a 36 MB POST that GitHub
+ * answered with `400 Problems parsing JSON`. An error about size that never
+ * mentions size is the worst kind to be handed, so the shape that cannot
+ * produce it is the one to keep.
+ */
+describe("commitFiles uploads", () => {
+  /** Records every blob posted and answers with a predictable sha. */
+  function blobHttp() {
+    return fakeHttp((call) => {
+      if (call.method === "GET") return { json: { object: { sha: "head" } } };
+      if (call.url.includes("/git/blobs")) {
+        const body = call.body as { content: string; encoding: string };
+        return { json: { sha: `blob-${body.encoding}-${body.content.length}` } };
+      }
+      if (call.url.includes("/git/trees")) return { json: { sha: "tree1" } };
+      if (call.url.includes("/git/commits")) return { json: { sha: "commit1" } };
+      return { json: {} };
+    });
+  }
+
+  it("sends text as its own blob, not inline in the tree", async () => {
+    const http = blobHttp();
+    restore = http.restore;
+
+    await client().commitFiles({
+      branch: "gh-pages",
+      message: "m",
+      files: [
+        { path: "a.html", content: "<p>a</p>" },
+        { path: "b.css", content: "body{}" },
+      ],
+    });
+
+    const blobs = http.calls.filter((c) => c.url.includes("/git/blobs"));
+    expect(blobs).toHaveLength(2);
+    // utf-8 rather than base64: the content goes up as the string it is.
+    expect(blobs.map((c) => (c.body as { encoding: string }).encoding)).toEqual([
+      "utf-8",
+      "utf-8",
+    ]);
+    expect((blobs[0].body as { content: string }).content).toBe("<p>a</p>");
+
+    // The tree is the thing that must stay small, so nothing may carry
+    // content into it.
+    const tree = http.calls.find((c) => c.url.includes("/git/trees"));
+    const entries = (tree?.body as { tree: Record<string, unknown>[] }).tree;
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(entry.content).toBeUndefined();
+      expect(entry.sha).toBeTruthy();
+    }
+  });
+
+  it("still sends binary as base64", async () => {
+    const http = blobHttp();
+    restore = http.restore;
+
+    await client().commitFiles({
+      branch: "gh-pages",
+      message: "m",
+      files: [{ path: "a.png", content: new ArrayBuffer(4) }],
+    });
+
+    const blob = http.calls.find((c) => c.url.includes("/git/blobs"));
+    expect((blob?.body as { encoding: string }).encoding).toBe("base64");
+  });
+
+  /**
+   * The reason one request per file is affordable. `diffAgainstManifest`
+   * points an unchanged file at the blob the branch already holds, so a
+   * publish after a one-note edit sends one blob, not the whole site.
+   */
+  it("uploads nothing for a file the branch already holds", async () => {
+    const http = blobHttp();
+    restore = http.restore;
+
+    await client().commitFiles({
+      branch: "gh-pages",
+      message: "m",
+      files: [
+        { path: "a.html", content: "<p>a</p>", existingSha: "kept" },
+        { path: "b.html", content: "<p>b</p>" },
+      ],
+    });
+
+    const blobs = http.calls.filter((c) => c.url.includes("/git/blobs"));
+    expect(blobs).toHaveLength(1);
+    const tree = http.calls.find((c) => c.url.includes("/git/trees"));
+    const entries = (tree?.body as { tree: { path: string; sha: string }[] }).tree;
+    expect(entries.find((e) => e.path === "a.html")?.sha).toBe("kept");
+    // The tree stays complete either way: a file absent from it is deleted.
+    expect(entries).toHaveLength(2);
+  });
+
+  it("counts progress over what it actually uploads", async () => {
+    const http = blobHttp();
+    restore = http.restore;
+    const seen: Array<[number, number, string]> = [];
+
+    await client().commitFiles({
+      branch: "gh-pages",
+      message: "m",
+      files: [
+        { path: "kept.html", content: "<p>a</p>", existingSha: "kept" },
+        { path: "one.html", content: "<p>b</p>" },
+        { path: "two.html", content: "<p>c</p>" },
+      ],
+      onProgress: (done, total, path) => seen.push([done, total, path]),
+    });
+
+    // Two uploads, so two reports, and the file the branch already holds is
+    // in neither the count nor the total.
+    expect(seen).toEqual([
+      [0, 2, "one.html"],
+      [1, 2, "two.html"],
+    ]);
+  });
+});
+
 describe("readFile", () => {
   it("encodes a path per segment", async () => {
     const http = fakeHttp(() => ({ json: {} }));

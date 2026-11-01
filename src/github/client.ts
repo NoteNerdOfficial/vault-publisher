@@ -263,14 +263,46 @@ export class GitHubClient {
   }
 
   /**
+   * Uploads a text file and returns its blob sha.
+   *
+   * `utf-8` rather than base64, which the blobs API takes directly: the
+   * content goes up as the string it already is, with no encoding step to
+   * get wrong and a third less to send.
+   */
+  private async createTextBlob(content: string): Promise<string> {
+    const blob = await this.request<{ sha: string }>(
+      "POST",
+      `/repos/${this.config.owner}/${this.config.repo}/git/blobs`,
+      { content, encoding: "utf-8" },
+    );
+    return blob.sha;
+  }
+
+  /**
    * Commits `files` as the complete contents of `branch`.
    *
    * The tree is built from scratch rather than on top of the previous one, so
    * a note deleted in the vault disappears from the site without us tracking
-   * deletions separately. Text files travel inline in the tree request, which
-   * lets GitHub create their blobs server side -- one request for the whole
-   * site instead of one per file. Only binary files need a blob upload first,
-   * because a tree's inline content must be UTF-8.
+   * deletions separately.
+   *
+   * **Every file's content goes up as its own blob, and the tree carries
+   * nothing but shas.** Text used to travel inline in the tree request
+   * instead, which let GitHub create the blobs server side and cost one
+   * request for the whole site rather than one per file. That is a fine
+   * trade right up to the point where it stops working, and it stops working
+   * without warning: a page carries the client script inlined, so it is
+   * around 150 KB whatever the note says, and a vault published whole turns
+   * into a tree request of tens of megabytes. Measured on a 231-page vault:
+   * roughly 36 MB in one POST, answered with
+   * `400 Problems parsing JSON` -- an error that says nothing about size and
+   * sends you looking for a malformed character instead.
+   *
+   * One blob per file has no such cliff: each request carries one file, so
+   * the only limit that can be reached is the one on a single file, which
+   * `assetSkipReason` already enforces before anything is read. The cost is
+   * a request per *changed* file -- `diffAgainstManifest` points unchanged
+   * ones at the blobs the branch already holds, so a publish after a small
+   * edit still sends almost nothing.
    */
   async commitFiles(options: {
     branch: string;
@@ -280,6 +312,15 @@ export class GitHubClient {
      * published in the meantime. Omit to descend from the branch's current
      * tip. */
     expectedHeadSha?: string | null;
+    /**
+     * Called as each file's content is uploaded.
+     *
+     * A publish of a whole vault uploads one blob per changed file, in order,
+     * and a few hundred of those is a minute of a progress bar that is not
+     * moving otherwise. The caller is the only thing that knows how to tell
+     * anyone, so it is told rather than guessed at.
+     */
+    onProgress?: (done: number, total: number, path: string) => void;
   }): Promise<CommitResult> {
     const { branch, message, files } = options;
     const base = `/repos/${this.config.owner}/${this.config.repo}`;
@@ -297,7 +338,16 @@ export class GitHubClient {
     }
 
     const tree: TreeEntry[] = [];
+    // What is actually sent, which is what a progress count has to be about:
+    // a file the branch already holds costs no request at all.
+    const uploads = files.filter((file) => !file.existingSha).length;
+    let uploaded = 0;
+
     for (const file of files) {
+      if (!file.existingSha) {
+        options.onProgress?.(uploaded, uploads, file.path);
+        uploaded++;
+      }
       if (file.existingSha) {
         tree.push({
           path: file.path,
@@ -310,7 +360,7 @@ export class GitHubClient {
           path: file.path,
           mode: FILE_MODE,
           type: "blob",
-          content: file.content,
+          sha: await this.createTextBlob(file.content),
         });
       } else {
         tree.push({
