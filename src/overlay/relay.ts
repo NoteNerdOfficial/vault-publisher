@@ -399,6 +399,10 @@ export function issueDraft(
 
   const footer: IssueLine[] = [{ lead: "Note", text: comment.sourcePath, code: true }];
   if (comment.page) footer.push({ lead: "Page", text: comment.page, code: true });
+  // Where the published page is an application, the page alone does not say
+  // what the reviewer was looking at: every screen in it shares one file.
+  // Whoever picks the issue up needs the screen, not only the file.
+  if (comment.route) footer.push({ lead: "Screen", text: comment.route, code: true });
   // Only where it has nowhere else to go. On a tracker with labels the
   // priority is one, which is something a board can filter on; saying it
   // twice would only be a line to read past.

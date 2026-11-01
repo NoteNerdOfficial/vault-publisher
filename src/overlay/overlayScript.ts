@@ -119,7 +119,17 @@ export const OVERLAY_SCRIPT = `(function () {
   var DEEP_PARAM = "osp-comment";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 6;
+  var SCHEMA = 7;
+  /*
+   * Whether this page's blocks are ours to mark, and keep marking.
+   *
+   * True for a page the build published without rendering it -- the vault's
+   * own HTML, which may be an application. It changes three things: the
+   * marking happens here rather than at build time, it happens again every
+   * time the document changes, and a comment records which screen of the
+   * application it was left on.
+   */
+  var STAMP_AT_RUNTIME = config.stamp === true;
 
   /*
    * Stamping block anchors here, for a page the build did not render.
@@ -180,7 +190,51 @@ export const OVERLAY_SCRIPT = `(function () {
     }
   }
 
-  if (config.stamp) stampBlocks();
+  if (STAMP_AT_RUNTIME) stampBlocks();
+
+  /*
+   * Which screen of an application a comment belongs to.
+   *
+   * A single-page application is one published file, so every screen in it
+   * shares one URL as far as the build is concerned -- and \`page\` therefore
+   * cannot tell them apart. Ten comments from five screens would all come
+   * back on whichever screen happened to load.
+   *
+   * What does tell them apart is the address bar, which every router writes
+   * to whatever it is built on. Reading \`location\` rather than asking a
+   * framework is the whole point: there is nothing here that knows one from
+   * another, and nothing to keep up with when the next one arrives.
+   *
+   * Recorded only on a page stamped at runtime. A page the build rendered is
+   * one document at one URL, and recording a route for it would mean a
+   * comment made while reading the preview through the review server was
+   * hidden when the same file was opened from disk, where the path differs.
+   */
+  function currentRoute() {
+    if (!STAMP_AT_RUNTIME) return null;
+    var search = location.search;
+    if (search) {
+      // Our own deep link is how one page's panel opens a comment on
+      // another, so a pin must not be hidden by the link that points at it.
+      var kept = [];
+      var parts = search.slice(1).split("&");
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] && parts[i].split("=")[0] !== DEEP_PARAM) kept.push(parts[i]);
+      }
+      search = kept.length ? "?" + kept.join("&") : "";
+    }
+    return location.pathname + search + location.hash;
+  }
+
+  /*
+   * A comment with no route is from a page that is one document, or from a
+   * review written before routes were recorded. Both are shown everywhere,
+   * which is what they meant when they were written.
+   */
+  function onThisRoute(comment) {
+    if (!comment.route) return true;
+    return comment.route === currentRoute();
+  }
 
   /*
    * The mark: a tag with three rounded corners and one sharp one, and the
@@ -250,6 +304,8 @@ export const OVERLAY_SCRIPT = `(function () {
     row.rx = typeof row.rx === "number" ? row.rx : null;
     row.ry = typeof row.ry === "number" ? row.ry : null;
     row.block = typeof row.block === "string" ? row.block : null;
+    // Which screen of an application this was left on, when it was one.
+    row.route = typeof row.route === "string" && row.route ? row.route : null;
     row.blockText = typeof row.blockText === "string" ? row.blockText : "";
     row.resolved = row.resolved === true;
     row.priority = priOf(row.priority);
@@ -1256,10 +1312,23 @@ export const OVERLAY_SCRIPT = `(function () {
       };
     }
 
-    // An anchor that was there and is not any more: the block was rewritten,
-    // so there is no honest place to draw this. It is reported in the panel
-    // instead, with the text it was about.
-    if (comment.block) return null;
+    /*
+     * An anchor that was there and is not any more.
+     *
+     * On a page the build rendered, that means the block was rewritten:
+     * there is no honest place to draw this, so it is reported in the panel
+     * instead, with the text it was about.
+     *
+     * On a page stamped at runtime the document belongs to an application,
+     * where a block's text changes for reasons that have nothing to do with
+     * anyone editing it -- a counter, a filter, a field somebody typed in.
+     * Dropping the pin there would mean a reviewer watching their comments
+     * disappear as they used the thing they were reviewing, so the point it
+     * was dropped on is shown instead. It is still reported as lost in the
+     * panel, which is the honest half: the pin says where, and the panel
+     * says the text it was about has changed.
+     */
+    if (comment.block && !STAMP_AT_RUNTIME) return null;
     return { left: comment.x, top: comment.y };
   }
 
@@ -1342,6 +1411,10 @@ export const OVERLAY_SCRIPT = `(function () {
 
     for (var i = 0; i < rows.length; i++) {
       var comment = rows[i];
+      // A comment from another screen of the same application: its pin
+      // belongs over there, and drawing it here would put it over whatever
+      // happens to be in the same place now.
+      if (!onThisRoute(comment)) continue;
       var at = spot(comment);
       if (!at) continue;
 
@@ -1353,7 +1426,10 @@ export const OVERLAY_SCRIPT = `(function () {
       // Correction ink while it is open, graphite once it is dealt with, so
       // what is left to do on a page is readable from the pins alone.
       pin.appendChild(markSvg(comment.resolved ? "#6b7076" : "#d4421e"));
-      pin.appendChild(el("span", null, String(i + 1)));
+      // \`markNumber\` rather than this loop's index, so a mark keeps the
+      // number the panel gives it even when the screen shows only some of
+      // the page's comments. The two were the same list until routes.
+      pin.appendChild(el("span", null, String(markNumber(comment))));
       pin.style.left = at.left + "px";
       pin.style.top = at.top + "px";
       pin.addEventListener("click", openFromPin);
@@ -2108,6 +2184,7 @@ export const OVERLAY_SCRIPT = `(function () {
       sourcePath: SOURCE_PATH,
       block: point.block,
       blockText: point.text,
+      route: currentRoute(),
       x: point.x,
       y: point.y,
       rx: point.rx,
@@ -2532,6 +2609,73 @@ export const OVERLAY_SCRIPT = `(function () {
   window.addEventListener("resize", reposition, { passive: true });
   if (window.ResizeObserver) {
     new ResizeObserver(reposition).observe(document.body);
+  }
+
+  /*
+   * Marking the page again when it changes under us.
+   *
+   * The first marking runs the moment this script does, which for the
+   * vault's own HTML is the right time and for an application is far too
+   * early: nothing has rendered, so there is nothing to mark, and a pin
+   * dropped afterwards anchors to no block at all. Everything an
+   * application does after that -- mounting, routing, filtering, a field
+   * being typed in -- replaces the nodes that were marked.
+   *
+   * So the marking repeats. It can, because an anchor is a hash of a
+   * block's own text rather than a position, so marking the same content
+   * again produces the same anchors and a pin finds its block where it left
+   * it.
+   *
+   * Three things make this safe to leave running on somebody else's page.
+   * Attributes are deliberately not watched, so our own marking cannot
+   * trigger another round -- only new nodes and changed text do. The first
+   * change arms a timer and the rest are ignored until it fires, so a page
+   * that mutates continuously costs one pass per interval rather than one
+   * per mutation. And it ends at \`reposition\`, which moves the pins and
+   * leaves the panel and any half-written comment alone; a full \`render\`
+   * would rebuild the draft out from under whoever was typing in it.
+   */
+  /*
+   * One watcher per page, whatever else is going on.
+   *
+   * A watcher outlives the overlay that made it: it holds the document, not
+   * the host element, so clearing the page leaves it running. Two copies of
+   * this script on one page would then leave the first still walking the
+   * document and marking blocks for an overlay nobody can see. Replacing it
+   * is one line and it makes the behaviour testable, since a test starts the
+   * script more than once in a document jsdom keeps between tests.
+   */
+  if (window.ospStampWatcher) window.ospStampWatcher.stop();
+  window.ospStampWatcher = null;
+
+  if (STAMP_AT_RUNTIME && window.MutationObserver) {
+    var restamp = null;
+    var watcher = new MutationObserver(function () {
+      if (restamp !== null) return;
+      restamp = window.setTimeout(function () {
+        restamp = null;
+        stampBlocks();
+        blocks = blockIndex();
+        reposition();
+      }, 150);
+    });
+    watcher.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    // Disconnecting is not enough on its own: a pass already armed would
+    // still fire afterwards, through this instance's closure, and mark the
+    // document for an overlay that had been replaced.
+    window.ospStampWatcher = {
+      stop: function () {
+        watcher.disconnect();
+        if (restamp !== null) {
+          window.clearTimeout(restamp);
+          restamp = null;
+        }
+      },
+    };
   }
 
   /* --- arriving from another page's panel ---------------------------- */

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OVERLAY_SCRIPT, overlayBundle } from "./overlayScript";
 import { stampBlockIds } from "./anchor";
-import type { OverlayComment } from "./types";
+import { OVERLAY_SCHEMA_VERSION, type OverlayComment } from "./types";
 
 /**
  * The overlay ships as a string, so the compiler never looks inside it. A
@@ -323,6 +323,249 @@ describe("stamping anchors in the browser", () => {
     mountAsIs(`<p>Unstamped.</p>`, { stamp: undefined });
     run();
     expect(document.querySelector("p")?.hasAttribute("data-osp-block")).toBe(false);
+  });
+});
+
+/**
+ * An application's page, which is empty when the script runs.
+ *
+ * Everything here is about the gap between "the script loaded" and "there is
+ * something on the screen". For the vault's own HTML those are the same
+ * moment; for anything that renders itself they are not, and every pin a
+ * reviewer drops in between anchors to nothing.
+ */
+describe("a page that renders itself", () => {
+  /** Mounts a page with the config an as-is page gets and an empty body. */
+  function mountApp(over: Record<string, unknown> = {}): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<div id="root"></div>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+        ...over,
+      }),
+    );
+    document.head.appendChild(meta);
+  }
+
+  /** What an application puts on the screen once it has mounted. */
+  function mount(html: string): void {
+    const root = document.getElementById("root") as HTMLElement;
+    root.innerHTML = html;
+  }
+
+  /** Long enough for the observer's own interval to have passed. */
+  const settle = () => new Promise((done) => setTimeout(done, 220));
+
+  it("marks nothing at first, because there is nothing to mark", () => {
+    mountApp();
+    run();
+    expect(document.querySelectorAll("[data-osp-block]")).toHaveLength(0);
+  });
+
+  it("marks the page once the application has rendered", async () => {
+    mountApp();
+    run();
+    mount(`<h1>Settings</h1><p>Pick a theme.</p>`);
+    await settle();
+
+    const marked = Array.from(document.querySelectorAll("[data-osp-block]"));
+    expect(marked.map((el) => el.tagName)).toEqual(["H1", "P"]);
+    // The same anchors the build would have written, so a pin dropped now
+    // finds its block after a reload.
+    const built = document.implementation.createHTMLDocument("built");
+    built.body.innerHTML = `<h1>Settings</h1><p>Pick a theme.</p>`;
+    stampBlockIds(built.body);
+    expect(marked.map((el) => el.getAttribute("data-osp-block"))).toEqual(
+      Array.from(built.body.querySelectorAll("[data-osp-block]")).map((el) =>
+        el.getAttribute("data-osp-block"),
+      ),
+    );
+  });
+
+  it("keeps marking as the application replaces what it rendered", async () => {
+    mountApp();
+    run();
+    mount(`<p>First screen.</p>`);
+    await settle();
+    const first = document.querySelector("p")?.getAttribute("data-osp-block");
+
+    mount(`<p>Second screen.</p>`);
+    await settle();
+    const second = document.querySelector("p")?.getAttribute("data-osp-block");
+
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+  });
+
+  // A pin dropped after the application rendered has a block to hold, which
+  // is the whole point of re-marking.
+  it("anchors a pin dropped on content that arrived late", async () => {
+    mountApp();
+    const shadow = run();
+    mount(`<p>Pick a theme.</p>`);
+    await settle();
+
+    boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
+    leaveComment(shadow, { x: 100, y: 20 }, "This label is unclear.");
+
+    const row = stored()[0];
+    expect(row.block).toBeTruthy();
+    expect(row.blockText).toContain("Pick a theme.");
+  });
+
+  it("does not watch a page the build rendered", async () => {
+    mountPage();
+    run();
+    const before = document.querySelectorAll("[data-osp-block]").length;
+    const extra = document.createElement("p");
+    extra.textContent = "Added after the fact.";
+    document.querySelector("article")?.appendChild(extra);
+    await settle();
+    // Still only what `stampBlockIds` marked at build time: this page's
+    // anchors are not ours to invent at runtime.
+    expect(document.querySelectorAll("[data-osp-block]")).toHaveLength(before);
+    expect(extra.hasAttribute("data-osp-block")).toBe(false);
+  });
+});
+
+describe("which screen a comment belongs to", () => {
+  function mountApp(): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<p>On this screen.</p>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      }),
+    );
+    document.head.appendChild(meta);
+  }
+
+  it("records the browser's own url when the pin is dropped", () => {
+    search("/app/index.html#/settings");
+    mountApp();
+    const shadow = run();
+    boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
+    leaveComment(shadow, { x: 10, y: 10 }, "About the settings screen.");
+
+    expect(stored()[0].route).toBe("/app/index.html#/settings");
+  });
+
+  it("shows a pin only on the screen it was left on", () => {
+    search("/app/index.html#/settings");
+    mountApp();
+    let shadow = run();
+    boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
+    leaveComment(shadow, { x: 10, y: 10 }, "About the settings screen.");
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+
+    // The same file, a different screen of it.
+    search("/app/index.html#/account");
+    mountApp();
+    shadow = run();
+    expect(stored()).toHaveLength(1);
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(0);
+  });
+
+  // A review written before routes existed, and every comment on a page the
+  // build rendered: both mean "wherever this page is shown".
+  it("shows a comment with no route anywhere", () => {
+    search("/app/index.html#/account");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({ page: "app/index.html", sourcePath: "app/index.html", block: null }),
+      ]),
+    );
+    mountApp();
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+  });
+
+  // The panel's deep link carries a parameter of ours, and a pin must not be
+  // hidden by the link that exists to open it.
+  it("ignores its own deep-link parameter when matching", () => {
+    search("/app/index.html#/settings");
+    mountApp();
+    let shadow = run();
+    boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
+    leaveComment(shadow, { x: 10, y: 10 }, "About the settings screen.");
+    const id = stored()[0].id;
+
+    search(`/app/index.html?osp-comment=${id}#/settings`);
+    mountApp();
+    shadow = run();
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+  });
+});
+
+describe("an anchor lost on a page that renders itself", () => {
+  function seed(stamp: boolean): ShadowRoot {
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<p>Something else entirely.</p>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        ...(stamp ? { stamp: true } : {}),
+      }),
+    );
+    document.head.appendChild(meta);
+    // A comment anchored to a block that is no longer on the page.
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          page: "app/index.html",
+          sourcePath: "app/index.html",
+          block: "gone",
+          blockText: "The count is 41.",
+          x: 120,
+          y: 240,
+        }),
+      ]),
+    );
+    return run();
+  }
+
+  /**
+   * The risk the re-marking introduces, and the reason for the fallback. On
+   * an application a block's text changes because the application is being
+   * used, not because anyone edited it -- so a pin that vanished would be a
+   * reviewer watching their own comments disappear.
+   */
+  it("still draws the pin, at the point it was dropped on", () => {
+    const shadow = seed(true);
+    const pin = shadow.querySelector(".co-pin:not(.co-ghost)") as HTMLElement;
+    expect(pin).toBeTruthy();
+    expect(pin.style.left).toBe("120px");
+    expect(pin.style.top).toBe("240px");
+  });
+
+  // Unchanged for a page the build rendered: there the text really was
+  // rewritten, and the panel is the honest place to say so.
+  it("draws nothing for a page the build rendered", () => {
+    const shadow = seed(false);
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(0);
   });
 });
 
@@ -1674,7 +1917,9 @@ describe("the overlay against the vault", () => {
     expect(sent.comments).toHaveLength(1);
     expect(sent.comments[0].text).toBe("Send this to the vault.");
     // Shaped like a review file, so the import command reads it unchanged.
-    expect(sent.version).toBe(6);
+    // The constant rather than a copy of its value: the script carries its
+    // own `SCHEMA`, and a number written here is a third place to forget.
+    expect(sent.version).toBe(OVERLAY_SCHEMA_VERSION);
   });
 
   // The point of the whole exercise: a comment left in another browser, or

@@ -30,11 +30,12 @@
  * 2 added the drop point (`x`, `y`, `rx`, `ry`) and `replies`. 3 added
  * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
  * `external` and the document's `withdrawn` list. 6 renamed the middle
- * priority from `normal` to `medium`. An older file still reads: every added
- * field is optional and defaults to what a comment without it meant, and a
- * `normal` priority is read as `medium` by every reader of one.
+ * priority from `normal` to `medium`. 7 added `route`. An older file still
+ * reads: every added field is optional and defaults to what a comment
+ * without it meant, and a `normal` priority is read as `medium` by every
+ * reader of one.
  */
-export const OVERLAY_SCHEMA_VERSION = 6;
+export const OVERLAY_SCHEMA_VERSION = 7;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
@@ -132,6 +133,20 @@ export interface OverlayComment {
   block: string | null;
   /** Opening of the block's text, for context once the anchor is gone. */
   blockText: string;
+  /**
+   * Which screen of an application the pin was dropped on, or null.
+   *
+   * The browser's own URL at the time -- path, query and fragment -- and not
+   * anything a framework was asked for. A single-page application is one
+   * published file, so `page` is the same for every screen in it and cannot
+   * tell them apart; the address bar can, whatever the application is built
+   * on.
+   *
+   * Null for a page the build rendered, which is one document at one URL,
+   * and null in a review written before this field existed. Both mean "show
+   * this wherever its page is shown", which is what they meant at the time.
+   */
+  route: string | null;
   /** Drop point in document space, for a pin with no block to hang from. */
   x: number;
   y: number;

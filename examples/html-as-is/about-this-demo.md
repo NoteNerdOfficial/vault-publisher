@@ -102,6 +102,19 @@ file, between a pair of `osp-review` comments, and the overlay hashes the
 page's own blocks in the browser to produce the same anchors the build would
 have written. Drop a pin on a paragraph here and it survives a rebuild.
 
+If the page renders itself — a React or Angular prototype, say — two more
+things apply. The overlay marks the page again whenever the document changes,
+so a pin dropped after the app has rendered holds onto the text it was about
+rather than a spot on the screen. And a pin records the browser's own URL, so
+a comment left on one screen of the app shows on that screen and not on the
+others.
+
+The rule to tell a reviewer is short: **a pin holds onto text that does not
+change.** Labels, headings and copy are stable, which is what design feedback
+is mostly about. A counter or a live list is not, and a pin on one of those
+falls back to the point it was dropped on, with the panel saying the text has
+changed.
+
 Two consequences worth knowing:
 
 - **Only a preview gets it.** A publish never does, so the file on the site is

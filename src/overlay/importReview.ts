@@ -117,6 +117,10 @@ function readComment(value: unknown, index: number): OverlayComment {
     page: typeof row.page === "string" ? row.page : "",
     sourcePath: row.sourcePath,
     block: typeof row.block === "string" ? row.block : null,
+    // Which screen of an application the comment was left on. Absent from a
+    // page the build rendered and from any review written before the field
+    // existed, and null means the same thing in both: not tied to a screen.
+    route: typeof row.route === "string" && row.route ? row.route : null,
     blockText:
       typeof row.blockText === "string"
         ? row.blockText.slice(0, BLOCK_TEXT_LIMIT)

@@ -20,6 +20,7 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     sourcePath: "notes/Plan.md",
     block: "abc123",
     blockText: "The second paragraph.",
+    route: null,
     x: 300,
     y: 230,
     rx: 0.5,
