@@ -784,6 +784,20 @@ export const OVERLAY_SCRIPT = `(function () {
       ["path", { d: "M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" }],
       ["path", { d: "M14 2v5h6" }],
     ],
+    /*
+     * Lucide's app-window, for a page the build copied rather than rendered.
+     *
+     * A browser chrome rather than a file, because that is the difference the
+     * glyph is carrying: the row above it is a note somebody wrote, and this
+     * one is a page that arrived finished -- a prototype, an export, an
+     * application with its own screens inside it.
+     */
+    app: [
+      ["rect", { x: "2", y: "4", width: "20", height: "16", rx: "2" }],
+      ["path", { d: "M2 9h20" }],
+      ["path", { d: "M6 6.5h.01" }],
+      ["path", { d: "M9 6.5h.01" }],
+    ],
     sort: [
       ["path", { d: "m3 16 4 4 4-4" }],
       ["path", { d: "M7 20V4" }],
@@ -1371,18 +1385,167 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   /*
+   * The file a comment is held against, which is what names its page.
+   *
+   * The note rather than the built URL, for the reason \`pageRows\` keys on
+   * the same thing: a URL can change under a comment and the file it was
+   * written about does not.
+   */
+  function pageKey(comment) {
+    return comment.sourcePath || comment.page || "";
+  }
+
+  /** A path as segments, with the extension off the last one. */
+  function keyParts(key) {
+    var parts = String(key).split("/");
+    var out = [];
+    for (var i = 0; i < parts.length; i++) if (parts[i]) out.push(parts[i]);
+    if (!out.length) return [];
+    out[out.length - 1] = out[out.length - 1].replace(/\\.(md|html?)$/i, "");
+    return out;
+  }
+
+  /** The last \`take\` segments of a path, joined. */
+  function tail(parts, take) {
+    return parts.slice(Math.max(0, parts.length - take)).join("/");
+  }
+
+  /*
+   * Filenames that name nothing on their own.
+   *
+   * \`index\` is the one that matters and the rest are the same mistake by
+   * other spellings. Every application built for the web produces one, so a
+   * review of a site that publishes four of them had four pages called
+   * "index" and no way to tell which thread was about which -- and the
+   * folder above each one is exactly what a person calls them: the React
+   * one, the Angular one, the demo.
+   *
+   * So a page with one of these names is always qualified by its folder,
+   * whether or not anything else in the review shares the name. One "index"
+   * in a list is no clearer than four: it still does not say what it is the
+   * index of.
+   */
+  var VAGUE = {
+    index: 1,
+    home: 1,
+    main: 1,
+    app: 1,
+    page: 1,
+    readme: 1,
+    "default": 1,
+    untitled: 1,
+  };
+
+  /*
+   * What to call each page in the review.
+   *
+   * The shortest tail of its path that no other page in the review wears --
+   * the filename alone where that is enough, \`charts/trend\` where it is
+   * not. It is computed over the whole review rather than per comment,
+   * because being ambiguous is not a property of a page: it is a property of
+   * a page sitting in a list beside another one.
+   *
+   * This is the same rule an editor uses for two tabs with one name, and it
+   * is right here for the same reason. A filename is what the reviewer knows
+   * a note as, so paying path segments for every row would be a panel full
+   * of folders nobody needed; paying them only where the name does not
+   * decide is a label that is as short as it can be and still true.
+   */
+  var labels = Object.create(null);
+
+  function relabel(rows) {
+    var keys = [];
+    var parts = Object.create(null);
+    for (var i = 0; i < rows.length; i++) {
+      var key = pageKey(rows[i]);
+      if (parts[key] === undefined) {
+        parts[key] = keyParts(key);
+        keys.push(key);
+      }
+    }
+
+    labels = Object.create(null);
+    for (var k = 0; k < keys.length; k++) {
+      var mine_ = parts[keys[k]];
+      if (!mine_.length) {
+        labels[keys[k]] = "Untitled";
+        continue;
+      }
+      // A vague filename starts one folder up, so it is qualified even when
+      // it is the only one of its name here.
+      var from = VAGUE[mine_[mine_.length - 1].toLowerCase()] && mine_.length > 1 ? 2 : 1;
+      var label = tail(mine_, mine_.length);
+      for (var take = from; take <= mine_.length; take++) {
+        var candidate = tail(mine_, take);
+        var clash = false;
+        for (var o = 0; o < keys.length; o++) {
+          if (o === k) continue;
+          // The other page's tail at the same depth, or all of it when it is
+          // shallower -- a shorter path cannot collide with a longer tail.
+          if (tail(parts[keys[o]], take) === candidate) clash = true;
+        }
+        if (!clash) {
+          label = candidate;
+          break;
+        }
+      }
+      labels[keys[k]] = label;
+    }
+  }
+
+  /*
    * What to call the page a comment is on.
    *
-   * The note's own filename, which is what the reviewer knows it as. The
-   * built URL names the same thing, but lower-cased and carrying ".html",
-   * and a panel row has no width to spend on either.
+   * Read from the labels computed over the review. The fallback is the bare
+   * filename, for a caller that asks before the panel has been drawn: a
+   * label that is ambiguous is better than no label at all.
    */
   function pageName(comment) {
-    var path = comment.sourcePath || comment.page || "";
-    var at = path.lastIndexOf("/");
-    var name = at === -1 ? path : path.slice(at + 1);
-    name = name.replace(/\\.(md|html?)$/i, "");
-    return name || "Untitled";
+    var key = pageKey(comment);
+    if (labels[key]) return labels[key];
+    var parts = keyParts(key);
+    return parts.length ? parts[parts.length - 1] : "Untitled";
+  }
+
+  /*
+   * Whether a page is one the build rendered or one it copied as it found it.
+   *
+   * The file's own extension says it: a note is Markdown, and a page
+   * published as-is is the \`.html\` file somebody put in the vault. It is
+   * worth a different glyph in the panel because the two are different
+   * things to go and look at -- one is a note to edit, the other is an
+   * application to open -- and because it is the as-is pages that collide by
+   * name, so the icon is also a hint about why a row carries a folder.
+   */
+  function pageKind(comment) {
+    return /\\.html?$/i.test(pageKey(comment)) ? "app" : "note";
+  }
+
+  /*
+   * Which screen of an application a comment was left on, in as few
+   * characters as say it.
+   *
+   * \`route\` is the whole address the pin was dropped at, which is mostly the
+   * path to the page -- and the page is already named beside it. What is left
+   * once that is taken away is the part that differs between two threads on
+   * one published file: the fragment a hash router writes, the query a
+   * framework reads, or the last path segment where routing is done on the
+   * path.
+   *
+   * Empty for a page the build rendered, which has no screens, and for an
+   * application sitting on its own entry point, where there is no second
+   * screen to be told apart from.
+   */
+  function screenName(comment) {
+    var route = comment.route;
+    if (!route) return "";
+    var at = String(route).search(/[?#]/);
+    if (at !== -1) return String(route).slice(at);
+    var parts = String(route).split("/");
+    var last = parts[parts.length - 1];
+    var file = String(pageKey(comment)).split("/").pop();
+    if (!last || last === file) return "";
+    return "/" + last;
   }
 
   /*
@@ -1478,13 +1641,15 @@ export const OVERLAY_SCRIPT = `(function () {
     var groups = [];
     var at = Object.create(null);
     for (var i = 0; i < rows.length; i++) {
-      var key = rows[i].sourcePath || rows[i].page || "";
+      var key = pageKey(rows[i]);
       if (at[key] === undefined) {
         at[key] = groups.length;
         groups.push({
           key: key,
           here: key === SOURCE_PATH,
           name: pageName(rows[i]),
+          kind: pageKind(rows[i]),
+          url: rows[i].page || "",
           rows: [],
         });
       }
@@ -1497,10 +1662,26 @@ export const OVERLAY_SCRIPT = `(function () {
     return groups;
   }
 
+  /*
+   * A group's heading: what the page is, what it is called, and how many.
+   *
+   * The glyph is the kind, which is the part a heading cannot say in words
+   * at this size -- a note to edit or a page that was copied in whole. The
+   * page being read is still "This page" rather than its name, because it is
+   * the one group that needs no identifying; the glyph beside it is not
+   * redundant even there, since an application published as-is and a note
+   * look identical from inside the panel.
+   *
+   * The title carries both the vault path and the published URL. That is the
+   * long answer to "which index is this", and a heading narrow enough to
+   * ellipsis is exactly where somebody will go looking for it.
+   */
   function groupHead(group) {
     var head = el("div", "co-group");
+    head.setAttribute("data-kind", group.kind);
     if (group.here) head.setAttribute("data-here", "");
-    else head.setAttribute("title", group.key);
+    head.setAttribute("title", group.url ? group.key + "\\n" + group.url : group.key);
+    head.appendChild(icon(ICONS[group.kind === "app" ? "app" : "note"], 11));
     head.appendChild(el("span", "co-group-name", group.here ? "This page" : group.name));
     head.appendChild(el("span", "co-group-count", String(group.rows.length)));
     return head;
@@ -1549,6 +1730,10 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function renderPanel() {
     var rows = everything();
+    // Before anything is labelled: which pages need a folder to tell them
+    // apart is a fact about the whole list, so it is settled once per draw
+    // rather than asked per row.
+    relabel(rows);
     var open_ = 0;
     for (var t = 0; t < rows.length; t++) if (!rows[t].resolved) open_++;
     var tallies = [rows.length, open_, rows.length - open_];
@@ -1634,11 +1819,29 @@ export const OVERLAY_SCRIPT = `(function () {
 
     var body = el("div", "co-row-body");
 
-    // Which page, when the list is not already grouped by it.
-    if (showPage && away) {
+    /*
+     * Where the comment is: which page, when the list is not already grouped
+     * by it, and which screen of it whenever the comment names one.
+     *
+     * The screen is shown under a group heading too, where the page is not.
+     * Grouping is by published file, and an application is one file however
+     * many screens it has -- so the rows a heading gathers are exactly the
+     * ones the heading cannot tell apart, and the fragment is the only thing
+     * that does.
+     */
+    var screen = screenName(comment);
+    if ((showPage && away) || screen) {
       var where = el("div", "co-row-page");
-      where.appendChild(icon(ICONS.note, 11));
-      where.appendChild(el("span", null, pageName(comment)));
+      if (showPage && away) {
+        where.setAttribute("data-kind", pageKind(comment));
+        where.appendChild(icon(ICONS[pageKind(comment) === "app" ? "app" : "note"], 11));
+        where.appendChild(el("span", null, pageName(comment)));
+      }
+      if (screen) {
+        var at = el("span", "co-row-screen", screen);
+        at.setAttribute("title", "Left on this screen: " + comment.route);
+        where.appendChild(at);
+      }
       body.appendChild(where);
     }
 

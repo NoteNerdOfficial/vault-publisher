@@ -646,6 +646,10 @@ export const OVERLAY_CSS = `
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
+/* The kind, as a glyph in front of the name: a file for a note, a window for
+   a page that was published as it was found. Dimmer than the name, which is
+   the part being read. */
+.osp-overlay .co-group svg { opacity: 0.7; }
 
 .osp-overlay .co-row { display: block; padding: 2px 8px; cursor: pointer; }
 /* A row for another page is an anchor, so it arrives wearing the browser's
@@ -800,6 +804,28 @@ export const OVERLAY_CSS = `
   white-space: nowrap;
 }
 .osp-overlay .co-row-page svg { opacity: 0.8; }
+/*
+ * Which screen of an application a comment was left on.
+ *
+ * Set in the monospace face and boxed, because it is an address rather than
+ * a name: "#/settings" read in the panel has to be recognisable as the thing
+ * in the address bar when the reviewer gets there. It is the one label in a
+ * row that is not prose, so it is the one that should not be set like prose.
+ */
+.osp-overlay .co-row-screen {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  border: 1px solid var(--co-line);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  line-height: 13px;
+  color: var(--co-fg-2);
+}
 
 /* A row that leads to another page rather than opening a pin on this one.
    Said with the number badge, which is the part that means "there is a mark

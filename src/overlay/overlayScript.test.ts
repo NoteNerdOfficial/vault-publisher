@@ -1113,6 +1113,170 @@ describe("the panel", () => {
   });
 });
 
+/**
+ * Telling one page from another in the panel.
+ *
+ * The review is a list of comments from the whole site, so every row and
+ * heading has to say which page it is about -- and a site that publishes
+ * applications as they are has several pages called `index`. These are the
+ * tests of the labelling that makes those readable.
+ */
+describe("which page a comment is on", () => {
+  /** A comment on a page published as-is, at a path a test chooses. */
+  function onPage(path: string, over: Partial<OverlayComment> = {}): OverlayComment {
+    return row({
+      id: path,
+      sourcePath: path,
+      page: path.replace(/\.md$/i, ".html").toLowerCase(),
+      text: "About " + path,
+      ...over,
+    });
+  }
+
+  function groupNames(shadow: ShadowRoot): (string | null)[] {
+    return Array.from(shadow.querySelectorAll(".co-group-name")).map(
+      (node) => node.textContent,
+    );
+  }
+
+  function openPanel(): ShadowRoot {
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+    return shadow;
+  }
+
+  // The thing this is all for: four stock builds in one vault, each with an
+  // entry point called index.html, and a panel that said "index" four times.
+  it("qualifies pages that share a filename with the folder that differs", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        onPage("react-default/index.html"),
+        onPage("angular-default/index.html"),
+      ]),
+    );
+
+    const names = groupNames(openPanel());
+    expect(names).toContain("react-default/index");
+    expect(names).toContain("angular-default/index");
+  });
+
+  // One "index" in a list is no clearer than four: it still does not say
+  // what it is the index of.
+  it("qualifies a filename that names nothing, even when it is the only one", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([onPage("react-relative/index.html")]));
+
+    expect(groupNames(openPanel())).toContain("react-relative/index");
+  });
+
+  // The other half of the rule. A name that decides on its own is left
+  // alone, or the panel would be a column of folders nobody needed.
+  it("leaves a filename that decides on its own unqualified", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([onPage("library/Atomic notes.md"), onPage("spike-notes/Scope.md")]),
+    );
+
+    expect(groupNames(openPanel())).toEqual(
+      expect.arrayContaining(["Atomic notes", "Scope"]),
+    );
+  });
+
+  // Two pages with the same name two folders down: one segment does not
+  // separate them, so the label takes another.
+  it("takes as many folders as it needs and no more", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        onPage("apps/react/dist/index.html"),
+        onPage("apps/angular/dist/index.html"),
+      ]),
+    );
+
+    const names = groupNames(openPanel());
+    expect(names).toContain("react/dist/index");
+    expect(names).toContain("angular/dist/index");
+  });
+
+  // A note to edit and a page that arrived finished are different things to
+  // go and look at, and the panel is where that is decided.
+  it("says whether a page is a note or one published as it was found", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([onPage("react-relative/index.html"), onPage("library/Scope.md")]),
+    );
+
+    const kinds = Array.from(openPanel().querySelectorAll(".co-group")).map((node) =>
+      node.getAttribute("data-kind"),
+    );
+    expect(kinds).toContain("app");
+    expect(kinds).toContain("note");
+  });
+
+  // The long answer, for a heading narrow enough to ellipsis.
+  it("carries the vault path and the published url on the heading", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([onPage("react-relative/index.html")]));
+
+    const head = Array.from(openPanel().querySelectorAll(".co-group")).find(
+      (node) => !node.hasAttribute("data-here"),
+    );
+    expect(head?.getAttribute("title")).toBe(
+      "react-relative/index.html\nreact-relative/index.html",
+    );
+  });
+
+  /*
+   * Grouping is by published file, and an application is one file however
+   * many screens it has. So the rows a heading gathers are the ones the
+   * heading cannot tell apart, and the route is what does.
+   */
+  it("names the screen a comment was left on", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        onPage("react-relative/index.html", {
+          id: "a",
+          route: "/react-relative/index.html#/about",
+        }),
+        onPage("react-relative/index.html", {
+          id: "b",
+          route: "/react-relative/index.html#/settings",
+          createdAt: "2026-10-28T08:00:00.000Z",
+        }),
+      ]),
+    );
+
+    const screens = Array.from(openPanel().querySelectorAll(".co-row-screen")).map(
+      (node) => node.textContent,
+    );
+    expect(screens).toEqual(["#/about", "#/settings"]);
+  });
+
+  // The route is mostly the path to the page, and the page is named beside
+  // it. An application sitting on its own entry point has no second screen
+  // to be told apart from, so there is nothing to say.
+  it("says nothing when the route is the page itself", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        onPage("react-relative/index.html", { route: "/react-relative/index.html" }),
+      ]),
+    );
+
+    expect(openPanel().querySelector(".co-row-screen")).toBeNull();
+  });
+
+  // A page the build rendered is one document at one URL and records no
+  // route at all, which is what every comment written before routes existed
+  // also looks like.
+  it("says nothing for a comment with no route", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([onPage("library/Scope.md")]));
+
+    expect(openPanel().querySelector(".co-row-screen")).toBeNull();
+  });
+});
+
 describe("the popup", () => {
   function open(shadow: ShadowRoot): void {
     click(shadow.querySelector(".co-pin"));
