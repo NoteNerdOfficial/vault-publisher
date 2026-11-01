@@ -17,7 +17,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildPage } from "../publish/page";
+import {
+  OVERLAY_SCRIPT_PATH,
+  SITE_SCRIPT_PATH,
+  buildPage,
+} from "../publish/page";
+import { CLIENT_SCRIPT } from "../publish/clientScript";
+import { overlayBundle } from "./overlayScript";
 import { stampBlockIds } from "./anchor";
 
 const OUT = process.env.OSP_PREVIEW;
@@ -64,7 +70,12 @@ describe("the overlay, as a file to open", () => {
     expect(html).toContain("GitHub");
 
     if (!OUT) return;
-    mkdirSync(OUT, { recursive: true });
+    mkdirSync(join(OUT, "assets"), { recursive: true });
     writeFileSync(join(OUT, "overlay.html"), html, "utf8");
+    // Both scripts are linked now rather than inlined, so the harness writes
+    // them beside the page. Without the second one there is no overlay in
+    // the browser, which is the one thing this harness exists to show.
+    writeFileSync(join(OUT, SITE_SCRIPT_PATH), CLIENT_SCRIPT);
+    writeFileSync(join(OUT, OVERLAY_SCRIPT_PATH), overlayBundle());
   });
 });

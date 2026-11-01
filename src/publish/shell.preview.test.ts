@@ -27,7 +27,13 @@ import {
   tagsIndexContent,
 } from "./landing";
 import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
-import { buildPage, prepareCodeBlocks, prepareTables } from "./page";
+import {
+  SITE_SCRIPT_PATH,
+  buildPage,
+  prepareCodeBlocks,
+  prepareTables,
+} from "./page";
+import { CLIENT_SCRIPT } from "./clientScript";
 import { folderSlug } from "./shell";
 import { noteSource } from "./source";
 import { siteCss } from "./theme";
@@ -424,6 +430,9 @@ describe("the shell", () => {
     }
     writeFileSync(join(out, "assets/obsidian.css"), "/* stand-in for the harvested stylesheet */");
     writeFileSync(join(out, "assets/site.css"), siteCss(DEFAULT_THEME));
+    // The page links this rather than carrying it, so the harness has to put
+    // it there too or what the browser opens has no behaviour in it at all.
+    writeFileSync(join(out, SITE_SCRIPT_PATH), CLIENT_SCRIPT);
     writeFileSync(join(out, "notes/atomic-notes-in-practice.html"), page(DEFAULT_THEME));
     writeFileSync(join(out, "index.html"), sitePage("A Vault, Published", "index.html", overviewContent(landing("index.html"))));
     writeFileSync(join(out, PATHS.browse), sitePage("Browse", PATHS.browse, browseContent(landing(PATHS.browse), folderSlug)));

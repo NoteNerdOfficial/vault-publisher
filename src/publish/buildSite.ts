@@ -15,7 +15,11 @@ import {
   prepareTaskStatuses,
   reviewOverlayAppendix,
   stripFrontmatter,
+  OVERLAY_SCRIPT_PATH,
+  SITE_SCRIPT_PATH,
 } from "./page";
+import { CLIENT_SCRIPT } from "./clientScript";
+import { overlayBundle } from "../overlay/overlayScript";
 import {
   harvestCss,
   harvestToStylesheet,
@@ -1009,6 +1013,16 @@ export async function buildSite(
     content: harvestToStylesheet(harvested.rules),
   });
   files.push({ path: "assets/site.css", content: siteCss(config.theme) });
+
+  // One copy for the site, linked by every page, rather than a copy inside
+  // each one. See `SITE_SCRIPT_PATH`.
+  files.push({ path: SITE_SCRIPT_PATH, content: CLIENT_SCRIPT });
+
+  // Preview only, like everything else about the overlay: a published page
+  // links nothing of the sort, so the file would be served to nobody.
+  if (config.reviewOverlay) {
+    files.push({ path: OVERLAY_SCRIPT_PATH, content: overlayBundle() });
+  }
 
   /**
    * The homepage, when nothing else is standing in for it.

@@ -278,16 +278,28 @@ describe("the overlay on a page this module did not build", () => {
     stamp: true,
   };
 
-  it("carries the config and the bundle, and nothing else", () => {
+  it("carries the config and a link to the bundle, and nothing else", () => {
     const appendix = reviewOverlayAppendix(config);
     expect(appendix).toContain(`<meta name="osp-review"`);
     expect(appendix).toContain("pages/hand-written.html");
-    expect(appendix).toContain("<script>");
+    expect(appendix).toContain(`<script src="./assets/overlay.js"></script>`);
+    // Linked, not inlined. The bundle is about 127 KB, and a page published
+    // as-is should gain a few hundred bytes from being reviewable, not a
+    // second copy of the overlay.
+    expect(appendix).not.toContain("OSP_OVERLAY_CSS");
+    expect(appendix.length).toBeLessThan(1000);
     // No stylesheet and no shell: the overlay carries its own CSS inside the
     // bundle and mounts into a shadow root, which is what makes it safe to
     // drop onto markup with its own styling.
     expect(appendix).not.toContain("assets/site.css");
     expect(appendix).not.toContain("osp-shell");
+  });
+
+  // A page one folder down has to reach the same file as one at the root.
+  it("links the bundle relative to the page it is appended to", () => {
+    expect(reviewOverlayAppendix({ ...config, url: "charts/trend.html" })).toContain(
+      `<script src="../assets/overlay.js"></script>`,
+    );
   });
 
   // Delimited so a reader of a preview, or a diff of one, can see exactly

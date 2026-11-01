@@ -14,8 +14,7 @@
 
 import { slugifyFragment } from "./links";
 import { encodeUrlPath } from "./urls";
-import { CLIENT_SCRIPT, THEME_BOOT } from "./clientScript";
-import { overlayBundle } from "../overlay/overlayScript";
+import { THEME_BOOT } from "./clientScript";
 import {
   ShellInput,
   breadcrumb,
@@ -660,8 +659,8 @@ ${overlay ? reviewOverlayMeta({ sourcePath: overlay.sourcePath, url: meta.url, s
 <body>
 <a class="osp-skip-link" href="#osp-main">Skip to content</a>
 ${body}
-<script>${CLIENT_SCRIPT}</script>
-${overlay ? `<script>${overlayBundle()}</script>` : ""}
+<script src="${root}${SITE_SCRIPT_PATH}"></script>
+${overlay ? `<script src="${root}${OVERLAY_SCRIPT_PATH}"></script>` : ""}
 </body>
 </html>
 `;
@@ -795,13 +794,39 @@ export function reviewOverlayMeta(config: ReviewOverlayConfig): string {
  * that a reader who finds it in a preview can see at a glance what it is.
  */
 export function reviewOverlayAppendix(config: ReviewOverlayConfig): string {
+  // Relative to this page, like every other reference the build writes, so
+  // a page one folder down reaches the same file as one at the root.
+  const root = pathToRoot(config.url);
   return (
     `\n<!-- osp-review:start -- added to this preview only; not published -->\n` +
     reviewOverlayMeta(config) +
-    `\n<script>${overlayBundle()}</script>\n` +
+    `\n<script src="${root}${OVERLAY_SCRIPT_PATH}"></script>\n` +
     `<!-- osp-review:end -->\n`
   );
 }
+
+/**
+ * The site's own script, as one file rather than a copy in every page.
+ *
+ * It used to be inlined into each page, and the reason given for that was
+ * the one in `sourcePane` below: a published page makes no external requests,
+ * and a second file *per note* would double the site's object count. A single
+ * shared script is not that -- it is one more object for the whole site, like
+ * the two stylesheets each page has always linked.
+ *
+ * What inlining cost: around 130 KB in every page, re-downloaded on every
+ * navigation because inline script cannot be cached. `browse.html` was 179 KB
+ * with almost no content of its own, and a 225-page site carried some 30 MB
+ * of the same bytes over and over.
+ *
+ * `THEME_BOOT` stays inline, and must. It runs before the first paint to
+ * stop a light flash on a page a reader has set to dark, and a fetch cannot
+ * be relied on to finish in that window.
+ */
+export const SITE_SCRIPT_PATH = "assets/site.js";
+
+/** The review overlay, likewise one file. Written only by a preview build. */
+export const OVERLAY_SCRIPT_PATH = "assets/overlay.js";
 
 export function escapeHtml(value: string): string {
   return value
