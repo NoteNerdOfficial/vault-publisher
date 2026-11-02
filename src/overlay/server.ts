@@ -44,6 +44,15 @@ export interface ReviewStore {
    * not something this server can express, let alone do.
    */
   readPreview(path: string): Promise<ArrayBuffer | string | null>;
+  /**
+   * Which note produced which published page, as a past publish recorded
+   * it, or null when this vault has never published with the overlay on.
+   *
+   * Read-only, and separate from the comments: the browser needs it to put
+   * notes back on a review that came in from the published site, and
+   * nothing in the browser should be able to write it.
+   */
+  readPages(): Promise<string | null>;
 }
 
 /**
@@ -352,6 +361,29 @@ export class ReviewServer {
       }
 
       const path = (request.url ?? "/").split("?")[0];
+
+      /*
+       * The page-to-note mapping, for an import.
+       *
+       * A review exported from the published site keys its comments on
+       * page URLs, because a published page must not carry vault paths.
+       * This is how the overlay puts the notes back when that file is
+       * imported into a preview: without it the comments arrive looking
+       * like they belong to pages this build does not have, with no pins
+       * and no way to open them.
+       *
+       * GET only, and asked for only when an import happens, so it costs
+       * nothing on an ordinary page load.
+       */
+      if (path === "/api/pages") {
+        if (request.method !== "GET") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        const pages = await this.options.store.readPages();
+        return send(response, 200, MIME.json, pages ?? `{"pages":{}}`, {
+          "Cache-Control": "no-store",
+        });
+      }
 
       if (path === "/api/comments") {
         if (request.method === "GET") return await this.getComments(response);

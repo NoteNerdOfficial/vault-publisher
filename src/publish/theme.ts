@@ -1003,6 +1003,44 @@ body {
   gap: 0.5rem;
 }
 
+/* --- the link out to the repository ----------------------------------- *
+ * The one control in the bar that carries a word, because it is the one
+ * whose glyph does not say where it goes: a mark says which service, and
+ * only the word says that this leads to the site's own source rather than
+ * to the thing that built it.
+ *
+ * Its height is deliberately not a number. It has to match the read/markdown
+ * toggle a row below -- the two are the nearest pair of boxed controls on
+ * screen, and a few pixels out between them reads as a mistake rather than
+ * as a difference -- and that height is nowhere written down: it is the
+ * seg's own padding, plus the padding of the button inside it, plus the rule
+ * around the pair. So it is built here as the same sum. Any of the three can
+ * move and both controls move with it; a measured total would have to be
+ * measured again, by somebody who did not know they had to.
+ * --------------------------------------------------------------------- */
+.osp-bar-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: calc(0.13rem + 0.2rem) calc(0.13rem + 0.45rem);
+  border: var(--osp-rule) solid var(--osp-border);
+  border-radius: max(6px, calc(var(--osp-radius) + 1px));
+  background: var(--osp-surface);
+  color: var(--osp-text-muted);
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.osp-bar-source:hover {
+  background: var(--osp-hover);
+  border-color: var(--osp-accent);
+  color: var(--osp-text);
+}
+.osp-bar-source:active { background: var(--osp-press); }
+
 .osp-btn {
   display: inline-flex;
   align-items: center;

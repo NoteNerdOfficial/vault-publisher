@@ -119,7 +119,7 @@ export const OVERLAY_SCRIPT = `(function () {
   var DEEP_PARAM = "osp-comment";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 7;
+  var SCHEMA = 8;
   /*
    * Whether this page's blocks are ours to mark, and keep marking.
    *
@@ -130,6 +130,56 @@ export const OVERLAY_SCRIPT = `(function () {
    * application it was left on.
    */
   var STAMP_AT_RUNTIME = config.stamp === true;
+
+  /*
+   * Whether the reader of this page may write comments.
+   *
+   * False on a published build whose owner has not invited the public to
+   * write into it, which is the default. The overlay is still here and
+   * still worth having: the pins and the panel show whatever review was
+   * imported, and the import and export in the settings menu are how a
+   * review gets in and out of a site with no plugin behind it.
+   *
+   * What it turns off is authoring, in all four places it happens --
+   * dropping a pin, replying, editing, and setting a priority -- rather
+   * than only hiding the mode button and leaving the rest reachable by
+   * keyboard. Resolving stays: it is triage of comments that already
+   * exist, it writes nothing a reader did not already have, and it is what
+   * makes an imported review usable as a checklist.
+   *
+   * Absent means true, which is what every page built before this existed
+   * meant by saying nothing.
+   */
+  var CAN_COMMENT = config.comments !== false;
+
+  /*
+   * This page is part of a published site rather than a preview.
+   *
+   * It exists for one reason, and it is a mistake worth describing. Whether
+   * the plugin is on the other end used to be decided from the protocol
+   * alone -- http or https meant served, file: meant not. That was true
+   * while the overlay shipped in previews only. A published site is https
+   * too, so the same test said "served" about a static host with no plugin
+   * anywhere near it, and every save would POST the reader's entire review
+   * to /api/comments on the site's own origin. It would 404 and nothing
+   * would appear to be wrong, which is exactly the problem: a reader's
+   * private notes leaving their browser on every keystroke, into whatever
+   * logs the host keeps.
+   *
+   * So the page says which kind of build it is, and the protocol is only
+   * consulted for the kind that can have a plugin behind it.
+   */
+  var PUBLISHED = config.published === true;
+
+  /*
+   * Where a reader should send a review they have exported.
+   *
+   * A published site has no way back. The file is the whole channel, and a
+   * file in somebody's Downloads folder with no idea where to send it is
+   * not a channel at all -- so whoever published the site says here who to
+   * send it to, and the export repeats it at the moment it matters.
+   */
+  var CONTACT = typeof config.contact === "string" ? config.contact : "";
 
   /*
    * Stamping block anchors here, for a page the build did not render.
@@ -312,6 +362,8 @@ export const OVERLAY_SCRIPT = `(function () {
     // A comment an agent wrote into the review file by hand. Nothing in here
     // ever sets it; reading it is the whole of the support for it.
     row.agent = typeof row.agent === "string" && row.agent ? row.agent : null;
+    // Where a comment came in from, for one this browser did not make.
+    row.imported = typeof row.imported === "string" && row.imported ? row.imported : null;
     row.external = extOf(row.external);
     return row;
   }
@@ -463,9 +515,14 @@ export const OVERLAY_SCRIPT = `(function () {
    * every call here fails and the overlay carries on against localStorage
    * alone. That is a degraded mode, not a broken one, so none of it reports
    * an error to the reader.
+   *
+   * A published build is never served, whatever its protocol: there is no
+   * plugin behind a static host, and asking anyway would send the reader's
+   * review to somebody else's origin. See PUBLISHED above.
    */
   var API = "/api/comments";
-  var served = location.protocol === "http:" || location.protocol === "https:";
+  var served =
+    !PUBLISHED && (location.protocol === "http:" || location.protocol === "https:");
   var syncing = false;
   var syncAgain = false;
 
@@ -830,6 +887,31 @@ export const OVERLAY_SCRIPT = `(function () {
       ["path", { d: "m10 15 3-3-3-3" }],
     ],
     close: [["path", { d: "M18 6 6 18" }], ["path", { d: "m6 6 12 12" }]],
+    /* Chevrons for the two arrows that walk this page's marks. */
+    chevUp: [["path", { d: "m18 15-6-6-6 6" }]],
+    chevDown: [["path", { d: "m6 9 6 6 6-6" }]],
+    /* A plain tick for the labelled Resolve, where the bubble-and-tick of
+       \`resolve\` was carrying "this is about a comment" that the button it
+       now sits in says in words. */
+    check: [["path", { d: "M20 6 9 17l-5-5" }]],
+    /* Out of the browser, and back into it: the two halves of carrying a
+       review between builds. */
+    download: [
+      ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }],
+      ["path", { d: "m7 10 5 5 5-5" }],
+      ["path", { d: "M12 15V3" }],
+    ],
+    upload: [
+      ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }],
+      ["path", { d: "m17 8-5-5-5 5" }],
+      ["path", { d: "M12 3v12" }],
+    ],
+    /* Out of the page: the one action here that ends up somewhere else. */
+    issue: [
+      ["path", { d: "M15 3h6v6" }],
+      ["path", { d: "M10 14 21 3" }],
+      ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }],
+    ],
     more: [
       ["circle", { cx: "12", cy: "12", r: "1" }],
       ["circle", { cx: "19", cy: "12", r: "1" }],
@@ -1072,16 +1154,21 @@ export const OVERLAY_SCRIPT = `(function () {
   panel.appendChild(resizer);
 
   var panelHead = el("div", "co-panel-head");
+  var panelTally = el("h2", "co-panel-tally");
+  var panelMeta = el("p", "co-panel-meta");
+  panelHead.appendChild(panelTally);
+  panelHead.appendChild(panelMeta);
+  var panelActs = el("div", "co-panel-acts");
   var sideBtn = el("button", "co-icon-btn");
-  var panelTitle = el("span", "co-panel-title", "Review comments");
   var panelClose = el("button", "co-icon-btn");
   panelClose.setAttribute("title", "Exit review mode");
   panelClose.appendChild(icon(ICONS.close));
-  panelHead.appendChild(sideBtn);
-  panelHead.appendChild(panelTitle);
-  panelHead.appendChild(panelClose);
+  panelActs.appendChild(sideBtn);
+  panelActs.appendChild(panelClose);
+  panelHead.appendChild(panelActs);
   panel.appendChild(panelHead);
 
+  var controls = el("div", "co-controls");
   var filters = el("div", "co-filters");
   var filterSlider = el("div", "co-filter-slider");
   filters.appendChild(filterSlider);
@@ -1102,51 +1189,29 @@ export const OVERLAY_SCRIPT = `(function () {
     filterBtns.push(btn);
     filterCounts.push(tally);
   }
-  panel.appendChild(filters);
+  controls.appendChild(filters);
 
   /*
-   * Two orders, said out loud.
+   * Two orders, in one chip on the end of the filter row.
    *
-   * This was one small button in the corner, labelled with whichever order
-   * was not currently on, and nobody found it: a single grey word in a row
-   * of its own reads as a caption rather than as a control, and a label that
-   * names the state you are *not* in has to be worked out before it can be
-   * used. The order the list is in is the second question anyone has of the
-   * panel, after how much is left in it, so it is now a labelled pair built
-   * like the filter row above it -- both options visible, the one in force
-   * marked -- and the panel is wide enough to hold it.
+   * Mark order is the default because it is the order the numbers on the
+   * page are in, so the list and the pins can be read against each other;
+   * it groups by page, since those numbers only count within one. Priority
+   * order is for working through: one queue over the whole review,
+   * answering "what is worth doing first", which the pins cannot say at all.
    *
-   * Mark order is the default because it is the order the numbers on the page
-   * are in, so the list and the pins can be read against each other; it
-   * groups by page, since those numbers only count within one. Priority
-   * order is for working through: one queue over the whole review, answering
-   * "what is worth doing first", which the pins cannot say at all.
+   * The chip names the order in force rather than the one it would switch
+   * to -- see the stylesheet for the three shapes this control has had and
+   * why it is not a labelled pair any more.
    */
   var ORDERS = [
     ["time", "Mark order", "Grouped by page, in the order that page's pins are numbered"],
     ["priority", "Priority", "One queue across every page, blockers first"],
   ];
 
-  var sortRow = el("div", "co-sortrow");
-  sortRow.appendChild(el("span", "co-sortrow-label", "Order"));
-  var orders = el("div", "co-orders");
-  var orderSlider = el("div", "co-order-slider");
-  orders.appendChild(orderSlider);
-  var orderBtns = [];
-  for (var w = 0; w < ORDERS.length; w++) {
-    var orderBtn = el("button", "co-order", ORDERS[w][1]);
-    orderBtn.setAttribute("data-order", ORDERS[w][0]);
-    orderBtn.setAttribute("title", ORDERS[w][2]);
-    orders.appendChild(orderBtn);
-    orderBtns.push(orderBtn);
-  }
-  sortRow.appendChild(orders);
-  panel.appendChild(sortRow);
-
-  function indexOfOrder(name) {
-    for (var i = 0; i < ORDERS.length; i++) if (ORDERS[i][0] === name) return i;
-    return 0;
-  }
+  var sortBtn = el("button", "co-sort");
+  controls.appendChild(sortBtn);
+  panel.appendChild(controls);
 
   var list = el("div", "co-list");
   panel.appendChild(list);
@@ -1166,11 +1231,19 @@ export const OVERLAY_SCRIPT = `(function () {
   var modeSlider = el("div", "co-mode-slider");
   modes.appendChild(modeSlider);
 
-  var MODES = [
-    ["view", ICONS.cursor, "View mode \\u2014 read and click the page (V)"],
-    ["comment", ICONS.bubble, "Comment mode \\u2014 click to drop a pin (C)"],
-    ["review", ICONS.panel, "Review mode \\u2014 step through and resolve (R)"],
-  ];
+  var MODES = CAN_COMMENT
+    ? [
+        ["view", ICONS.cursor, "View mode \\u2014 read and click the page (V)"],
+        ["comment", ICONS.bubble, "Comment mode \\u2014 click to drop a pin (C)"],
+        ["review", ICONS.panel, "Review mode \\u2014 step through and resolve (R)"],
+      ]
+    : [
+        ["view", ICONS.cursor, "View mode \\u2014 read and click the page (V)"],
+        ["review", ICONS.panel, "Review mode \\u2014 read the comments (R)"],
+      ];
+  // The sliding chip is sized off this, so it has to be told how many stops
+  // it has rather than assuming three.
+  modes.setAttribute("data-modes", String(MODES.length));
   var modeBtns = [];
   for (var m = 0; m < MODES.length; m++) {
     var modeBtn = el("button", "co-mode");
@@ -1728,6 +1801,25 @@ export const OVERLAY_SCRIPT = `(function () {
    * are all over every page, and a row belonging to somewhere else is a link
    * to that page rather than to a pin that is not here.
    */
+  /*
+   * The second line of the head: how far the review reaches, and how fresh.
+   *
+   * The pages are counted over the whole review rather than this page, for
+   * the reason the panel lists the whole review: what a reviewer cannot
+   * already see is the part worth saying out loud. The newest mark is the
+   * last of \`rows\`, which arrives oldest first.
+   */
+  function panelSummary(rows) {
+    var keys = [];
+    for (var i = 0; i < rows.length; i++) {
+      var key = pageKey(rows[i]);
+      if (keys.indexOf(key) === -1) keys.push(key);
+    }
+    var said = "Across " + count(keys.length, "page");
+    var last = rows.length ? when(rows[rows.length - 1].createdAt) : "";
+    return last ? said + " \u00b7 last mark " + last : said;
+  }
+
   function renderPanel() {
     var rows = everything();
     // Before anything is labelled: which pages need a folder to tell them
@@ -1745,11 +1837,19 @@ export const OVERLAY_SCRIPT = `(function () {
     }
     filterSlider.setAttribute("data-at", String(FILTERS.indexOf(filter)));
 
-    for (var o = 0; o < orderBtns.length; o++) {
-      if (ORDERS[o][0] === sortBy) orderBtns[o].setAttribute("data-active", "");
-      else orderBtns[o].removeAttribute("data-active");
-    }
-    orderSlider.setAttribute("data-at", String(indexOfOrder(sortBy)));
+    panelTally.textContent = rows.length
+      ? open_ + " open, " + (rows.length - open_) + " resolved"
+      : "Nothing marked yet";
+    panelMeta.textContent = panelSummary(rows);
+    panelMeta.hidden = !rows.length;
+
+    var now = sortBy === "priority" ? ORDERS[1] : ORDERS[0];
+    var other = sortBy === "priority" ? ORDERS[0] : ORDERS[1];
+    clear(sortBtn);
+    sortBtn.appendChild(icon(ICONS.sort, 13));
+    sortBtn.appendChild(el("span", null, now[1]));
+    sortBtn.setAttribute("data-order", now[0]);
+    sortBtn.setAttribute("title", now[2] + " \u2014 switch to " + other[1].toLowerCase());
 
     clear(sideBtn);
     sideBtn.setAttribute("title", side === "right" ? "Move to the left" : "Move to the right");
@@ -1852,17 +1952,20 @@ export const OVERLAY_SCRIPT = `(function () {
      * and the timestamp is the one part nobody reads deliberately, so it
      * sits in a column of its own at the right rather than in the middle of
      * the line where it pushes the pills about as the dates age.
-     *
-     * The priority, but only when it is one. A chip on every row saying
-     * "MEDIUM" is a word the eye has to read past on every row to find the
-     * two that are not; left off, the rows that do carry one are the ones
-     * worth looking at.
-     *
-     * It is here at all because the panel is now the whole review: a comment
-     * on another page is read in this list and nowhere else, so the list has
-     * to carry what the popup over there would have said.
      */
     name.appendChild(el("strong", null, comment.author || "Anonymous"));
+    /*
+     * How much it is asking for, beside the name.
+     *
+     * It spent a while in the foot against the quote, which read well on
+     * its own and badly beside the popup: that card puts the level in its
+     * title bar, at the top, and a reviewer moving between the list and the
+     * card should not have to look in two different places for the same
+     * fact. So the list says it where the card says it.
+     *
+     * Only when it is one: a chip on every row saying "MEDIUM" is a word
+     * the eye reads past on every row to find the two that are not.
+     */
     if (comment.priority !== "medium") {
       var level = el("span", "co-row-pri");
       level.setAttribute("data-level", comment.priority);
@@ -1881,10 +1984,38 @@ export const OVERLAY_SCRIPT = `(function () {
       name.appendChild(tag);
     }
     /*
-     * The issue, if there is one. The other thing the sort cannot say: a
-     * comment someone has already turned into work is a comment to read
-     * differently, and the number is how it is referred to everywhere else.
+     * A comment that came in from a file rather than from this browser.
+     *
+     * Worth saying for the same reason the agent pill is: the author field
+     * carries a name either way, and a name does not say whether the person
+     * was looking at this build. An imported comment may have been written
+     * against a different one, which is the difference between "this is
+     * wrong" and "this was wrong when they read it".
      */
+    if (comment.imported) {
+      var came = el("span", "co-tag", "Imported");
+      came.setAttribute("title", "Imported from " + comment.imported);
+      name.appendChild(came);
+    }
+    name.appendChild(el("span", "co-time", when(comment.createdAt)));
+    body.appendChild(name);
+    body.appendChild(el("div", "co-row-text", comment.text));
+
+    /*
+     * Where it went, and what it is about.
+     *
+     * The issue, if there is one: a comment someone has already turned into
+     * work is a comment to read differently, and the number is how it is
+     * referred to everywhere else. It sat on the top line until the
+     * priority took that place; down here it is still the one thing in a
+     * row that leads off the page, and it no longer competes with the name
+     * for the width the dates leave over.
+     *
+     * The quote on every row that has one, because a list of the whole
+     * review is read without the pins beside it -- a comment on another page
+     * is read here and nowhere else, so the row has to say what it points at.
+     */
+    var foot = el("div", "co-row-foot");
     if (comment.external) {
       var filed = el("a", "co-tag", issueMark(comment.external));
       filed.setAttribute("data-ext", "");
@@ -1897,11 +2028,14 @@ export const OVERLAY_SCRIPT = `(function () {
       filed.addEventListener("click", function (event) {
         event.stopPropagation();
       });
-      name.appendChild(filed);
+      foot.appendChild(filed);
     }
-    name.appendChild(el("span", "co-time", when(comment.createdAt)));
-    body.appendChild(name);
-    body.appendChild(el("div", "co-row-text", comment.text));
+    // Not on an orphan: the warning underneath shows the same text, and the
+    // point of showing it there is that it is all that is left of the anchor.
+    if (comment.blockText && !lost) {
+      foot.appendChild(el("span", "co-quote", comment.blockText));
+    }
+    if (foot.childNodes.length) body.appendChild(foot);
 
     var meta = [];
     if (comment.replies.length) {
@@ -1921,11 +2055,9 @@ export const OVERLAY_SCRIPT = `(function () {
     // overlay on the page they land on opens the comment they named.
     if (!away) {
       row.addEventListener("click", function () {
+        glide();
         openPopup(comment.id);
-        var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
-        if (pin && pin.scrollIntoView) {
-          pin.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
+        revealMark(comment);
       });
     }
     return row;
@@ -1968,52 +2100,70 @@ export const OVERLAY_SCRIPT = `(function () {
 
     var head = el("div", "co-pop-head");
     var lost = orphaned(comment);
+    var siblings = pageRows(comment.sourcePath);
 
-    head.appendChild(el("span", "co-pop-title", "Comment"));
+    /*
+     * Which mark this is, out of how many the page has. The first number is
+     * the pin's own -- both are a comment's place in its page by age -- so
+     * the card, the pin under it and the panel row all say the same thing,
+     * and the arrows beside it walk the same order the pins are numbered in.
+     */
+    var pos = el("span", "co-pop-pos");
+    pos.appendChild(document.createTextNode(String(markNumber(comment))));
+    pos.appendChild(el("span", null, " of " + siblings.length));
+    head.appendChild(pos);
 
     /*
      * The priority, said and set in the same place. A pill that showed a
      * value but needed a menu somewhere else to change it is two things to
      * learn where one would do, and this is the only popup the comment has.
      */
-    var priBtn = el("button", "co-pri");
+    // A span rather than a button where nothing here may be changed: a
+    // control that opens a menu to set a value, on a build that cannot set
+    // it, is worse than the plain statement of the value.
+    var priBtn = el(CAN_COMMENT ? "button" : "span", "co-pri");
     priBtn.setAttribute("data-level", comment.priority);
     priBtn.setAttribute("title", "Priority: " + PRI[comment.priority].label);
     priBtn.appendChild(el("span", "co-pri-mark", PRI[comment.priority].mark));
     priBtn.appendChild(el("span", null, PRI[comment.priority].label));
-    priBtn.addEventListener("click", function (event) {
-      event.stopPropagation();
-      togglePriMenu(comment, priBtn);
-    });
+    if (CAN_COMMENT) {
+      priBtn.addEventListener("click", function (event) {
+        event.stopPropagation();
+        togglePriMenu(comment, priBtn);
+      });
+    }
     head.appendChild(priBtn);
 
     var acts = el("div", "co-pop-acts");
 
-    var moreBtn = el("button", "co-pop-btn");
-    moreBtn.setAttribute("title", "More");
-    moreBtn.appendChild(icon(ICONS.more));
-    moreBtn.addEventListener("click", function (event) {
-      event.stopPropagation();
-      togglePopMenu(comment, moreBtn);
+    var prevBtn = el("button", "co-pop-btn");
+    prevBtn.setAttribute("title", "Previous mark on this page");
+    prevBtn.appendChild(icon(ICONS.chevUp));
+    prevBtn.addEventListener("click", function () {
+      stepMark(-1);
     });
 
-    var resolveBtn = el("button", "co-pop-btn");
-    resolveBtn.setAttribute("title", comment.resolved ? "Reopen" : "Resolve");
-    if (comment.resolved) resolveBtn.setAttribute("data-on", "");
-    resolveBtn.appendChild(icon(ICONS.resolve));
-    resolveBtn.addEventListener("click", function () {
-      comment.resolved = !comment.resolved;
-      writeAll();
-      render();
+    var nextBtn = el("button", "co-pop-btn");
+    nextBtn.setAttribute("title", "Next mark on this page");
+    nextBtn.appendChild(icon(ICONS.chevDown));
+    nextBtn.addEventListener("click", function () {
+      stepMark(1);
     });
+
+    // One mark is not a queue, and an arrow that can only land where it
+    // started is a control that lies about having somewhere to go.
+    if (siblings.length < 2) {
+      prevBtn.disabled = true;
+      nextBtn.disabled = true;
+    }
 
     var closeBtn = el("button", "co-pop-btn");
     closeBtn.setAttribute("title", "Close");
     closeBtn.appendChild(icon(ICONS.close));
     closeBtn.addEventListener("click", closePopup);
 
-    acts.appendChild(moreBtn);
-    acts.appendChild(resolveBtn);
+    acts.appendChild(prevBtn);
+    acts.appendChild(nextBtn);
     acts.appendChild(closeBtn);
     head.appendChild(acts);
     popup.appendChild(head);
@@ -2021,16 +2171,16 @@ export const OVERLAY_SCRIPT = `(function () {
     /*
      * What the comment is attached to, above the comment itself.
      *
-     * The mark number ties this popup to the pin that opened it, and the
-     * quote says what was marked. Both belong above the thread rather than
-     * in the title bar: a reviewer reads what the objection is about before
-     * they read the objection, and a line of quoted prose squeezed onto one
-     * ellipsized line between a title and three buttons is not readable.
+     * The quote says what was marked, and it belongs above the thread
+     * rather than in the title bar: a reviewer reads what the objection is
+     * about before they read the objection, and a line of quoted prose
+     * squeezed onto one ellipsized line between a title and three buttons
+     * is not readable. The mark number that used to sit beside it is in the
+     * head now, where it is also the position the arrows move through.
      */
     var sel = el("div", "co-pop-sel");
     if (comment.resolved) sel.setAttribute("data-resolved", "");
     if (lost) sel.setAttribute("data-orphan", "");
-    sel.appendChild(el("span", "co-pop-mark", String(markNumber(comment))));
     sel.appendChild(
       el(
         "span",
@@ -2055,29 +2205,20 @@ export const OVERLAY_SCRIPT = `(function () {
     }
 
     /*
-     * Where this comment went, once it went somewhere.
+     * Why the filing did not happen, when it did not.
      *
-     * A row at the foot rather than a chip in the title bar: the title bar
-     * holds what the comment *is*, and this is what happened to it. It is
-     * also where a refusal is said, because that is where the action was
-     * taken from.
+     * Where it *did* go is the foot's own button now -- it carries the
+     * issue key in the ink and leads to it -- so a row reading "Filed as
+     * VP-118" under a button reading VP-118 says the same thing twice, and
+     * a row reading "Filing in Linear..." under a button already saying so
+     * says it twice while it is happening. A refusal has nowhere else to
+     * go, so it stays here, beside the control the attempt was made from.
      */
     var pending = relaying === comment.id;
     var failed = relayError && relayError.id === comment.id ? relayError.message : "";
-    if (comment.external || pending || failed) {
+    if (failed) {
       var filedRow = el("div", "co-filed");
-      if (pending) {
-        filedRow.setAttribute("data-pending", "");
-        filedRow.appendChild(el("span", null, "Filing in " + TRACKER + "\\u2026"));
-      } else if (comment.external) {
-        filedRow.appendChild(el("span", null, "Filed as"));
-        var issue = el("a", "co-ext", comment.external.key);
-        issue.setAttribute("href", comment.external.url);
-        issue.setAttribute("target", "_blank");
-        issue.setAttribute("rel", "noreferrer noopener");
-        filedRow.appendChild(issue);
-      }
-      if (failed) filedRow.appendChild(el("span", "co-warn", failed));
+      filedRow.appendChild(el("span", "co-warn", failed));
       popup.appendChild(filedRow);
     }
 
@@ -2090,26 +2231,266 @@ export const OVERLAY_SCRIPT = `(function () {
       popup.appendChild(done);
     }
 
-    var reply = el("div", "co-pop-reply");
-    reply.appendChild(el("div", "co-avatar", initial(author)));
-    var replyField = field(
-      "Reply...",
-      function (text) {
-        comment.replies.push({
-          id: uid(),
-          author: author || "Anonymous",
-          text: text,
-          createdAt: new Date().toISOString(),
-        });
-        writeAll();
-        render();
-      },
-      closePopup
+    /*
+     * The box to answer in, where answering is allowed at all. On a
+     * published build with commenting off there is nothing to put in it,
+     * and an input that discards what is typed into it is worse than no
+     * input.
+     */
+    if (CAN_COMMENT) {
+      var reply = el("div", "co-pop-reply");
+      reply.appendChild(el("div", "co-avatar", initial(author)));
+      var replyField = field(
+        "Reply...",
+        function (text) {
+          comment.replies.push({
+            id: uid(),
+            author: author || "Anonymous",
+            text: text,
+            createdAt: new Date().toISOString(),
+          });
+          writeAll();
+          render();
+        },
+        closePopup
+      );
+      reply.appendChild(replyField.box);
+      popup.appendChild(reply);
+    }
+
+    /*
+     * The foot: every action on this comment, as words.
+     *
+     * Resolve and the overflow were icons in the title bar, where the one
+     * button that ends a comment's life sat beside the one that merely
+     * dismisses the card and looked exactly like it. Filing was a line
+     * inside that overflow, so whether an issue already existed could only
+     * be found by opening a menu. Down here they are a labelled primary, a
+     * labelled filing button that becomes the issue it made, and a quiet
+     * overflow for the two things that are neither.
+     */
+    var foot = el("div", "co-pop-foot");
+
+    // Resolving steps to the next mark, because that is what is done next.
+    // Reopening does not: it is a correction to this comment, and moving
+    // away from it would be answering a question nobody asked.
+    var onward = !comment.resolved && siblings.length > 1;
+    var resolveBtn = el("button", "co-act");
+    resolveBtn.setAttribute("data-primary", "");
+    resolveBtn.setAttribute("title", comment.resolved ? "Reopen" : "Resolve");
+    resolveBtn.appendChild(icon(ICONS.check, 15));
+    resolveBtn.appendChild(
+      el("span", null, comment.resolved ? "Reopen" : onward ? "Resolve & next" : "Resolve")
     );
-    reply.appendChild(replyField.box);
-    popup.appendChild(reply);
+    resolveBtn.addEventListener("click", function () {
+      resolveAndNext(comment);
+    });
+    foot.appendChild(resolveBtn);
+
+    /*
+     * The filing action and its result, as one button.
+     *
+     * Once an issue exists the button becomes that issue: the key, the ink
+     * stroke, and a link to it. There is no state in which it would file a
+     * second issue for the same comment, which is the thing that made this
+     * a menu item hidden behind a condition before.
+     */
+    if (comment.external) {
+      var filedBtn = el("a", "co-act co-ext");
+      filedBtn.setAttribute("data-filed", "");
+      filedBtn.setAttribute("href", comment.external.url);
+      filedBtn.setAttribute("target", "_blank");
+      filedBtn.setAttribute("rel", "noreferrer noopener");
+      filedBtn.setAttribute("title", "Open " + comment.external.key);
+      filedBtn.appendChild(icon(ICONS.issue, 14));
+      /*
+       * The short name, the same one the panel's pill wears.
+       *
+       * A GitHub key is \`owner/repo#41\` in full, which is as wide as the
+       * whole card on a repository with a real name -- and a button that
+       * wide pushed the overflow menu off the end of a foot that does not
+       * wrap. The repository is not the question being answered here
+       * anyway: the button says there is an issue and leads to it, and the
+       * full key is in the tooltip for whoever wants it.
+       */
+      filedBtn.appendChild(el("span", null, issueMark(comment.external)));
+      foot.appendChild(filedBtn);
+    } else if (TRACKER) {
+      var sendBtn = el("button", "co-act");
+      sendBtn.setAttribute("title", "Send to " + TRACKER);
+      sendBtn.appendChild(icon(ICONS.issue, 14));
+      sendBtn.appendChild(el("span", null, pending ? "Filing..." : "Send to " + TRACKER));
+      if (pending) sendBtn.disabled = true;
+      sendBtn.addEventListener("click", function () {
+        relay(comment);
+      });
+      foot.appendChild(sendBtn);
+    }
+
+    if (CAN_COMMENT) {
+      var moreBtn = el("button", "co-pop-btn");
+      moreBtn.setAttribute("title", "More");
+      moreBtn.appendChild(icon(ICONS.more));
+      moreBtn.addEventListener("click", function (event) {
+        event.stopPropagation();
+        togglePopMenu(comment, moreBtn);
+      });
+      foot.appendChild(moreBtn);
+    }
+
+    popup.appendChild(foot);
 
     placePopup(comment);
+  }
+
+  /*
+   * The next mark on this page, in the order the pins are numbered.
+   *
+   * Deliberately not filtered. The arrows walk the pins, and every pin is
+   * on the page whatever the panel has been filtered to -- so "3 of 7" is
+   * the pin's own number out of the number of pins, and stepping never
+   * skips a mark the reviewer can see.
+   */
+  function stepMark(step) {
+    var comment = selected ? byId(selected) : null;
+    if (!comment) return;
+    var rows = pageRows(comment.sourcePath);
+    if (rows.length < 2) return;
+    var at = 0;
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === comment.id) at = i;
+    goToMark(rows[(at + step + rows.length) % rows.length]);
+  }
+
+  /*
+   * Arriving at a mark, as a move rather than a cut.
+   *
+   * The arrows used to swap the card's contents where they stood and leave
+   * the page exactly where it was, which asked the reviewer to work out
+   * from scratch, every time, which words on the page the new card was
+   * about -- often words that were not on screen at all. So the page comes
+   * to the mark and the card travels to it: \`co-pop[data-gliding]\` in the
+   * stylesheet puts a transition on the card's position for as long as the
+   * step lasts, and the scroll underneath it is the browser's own smooth
+   * one, so the two move together.
+   *
+   * Both are dropped under \`prefers-reduced-motion\`, where the honest
+   * answer is to be somewhere else immediately.
+   */
+  var glideTimer = null;
+
+  function glide() {
+    // Nothing to glide from. A card opening for the first time rises into
+    // place where it is wanted; one asked to travel would set off from
+    // wherever the last one happened to be standing.
+    if (popup.hidden || !moving()) return;
+    popup.setAttribute("data-gliding", "");
+    if (glideTimer !== null) window.clearTimeout(glideTimer);
+    glideTimer = window.setTimeout(function () {
+      glideTimer = null;
+      popup.removeAttribute("data-gliding");
+    }, 600);
+  }
+
+  /** Whether this reviewer has asked for animation at all. */
+  function moving() {
+    if (!window.matchMedia) return true;
+    try {
+      return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /**
+   * Bring a mark's pin into view. False when there is no pin to bring --
+   * the comment belongs to a screen this one is not showing yet.
+   */
+  function revealMark(comment) {
+    var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
+    if (!pin || !pin.scrollIntoView) return false;
+    pin.scrollIntoView({ behavior: moving() ? "smooth" : "auto", block: "center" });
+    return true;
+  }
+
+  function goToMark(next) {
+    if (onThisRoute(next)) {
+      glide();
+      openPopup(next.id);
+      revealMark(next);
+      return;
+    }
+    crossTo(next);
+  }
+
+  /*
+   * The next mark is on another screen of the same application.
+   *
+   * One published file can be any number of screens, so stepping through a
+   * page's marks steps across them -- and a card opened over a screen that
+   * has no such pin on it is the seam this is here to close. Where the two
+   * differ by the fragment alone the router is listening to the address bar
+   * and will draw the other screen without a reload, so the step stays on
+   * this document and waits for the pin to appear. Where they differ by
+   * more than that it is a real navigation, and the comment is asked for in
+   * the link: the overlay on the other side opens it on arrival.
+   */
+  function crossTo(next) {
+    var there = splitRoute(next.route);
+    var here = splitRoute(currentRoute());
+    if (there.base !== here.base) {
+      location.href = there.base + deepQuery(there.base, next.id) + there.hash;
+      return;
+    }
+    glide();
+    openPopup(next.id);
+    location.hash = there.hash;
+    chaseMark(next);
+  }
+
+  function splitRoute(route) {
+    var text = String(route || "");
+    var cut = text.indexOf("#");
+    return cut === -1
+      ? { base: text, hash: "" }
+      : { base: text.slice(0, cut), hash: text.slice(cut) };
+  }
+
+  function deepQuery(base, id) {
+    return (
+      (base.indexOf("?") === -1 ? "?" : "&") + DEEP_PARAM + "=" + encodeURIComponent(id)
+    );
+  }
+
+  /*
+   * Waiting for a screen to draw itself.
+   *
+   * The router is told where to go by the address bar and answers in its
+   * own time, and the pin cannot be scrolled to before it exists. The
+   * watcher that follows the document would get there eventually; this
+   * looks a little sooner and a few times over, so the step reads as one
+   * movement rather than a jump and then a correction.
+   */
+  function chaseMark(comment) {
+    var tries = 0;
+    (function look() {
+      // The reviewer moved on, or the card was closed while the screen was
+      // still drawing. Either way nothing here is wanted any more.
+      if (popup.hidden || selected !== comment.id || !byId(comment.id)) return;
+      blocks = blockIndex();
+      renderPins();
+      if (selected === comment.id) placePopup(comment);
+      if (revealMark(comment)) return;
+      if (++tries > 8) return;
+      window.setTimeout(look, 70);
+    })();
+  }
+
+  function resolveAndNext(comment) {
+    var reopening = comment.resolved;
+    comment.resolved = !comment.resolved;
+    writeAll();
+    render();
+    if (!reopening) stepMark(1);
   }
 
   /* One row of the thread: the comment itself, or one reply to it. */
@@ -2188,19 +2569,11 @@ export const OVERLAY_SCRIPT = `(function () {
     popMenu = el("div", "co-pop-menu");
 
     /*
-     * Only when the plugin named a tracker, and only while this comment has
-     * not been filed. A Send action that could file a second issue for the
-     * same comment is worse than no Send action at all.
+     * Editing and deleting are authoring, so a build with commenting off
+     * has neither -- and with the tracker's Send now a button in the foot,
+     * that leaves nothing at all for this menu to hold. The button that
+     * opens it is left off in that case rather than opening an empty card.
      */
-    if (TRACKER && !comment.external) {
-      var file = el("button", "co-pop-menu-item", "Send to " + TRACKER);
-      file.addEventListener("click", function () {
-        closePopMenu();
-        relay(comment);
-      });
-      popMenu.appendChild(file);
-    }
-
     var edit = el("button", "co-pop-menu-item", "Edit");
     edit.addEventListener("click", function () {
       closePopMenu();
@@ -2225,9 +2598,13 @@ export const OVERLAY_SCRIPT = `(function () {
 
     popMenu.appendChild(edit);
     popMenu.appendChild(remove);
-    popMenu.style.top = anchor.offsetTop + anchor.offsetHeight + 4 + "px";
-    popMenu.style.right = "8px";
     popup.appendChild(popMenu);
+    // Opened upward, now that the button that opens it is in the foot: a
+    // menu hung below that would fall outside a card which clips what
+    // overflows it. Measured rather than guessed, since the menu's height
+    // is whatever its rows come to.
+    popMenu.style.top = Math.max(4, anchor.offsetTop - popMenu.offsetHeight - 4) + "px";
+    popMenu.style.right = "8px";
   }
 
   /* --- the popup's priority menu ------------------------------------ */
@@ -2400,6 +2777,7 @@ export const OVERLAY_SCRIPT = `(function () {
       // Left by a person, in a browser. Only a tool writing into the review
       // file ever fills this in.
       agent: null,
+      imported: null,
       // Nothing has been filed from it yet, and only the plugin can.
       external: null,
       replies: [],
@@ -2413,6 +2791,11 @@ export const OVERLAY_SCRIPT = `(function () {
   /* --- modes -------------------------------------------------------- */
 
   function setMode(next) {
+    // A build with no comment mode must not be put into one by a keystroke,
+    // a deep link, or anything else that calls this with a name it has no
+    // button for: the capture sheet would go over the page with no visible
+    // way to take it off again.
+    if (next === "comment" && !CAN_COMMENT) return;
     mode = next;
     capture.hidden = next !== "comment";
     panel.hidden = next !== "review";
@@ -2455,16 +2838,11 @@ export const OVERLAY_SCRIPT = `(function () {
     })(FILTERS[g]);
   }
 
-  for (var y = 0; y < orderBtns.length; y++) {
-    (function (name) {
-      orderBtns[y].addEventListener("click", function () {
-        if (sortBy === name) return;
-        sortBy = name;
-        writePrefs();
-        renderPanel();
-      });
-    })(ORDERS[y][0]);
-  }
+  sortBtn.addEventListener("click", function () {
+    sortBy = sortBy === "priority" ? "time" : "priority";
+    writePrefs();
+    renderPanel();
+  });
 
   sideBtn.addEventListener("click", function () {
     side = side === "right" ? "left" : "right";
@@ -2513,6 +2891,7 @@ export const OVERLAY_SCRIPT = `(function () {
     row.appendChild(el("span", null, label));
     if (hint) row.appendChild(el("span", "co-menu-key", hint));
     row.addEventListener("click", function () {
+      if (row.hasAttribute("disabled")) return;
       closeMenu();
       onClick();
     });
@@ -2529,13 +2908,41 @@ export const OVERLAY_SCRIPT = `(function () {
     }
     menu = el("div", "co-menu");
 
+    // The name prefills the author of a comment, so on a build where no
+    // comment can be written it is a setting with nothing to set.
+    if (CAN_COMMENT) {
+      menu.appendChild(
+        item("Change name", ICONS.user, null, function () {
+          askName(function () {
+            render();
+          });
+        })
+      );
+    }
+    menu.appendChild(el("div", "co-menu-rule"));
+
+    /*
+     * The two halves of carrying a review somewhere else. In the settings
+     * menu rather than in the panel because they are about the review as a
+     * whole, not about the list the panel is showing: exporting while a
+     * filter is on still writes every comment out.
+     */
+    var out = item("Export comments", ICONS.download, null, exportComments);
+    if (!all.length) out.setAttribute("disabled", "");
+    out.setAttribute(
+      "title",
+      all.length
+        ? "Write every comment in this review to a file"
+        : "Nothing to export yet"
+    );
+    menu.appendChild(out);
     menu.appendChild(
-      item("Change name", ICONS.user, null, function () {
-        askName(function () {
-          render();
-        });
+      item("Import comments", ICONS.upload, null, function () {
+        importComments();
       })
     );
+
+    menu.appendChild(el("div", "co-menu-rule"));
     menu.appendChild(
       item("Clear comments on this page", ICONS.trash, null, function () {
         confirmClear();
@@ -2607,6 +3014,329 @@ export const OVERLAY_SCRIPT = `(function () {
     }
     wrap.hidden = next;
     notch.hidden = next;
+  }
+
+  /* --- carrying a review between builds ------------------------------- */
+
+  /*
+   * Why this exists at all.
+   *
+   * A review lives in this browser's localStorage, and in the vault when the
+   * preview is being served by the plugin. A published build has neither:
+   * the site is static files on someone else's hosting, so there is nothing
+   * to sync to and the comments live only in whichever browser made them.
+   * Clear the site data, open the site on a laptop instead, or hand your
+   * notes to the person who has to act on them, and they are gone.
+   *
+   * A file is the answer that needs no server. The document written here is
+   * the same shape the plugin's own review file has -- \`payload()\` builds
+   * both -- so an export from a published site imports into a preview, and
+   * the plugin's import command reads it as it reads its own.
+   */
+
+  /** A filename a person can find again: the site, and the day. */
+  function exportName() {
+    var stem = squash(SITE).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    var day = new Date().toISOString().slice(0, 10);
+    return "review-" + (stem || "site") + "-" + day + ".json";
+  }
+
+  /*
+   * Whether what the publisher wrote down is somewhere to click or
+   * somewhere to copy.
+   *
+   * An address and a web address are the two things anyone actually puts
+   * here, and both are worth making clickable: a reader who has to retype
+   * an email address out of a dialog is a reader who does not send the
+   * file. Anything else is shown as the words it is.
+   */
+  function contactHref(value) {
+    // Spelled out rather than matched with a pattern: this file is a
+    // template literal, where a backslash belongs to the template before it
+    // belongs to the regular expression, and two escapes deep is not where
+    // anyone should have to reason about an email address.
+    var low = value.toLowerCase();
+    if (low.indexOf("http://") === 0 || low.indexOf("https://") === 0) return value;
+    var at = value.indexOf("@");
+    var dot = value.indexOf(".", at);
+    if (at > 0 && dot > at + 1 && dot < value.length - 1 && value.indexOf(" ") === -1) {
+      return "mailto:" + value;
+    }
+    return "";
+  }
+
+  function exportComments() {
+    if (!all.length) return;
+    var name = exportName();
+    var blob = new Blob([payload()], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    // Appended before the click: a link not in the document does not
+    // download in every browser, and removing it immediately after is
+    // enough because the click has already been dispatched.
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    // Deferred, because revoking the URL in the same tick cancels the
+    // download it was handed to in some browsers.
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 1000);
+
+    reportExport(name);
+  }
+
+  /*
+   * What to do with the file, said at the moment it is saved.
+   *
+   * A silent download is the right behaviour for a preview, where the
+   * vault already has the comments and the file is a convenience. It is
+   * the wrong behaviour for a published site, where the file is the only
+   * way the review reaches anybody: a reviewer who finds a .json in their
+   * Downloads folder and does not know who wants it has not fed back, they
+   * have made a file.
+   */
+  function reportExport(name) {
+    openModal("Review saved", function (body) {
+      body.appendChild(
+        el("p", null, count(all.length, "comment") + " saved as " + name + ".")
+      );
+
+      if (CONTACT) {
+        var line = el("p", null, "Send it to ");
+        var href = contactHref(CONTACT);
+        if (href) {
+          var link = el("a", "co-ext", CONTACT);
+          link.setAttribute("href", href);
+          link.setAttribute("target", "_blank");
+          link.setAttribute("rel", "noreferrer noopener");
+          line.appendChild(link);
+        } else {
+          line.appendChild(el("strong", null, CONTACT));
+        }
+        line.appendChild(document.createTextNode("."));
+        body.appendChild(line);
+      }
+
+      // Only where there is no plugin behind the page. In a preview the
+      // comments are already in the vault and the file is a spare copy,
+      // which is a different thing to be told.
+      /*
+       * The two situations are different and the note says which. On a
+       * published page the file is the only copy that leaves the browser,
+       * and it also says what the person receiving it should do with it --
+       * the review folder is the door that puts the comments back on their
+       * notes, and a file sitting in an inbox is not a review.
+       */
+      body.appendChild(
+        el(
+          "p",
+          "co-modal-note",
+          served
+            ? "Your comments are already saved in the vault. This file is a copy to keep or pass on."
+            : "Comments live in this browser only, so this file is the only copy that leaves it."
+        )
+      );
+      if (!served) {
+        body.appendChild(
+          el(
+            "p",
+            "co-modal-note",
+            "Whoever receives it can drop it in their vault's review folder and run Import review comments."
+          )
+        );
+      }
+
+      var done = el("button", "co-submit", "Done");
+      done.addEventListener("click", closeModal);
+      body.appendChild(done);
+    });
+  }
+
+  /*
+   * Taking a review in from a file.
+   *
+   * Additive, never destructive. A comment whose id this browser already
+   * holds is left exactly as it is: the file may be older than what is on
+   * screen, and there is no way to tell from here which copy is right. So
+   * an import can only ever add, which means importing the same file twice
+   * changes nothing the second time and a reviewer cannot lose work by
+   * picking the wrong file.
+   */
+  /*
+   * The page-to-note mapping the plugin holds, when there is one.
+   *
+   * Asked for at the moment of an import and never otherwise, so an
+   * ordinary page load costs nothing. A published build has no plugin to
+   * ask and gets an empty mapping, which is the right answer: there is no
+   * vault on the other side of it to map into.
+   */
+  var PAGES_API = "/api/pages";
+
+  function withPages(then) {
+    if (!served) {
+      then({});
+      return;
+    }
+    fetch(PAGES_API, { headers: { Accept: "application/json" } })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        var pages = data && data.pages;
+        then(pages && typeof pages === "object" ? pages : {});
+      })
+      .catch(function () {
+        then({});
+      });
+  }
+
+  function ingest(raw, fallbackName, pages) {
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      return { error: "That file is not JSON." };
+    }
+    if (!parsed || typeof parsed !== "object" || !parsed.comments) {
+      return { error: "That file is not a review: it has no comments in it." };
+    }
+    if (!parsed.comments.length && !Object.prototype.hasOwnProperty.call(parsed, "comments")) {
+      return { error: "That file is not a review: it has no comments in it." };
+    }
+    if (Object.prototype.toString.call(parsed.comments) !== "[object Array]") {
+      return { error: "That file is not a review: its comments are not a list." };
+    }
+
+    var from = typeof parsed.site === "string" && parsed.site ? parsed.site : fallbackName;
+    var known = Object.create(null);
+    for (var i = 0; i < all.length; i++) known[all[i].id] = true;
+
+    var added = 0;
+    var already = 0;
+    var unreadable = 0;
+    var matched = 0;
+    for (var j = 0; j < parsed.comments.length; j++) {
+      var row = tidy(parsed.comments[j]);
+      if (!row) {
+        unreadable++;
+        continue;
+      }
+      if (known[row.id]) {
+        already++;
+        continue;
+      }
+      /*
+       * A review that came back from the published site keys its comments
+       * on page URLs, because a published page must not carry vault paths.
+       * Put the notes back, so the comments land on the pages they are
+       * about rather than looking like they belong somewhere this build
+       * has never heard of -- which is what they did before: listed under
+       * a heading named after a URL, with no pin and a link that opened
+       * nothing.
+       */
+      var note = pages && pages[row.sourcePath];
+      if (note && note !== row.sourcePath) {
+        row.sourcePath = note;
+        matched++;
+      }
+      // Only on a comment that did not already name a source. One carried
+      // through two imports came from wherever it was first written, and
+      // saying it came from the file it most recently travelled in would
+      // overwrite the true answer with a less useful one.
+      if (!row.imported) row.imported = from;
+      all.push(row);
+      known[row.id] = true;
+      added++;
+    }
+
+    if (added) {
+      writeAll();
+      render();
+    }
+    return {
+      added: added,
+      already: already,
+      unreadable: unreadable,
+      matched: matched,
+      from: from,
+    };
+  }
+
+  /*
+   * The picker, made once and reused.
+   *
+   * In the shadow root but outside the overlay's own wrapper: the wrapper is
+   * hidden wholesale by H, and the picker has to stay clickable from the
+   * menu regardless. Not in the page's own DOM, which this overlay does not
+   * write to -- the preview has to stay a faithful picture of a publish.
+   */
+  var picker = document.createElement("input");
+  picker.setAttribute("type", "file");
+  picker.setAttribute("accept", "application/json,.json");
+  picker.style.display = "none";
+  shadow.appendChild(picker);
+  picker.addEventListener("change", function () {
+    var file = picker.files && picker.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result || "");
+      withPages(function (pages) {
+        reportImport(ingest(text, file.name, pages));
+      });
+      // Cleared so that picking the same file again fires another change.
+      picker.value = "";
+    };
+    reader.onerror = function () {
+      reportImport({ error: "That file could not be read." });
+      picker.value = "";
+    };
+    reader.readAsText(file);
+  });
+
+  function importComments() {
+    picker.click();
+  }
+
+  function reportImport(result) {
+    openModal(result.error ? "That did not work" : "Comments imported", function (body) {
+      if (result.error) {
+        body.appendChild(el("p", null, result.error));
+        return;
+      }
+      body.appendChild(
+        el(
+          "p",
+          null,
+          result.added
+            ? "Added " + count(result.added, "comment") + " from " + result.from + "."
+            : "Nothing new: every comment in that file is already here."
+        )
+      );
+      var notes = [];
+      // Worth saying, because it is the difference between a review that
+      // landed on the pages it is about and one that merely arrived.
+      if (result.matched) {
+        notes.push(
+          count(result.matched, "comment") + " came from the published site and were matched to their notes"
+        );
+      }
+      // Said rather than quietly dropped: a reviewer who imports a file and
+      // sees a smaller number than they expected is owed the difference.
+      if (result.already) {
+        notes.push(count(result.already, "comment") + " already here, left alone");
+      }
+      if (result.unreadable) {
+        notes.push(count(result.unreadable, "row") + " could not be read");
+      }
+      if (notes.length) body.appendChild(el("p", "co-modal-note", notes.join(". ") + "."));
+      var done = el("button", "co-submit", "Done");
+      done.addEventListener("click", closeModal);
+      body.appendChild(done);
+    });
   }
 
   /* --- the modal ------------------------------------------------------ */
@@ -2774,6 +3504,7 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
 
+    if (key === "c" && !CAN_COMMENT) return;
     if (key === "v" || key === "c" || key === "r") {
       event.preventDefault();
       setMode(key === "v" ? "view" : key === "c" ? "comment" : "review");
@@ -2920,8 +3651,7 @@ export const OVERLAY_SCRIPT = `(function () {
     // clicked the row in should still be open when they arrive.
     setMode("review");
     openPopup(comment.id);
-    var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
-    if (pin && pin.scrollIntoView) pin.scrollIntoView({ behavior: "smooth", block: "center" });
+    revealMark(comment);
   }
 
   setMode("view");

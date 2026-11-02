@@ -153,6 +153,7 @@ describe("how the panel is ordered", () => {
       "What to publish",
       "Appearance",
       "GitHub",
+      "Password",
       "On startup",
       "Related plugins",
     ]);
@@ -162,6 +163,7 @@ describe("how the panel is ordered", () => {
       "What to publish",
       "Appearance",
       "GitHub",
+      "Password",
       "Review",
       "Issue tracker",
       "On startup",
@@ -178,6 +180,9 @@ describe("how the panel is ordered", () => {
       "What to publish",
       "Appearance",
       "GitHub",
+      // Always shown, like every other section: the panel does not
+      // rearrange itself as setup progresses.
+      "Password",
       "On startup",
       "Related plugins",
     ]);
@@ -250,6 +255,67 @@ describe("the review overlay, as a build option", () => {
  * the user has to be able to correct: the repository a site is pushed to is
  * often not the one its source is in.
  */
+/**
+ * The folders left out of whatever the scope took in. The second half of the
+ * Scope sentence, and the first setting that lets a vault be published whole
+ * without publishing all of it.
+ */
+describe("excluded folders", () => {
+  function field(root: HTMLElement): HTMLTextAreaElement | null {
+    return row(root, "Exclude folders")?.querySelector("textarea") ?? null;
+  }
+
+  it("is offered at every scope, not only for a vault published whole", () => {
+    expect(field(render({ site: { folder: "" } }))).not.toBeNull();
+    expect(field(render({ site: { folder: "notes" } }))).not.toBeNull();
+  });
+
+  it("shows the stored list one path per line", () => {
+    const panel = render({ site: { folder: "", excludeFolders: ["Journal", "People"] } });
+    expect(field(panel)?.value).toBe("Journal\nPeople");
+  });
+
+  // A list of paths is written one per line, and a folder is allowed a
+  // comma in its name -- so what is typed is split on lines and tidied.
+  it("stores what was typed as a clean list", async () => {
+    const target = host({ site: { folder: "" } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    const input = field(tab.containerEl);
+    if (!input) throw new Error("no field");
+    input.value = " Journal/ \n\n/People\n";
+    input.dispatchEvent(new Event("input"));
+
+    expect(target.settings.site.excludeFolders).toEqual(["Journal", "People"]);
+  });
+
+  // "Publish notes, except notes." The build's honest answer is an empty
+  // site, and this is the only place where saying so is free.
+  it("warns when an entry takes out the whole scope", () => {
+    const panel = render({ site: { folder: "notes", excludeFolders: ["notes"] } });
+    expect(panel.querySelector(".osp-settings-warning")?.textContent).toContain(
+      "contains everything you are publishing",
+    );
+  });
+
+  it("says nothing about a subtraction inside the scope", () => {
+    const panel = render({
+      site: { folder: "notes", excludeFolders: ["notes/private"] },
+    });
+    // Named, rather than "no warnings at all": the panel warns about other
+    // things, and a test that forbade all of them would fail for reasons
+    // that have nothing to do with this row.
+    expect(panel.textContent).not.toContain("contains everything you are publishing");
+  });
+
+  // The honest half of the feature: this is a list of what to leave out, so
+  // a folder added tomorrow is published unless somebody remembers.
+  it("says which of the two settings fails safe", () => {
+    expect(desc(render(), "Exclude folders")).toContain("fails safe");
+  });
+});
+
 describe("the source repository link", () => {
   /** The panel's notes and warnings, which is where the answer is printed. */
   function notes(root: HTMLElement): string {

@@ -1,0 +1,183 @@
+import { describe, expect, it } from "vitest";
+import { deriveKey, fromBase64, unlockText } from "./encrypt";
+import { isPage, lockSite, staysClear } from "./lockSite";
+import type { PublishFile } from "../github/client";
+
+const FAST = 1000;
+
+function built(): PublishFile[] {
+  return [
+    { path: "index.html", content: "<!doctype html><title>Acme Q3</title><nav>Clients/Acme</nav>" },
+    { path: "notes/plan.html", content: "<!doctype html><title>Q3 Plan</title><p>Revenue is down.</p>" },
+    { path: "assets/chart.png", content: new Uint8Array([1, 2, 3, 4]).buffer },
+    { path: "assets/site.css", content: "body{}" },
+    { path: "assets/site.js", content: "console.log(1)" },
+    { path: "assets/font.woff2", content: new Uint8Array([9]).buffer },
+    { path: ".nojekyll", content: "" },
+    { path: "CNAME", content: "example.com\n" },
+  ];
+}
+
+async function lockFixture() {
+  const result = await lockSite(built(), "open sesame", FAST);
+  const by = new Map(result.files.map((file) => [file.path, file]));
+  return { result, by };
+}
+
+describe("lockSite", () => {
+  /*
+   * The claim the whole feature rests on: what is published carries none
+   * of the writing, none of the titles and none of the vault's shape.
+   *
+   * Searched with the base64 fields taken out first. Ciphertext is random
+   * to look at, so a short string like "Q3" turns up inside it by pure
+   * chance -- which is what a first version of this test did, and it told
+   * us nothing about leaking. What is worth asserting is that none of the
+   * content is in the parts of the output that are actually readable.
+   */
+  it("publishes no readable trace of the content", async () => {
+    const { result } = await lockFixture();
+    const readable = result.files
+      .map((file) => (typeof file.content === "string" ? file.content : ""))
+      .join("\n")
+      // The three base64 fields, and the payload's own quoted values.
+      .replace(/"(?:data|iv|salt)":"[^"]*"/g, '"<ciphertext>"');
+
+    for (const secret of ["Acme", "Q3", "Revenue is down", "open sesame", "plan.html"]) {
+      expect(readable, secret).not.toContain(secret);
+    }
+  });
+
+  /*
+   * And the ciphertext itself holds none of it either, which is the other
+   * half of the same claim and the one base64 noise cannot fake: the bytes
+   * that come back out are only reachable through the key.
+   */
+  it("holds none of the plaintext in the ciphertext", async () => {
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+    const payload = JSON.parse(
+      shell.slice(
+        shell.indexOf('type="application/json">') + 'type="application/json">'.length,
+        shell.indexOf("</script>"),
+      ),
+    );
+
+    const cipher = new TextDecoder("latin1").decode(fromBase64(payload.data));
+    expect(cipher).not.toContain("Revenue is down");
+    expect(cipher).not.toContain("Q3 Plan");
+  });
+
+  it("leaves a shell that says a password is needed, and nothing else", async () => {
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+
+    expect(shell).toContain("This page is protected");
+    expect(shell).toContain("noindex");
+    expect(shell).toContain("<title>Protected</title>");
+    // Not the site's own name or the page's: both are the author's wording.
+    expect(shell).not.toContain("Q3 Plan");
+    // Relative to the page, so a page one folder down reaches the reader.
+    expect(shell).toContain('src="../assets/unlock.js"');
+  });
+
+  it("gives the real document back to the right password", async () => {
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+    const payload = JSON.parse(
+      shell.slice(
+        shell.indexOf('type="application/json">') + 'type="application/json">'.length,
+        shell.indexOf("</script>"),
+      ),
+    );
+
+    const key = await deriveKey("open sesame", fromBase64(payload.salt), payload.iterations);
+    const inner = JSON.parse(await unlockText(payload, key));
+    expect(inner.html).toContain("Revenue is down");
+    // The page is told which of its own references were encrypted, so it
+    // can fetch and decrypt them once it is up.
+    expect(inner.assets).toContain("assets/chart.png");
+  });
+
+  // An encrypted image cannot be fetched as an image, so it moves aside and
+  // the reader finds it from the reference the page already has.
+  it("moves an attachment to a .enc beside its own name", async () => {
+    const { by } = await lockFixture();
+    expect(by.has("assets/chart.png")).toBe(false);
+    expect(by.has("assets/chart.png.enc")).toBe(true);
+  });
+
+  /*
+   * The reader has to run before the password is known, and the
+   * stylesheets and fonts say nothing about the vault.
+   */
+  it("leaves readable only what has to be readable", async () => {
+    const { by } = await lockFixture();
+    for (const path of [
+      "assets/site.css",
+      "assets/site.js",
+      "assets/font.woff2",
+      ".nojekyll",
+      "CNAME",
+      "assets/unlock.js",
+    ]) {
+      expect(by.has(path), path).toBe(true);
+    }
+    expect(String(by.get("CNAME")?.content)).toBe("example.com\n");
+  });
+
+  it("counts what it locked", async () => {
+    const { result } = await lockFixture();
+    expect(result.pages).toBe(2);
+    expect(result.assets).toBe(1);
+  });
+
+  // One salt per build, one IV per file: the same bytes twice must not
+  // produce the same ciphertext twice.
+  it("uses one salt for the build and a fresh IV for every file", async () => {
+    const same: PublishFile[] = [
+      { path: "a.html", content: "identical" },
+      { path: "b.html", content: "identical" },
+    ];
+    const { files } = await lockSite(same, "pw", FAST);
+    const payloads = files
+      .filter((file) => isPage(file.path))
+      .map((file) => {
+        const text = String(file.content);
+        return JSON.parse(
+          text.slice(
+            text.indexOf('type="application/json">') + 'type="application/json">'.length,
+            text.indexOf("</script>"),
+          ),
+        );
+      });
+
+    expect(payloads[0].salt).toBe(payloads[1].salt);
+    expect(payloads[0].iv).not.toBe(payloads[1].iv);
+    expect(payloads[0].data).not.toBe(payloads[1].data);
+  });
+
+  // The cost travels with the file, so raising it later strands nothing.
+  it("writes the iteration count into every payload", async () => {
+    const { by } = await lockFixture();
+    const asset = JSON.parse(String(by.get("assets/chart.png.enc")?.content));
+    expect(asset.iterations).toBe(FAST);
+  });
+});
+
+describe("what gets locked", () => {
+  it("knows a page from an attachment", () => {
+    expect(isPage("notes/plan.html")).toBe(true);
+    expect(isPage("a.htm")).toBe(true);
+    expect(isPage("assets/chart.png")).toBe(false);
+  });
+
+  it("keeps the reader and the chrome readable, and nothing under assets besides", () => {
+    expect(staysClear("assets/unlock.js")).toBe(true);
+    expect(staysClear("assets/site.css")).toBe(true);
+    expect(staysClear("assets/x.woff2")).toBe(true);
+    // The attachments are the content most worth protecting, and they live
+    // in the same folder as the chrome.
+    expect(staysClear("assets/diagram.png")).toBe(false);
+  });
+});

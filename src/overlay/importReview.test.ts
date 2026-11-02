@@ -31,6 +31,7 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     resolved: false,
     priority: "medium",
     agent: null,
+    imported: null,
     external: null,
     replies: [],
     ...over,
@@ -292,6 +293,53 @@ describe("reviewNote", () => {
     expect(note).toContain("- [ ] Needs a citation.");
     expect(note).toContain("- [ ] Step 4 is out of date.");
     expect(note).toContain("2 comments on 2 notes, 2 still open, from Handbook.");
+  });
+
+  /*
+   * A heading is a link somebody clicks to go and fix the thing. Obsidian
+   * resolves a short link by finding the nearest file of that name, so four
+   * applications published as they are would give four sections headed
+   * `[[index.html]]`, three of which open the wrong one.
+   */
+  it("carries the folder in the link when the filename does not decide", () => {
+    const note = reviewNote({
+      site: "Handbook",
+      now: NOW,
+      comments: [
+        comment({
+          id: "a",
+          sourcePath: "react-default/index.html",
+          text: "Blank page.",
+        }),
+        comment({
+          id: "b",
+          sourcePath: "angular-default/index.html",
+          text: "Also blank.",
+        }),
+      ],
+    });
+
+    expect(note).toContain("## [[react-default/index.html|react-default/index]]");
+    expect(note).toContain("## [[angular-default/index.html|angular-default/index]]");
+    expect(note).not.toContain("## [[index.html]]");
+  });
+
+  // One "index" is no clearer than four, so it is qualified too -- and the
+  // link has to resolve, which for a note means the extension comes off and
+  // for a page published as it was found means it stays on.
+  it("qualifies a lone index, and links each kind the way it resolves", () => {
+    const note = reviewNote({
+      site: "Handbook",
+      now: NOW,
+      comments: [
+        comment({ id: "a", sourcePath: "react-relative/index.html", text: "Good." }),
+        comment({ id: "b", sourcePath: "library/Scope.md", text: "Tighten this." }),
+      ],
+    });
+
+    expect(note).toContain("## [[react-relative/index.html|react-relative/index]]");
+    // Unambiguous, so it stays the short link somebody would write by hand.
+    expect(note).toContain("## [[Scope]]");
   });
 
   // The signifiers the Tasks plugin reads, so a priority set in the browser

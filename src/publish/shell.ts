@@ -154,6 +154,52 @@ export function icon(name: string, className = "osp-icon"): string {
   );
 }
 
+/**
+ * GitHub's own mark, which is the one glyph here that is not ours to draw.
+ *
+ * It needs its own emitter rather than a line in `PATHS`: every other icon on
+ * this site is a stroked outline on a 24 unit grid, and this is a filled
+ * shape on a 16 unit one. Passing it through `icon` would hand it
+ * `fill="none"` and paint nothing at all.
+ *
+ * Octicons' `mark-github`, unaltered. A logo redrawn to match a set is a logo
+ * that no longer is one, and the whole value of putting it in the bar is that
+ * a reader recognises it without reading the word beside it.
+ */
+export function githubMark(className = "osp-icon"): string {
+  return (
+    `<svg class="${className}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">` +
+    `<path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 ` +
+    `0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 ` +
+    `0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 ` +
+    `0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 ` +
+    `2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 ` +
+    `1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 ` +
+    `8c0-4.42 3.58-8 8-8Z"/></svg>`
+  );
+}
+
+/**
+ * Whether an address is one GitHub serves, so the mark and the word are true.
+ *
+ * Only github.com and its subdomains answer yes. A link the user typed at any
+ * other host -- a GitLab project, a self-hosted Forgejo, an Enterprise Server
+ * on a company domain -- gets the branch glyph and a neutral word instead,
+ * because a logo on the wrong service is worse than no logo at all. An
+ * Enterprise Server is the one case this is pessimistic about: there is
+ * nothing in `https://github.acme.com/team/notes` that says what is running
+ * there, and guessing from a hostname is how you end up putting GitHub's mark
+ * on somebody's intranet.
+ */
+function isGitHubAddress(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "github.com" || host.endsWith(".github.com");
+  } catch {
+    return false;
+  }
+}
+
 /* --- command bar ----------------------------------------------------- */
 
 /**
@@ -179,10 +225,20 @@ export function themeSwitch(): string {
 /**
  * The way out to the repository the site came from.
  *
- * One square, the same shape as the menu and the close, carrying no word:
- * the row it sits on has room for the switch beside it and nothing more, and
- * the name of the thing is in `title` and `aria-label` where every other
- * icon-only control in this shell keeps it.
+ * Two shapes for one control, because the two places it appears have
+ * different amounts of room and a different question to answer.
+ *
+ * In the bar it carries its name: at desktop width there is space for a word,
+ * and a word is what tells a reader whether this leads to the site's source
+ * or to the project that built the site. It is drawn to the same height as
+ * the view toggle a row below it -- see `.osp-bar-source` in `theme.ts`,
+ * where the height is written as that control's own sum rather than as a
+ * number copied off it.
+ *
+ * In the drawer it is a square carrying only the mark, like the close and the
+ * light/dark beside it. The drawer's top row is the search field and its
+ * chrome, and a labelled link in it would be taking width off the one thing
+ * most people opened the drawer for.
  *
  * It leaves the site, so it says so the way a link off a site should --
  * `rel="noreferrer noopener"`, and a new tab. A reader who clicks it is
@@ -194,12 +250,30 @@ export function themeSwitch(): string {
  * the setting is off by default, and a button that leads nowhere would be
  * worse than no button. See `sourceLink.ts` for what resolves it.
  */
-export function sourceButton(url: string | undefined, className: string): string {
+export function sourceButton(url: string | undefined, where: "bar" | "drawer"): string {
   if (!url) return "";
+
+  const github = isGitHubAddress(url);
+  const name = github ? "GitHub repo" : "Source repo";
+  const glyph = (className: string) =>
+    github ? githubMark(className) : icon("branch", className);
+
+  if (where === "drawer") {
+    return (
+      `<a class="osp-btn osp-btn-sq osp-panel-source-btn" href="${escapeHtml(url)}" ` +
+      `target="_blank" rel="noreferrer noopener" ` +
+      `aria-label="${name}" title="${name}">${glyph("osp-icon")}</a>`
+    );
+  }
+
+  // `title` as well as the word, because the word says what it is and the
+  // title says where it goes -- and where it goes is the thing a reader
+  // checks before clicking a link off the site they are reading.
   return (
-    `<a class="osp-btn osp-btn-sq ${className}" href="${escapeHtml(url)}" ` +
-    `target="_blank" rel="noreferrer noopener" ` +
-    `aria-label="Source repository" title="Source repository">${icon("branch")}</a>`
+    `<a class="osp-bar-source" href="${escapeHtml(url)}" target="_blank" ` +
+    `rel="noreferrer noopener" title="${escapeHtml(url)}">` +
+    glyph("osp-icon-sm") +
+    `<span>${name}</span></a>`
   );
 }
 
@@ -230,7 +304,7 @@ export function commandBar(input: ShellInput): string {
     // the row where it has always been, and the one control that leaves the
     // site is next to it rather than past it.
     `<div class="osp-bar-actions">` +
-    sourceButton(input.sourceUrl, "osp-bar-source") +
+    sourceButton(input.sourceUrl, "bar") +
     themeSwitch() +
     `</div>` +
     panelToggle() +
@@ -515,7 +589,7 @@ export function vaultPanel(input: ShellInput): string {
     // -- source, then light and dark -- and is absent entirely when no
     // address is set, like its copy up there.
     (input.sourceUrl
-      ? `<div class="osp-panel-source">${sourceButton(input.sourceUrl, "osp-panel-source-btn")}</div>`
+      ? `<div class="osp-panel-source">${sourceButton(input.sourceUrl, "drawer")}</div>`
       : "") +
     `<div class="osp-panel-theme">${themeButton()}</div>` +
     `<button class="osp-btn osp-btn-sq osp-panel-close" type="button" data-osp-panel-close ` +

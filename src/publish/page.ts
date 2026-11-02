@@ -566,24 +566,36 @@ export function buildPage(options: {
     "url" | "title" | "root" | "headings" | "siteName" | "hasSource"
   >;
   /**
-   * Present only in a preview build, and only on a page a note produced.
+   * Present only on a page a note produced, and only when the overlay is on.
    *
    * Its presence is what turns the review overlay on for this page, and
-   * `sourcePath` is what lets an imported comment find the note it is about.
+   * `sourcePath` is the key a page's comments are grouped under.
    *
-   * It must never be set on a publish. A published page carrying the vault
-   * path it was built from would hand a reader the vault's folder structure,
-   * which is the class of leak `privacy.ts` exists to prevent -- so the
-   * publish path does not pass this through rather than passing it as false,
-   * and `page.test.ts` asserts a page built without it carries no trace.
+   * **What must never be published is the vault path, not the overlay.**
+   * A page carrying `notes/Clients/Acme Q3.md` would hand every reader of
+   * the site the vault's folder structure, which is the class of leak
+   * `privacy.ts` exists to prevent. The overlay itself may now go out with
+   * a published build, so the guarantee moved: the caller hands over the
+   * page's own public URL instead of the note's path, and `buildSite.ts`
+   * is the one place that chooses between them. A page built without the
+   * option at all still carries no trace, which `page.test.ts` asserts.
    */
   overlay?: {
-    /** Vault path of the note this page was built from. */
+    /**
+     * What this page's comments are keyed on: the note's vault path in a
+     * preview, the page's own URL in a published build.
+     */
     sourcePath: string;
     /** Prefills the comment author, from settings. */
     reviewer?: string;
     /** Tracker a comment can be filed in, by name, when one is set up. */
     tracker?: string;
+    /** Whether a reader may write comments. Absent means yes. */
+    comments?: boolean;
+    /** Part of a published site rather than a preview. */
+    published?: boolean;
+    /** Where a reader should send an exported review. */
+    contact?: string;
   };
 }): string {
   const { meta, content, headings } = options;
@@ -653,7 +665,7 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}">`
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}">` : ""}
 <link rel="stylesheet" href="${root}assets/obsidian.css">
 <link rel="stylesheet" href="${root}assets/site.css">
-${overlay ? reviewOverlayMeta({ sourcePath: overlay.sourcePath, url: meta.url, siteName: meta.siteName, reviewer: overlay.reviewer, tracker: overlay.tracker }) : ""}
+${overlay ? reviewOverlayMeta({ sourcePath: overlay.sourcePath, url: meta.url, siteName: meta.siteName, reviewer: overlay.reviewer, tracker: overlay.tracker, comments: overlay.comments, published: overlay.published, contact: overlay.contact }) : ""}
 <script>${THEME_BOOT}</script>
 </head>
 <body>
@@ -764,9 +776,46 @@ export interface ReviewOverlayConfig {
   tracker?: string;
   /** Stamp block anchors in the browser, for a page we did not render. */
   stamp?: boolean;
+  /**
+   * Whether this page's reader may write comments, rather than only read
+   * the ones that are already there.
+   *
+   * Absent means yes, which is what a preview is for. A published page sets
+   * it false unless the vault's owner turned commenting on: the overlay is
+   * still there -- pins, the panel, import and export all work -- but
+   * nothing in it writes a new comment, replies to one, or edits one.
+   */
+  comments?: boolean;
+  /**
+   * This page is part of a published site, not a preview.
+   *
+   * The overlay needs to know, because it decides whether to talk to the
+   * plugin from the page's own protocol -- and a published site is https
+   * like a served preview is. Without this it would POST the reader's whole
+   * review to `/api/comments` on the site's own host every time they
+   * changed anything.
+   */
+  published?: boolean;
+  /**
+   * Where a reader should send a review they have exported.
+   *
+   * A published site has no way back: the file a reader downloads reaches
+   * the site's owner only if the reader knows where to send it. Empty means
+   * the export says what it saved and nothing more.
+   */
+  contact?: string;
 }
 
-/** The configuration meta tag. Carries the vault path, so preview only. */
+/**
+ * The configuration meta tag.
+ *
+ * `sourcePath` is whatever the caller hands over, and the caller is the one
+ * that knows which kind of build this is. A preview passes the vault path,
+ * which is what lets a comment be filed against a note. A publish passes
+ * the page's own public URL instead -- the overlay only needs a stable key
+ * to group a page's comments under, and the vault's folder names are not
+ * something to hand to every reader of the site. See `buildSite.ts`.
+ */
 export function reviewOverlayMeta(config: ReviewOverlayConfig): string {
   const content = JSON.stringify({
     sourcePath: config.sourcePath,
@@ -775,6 +824,13 @@ export function reviewOverlayMeta(config: ReviewOverlayConfig): string {
     reviewer: config.reviewer ?? "",
     tracker: config.tracker ?? "",
     ...(config.stamp ? { stamp: true } : {}),
+    // Written only when it is false: a preview, which is every page that
+    // existed before this flag did, means the same thing by leaving it out.
+    ...(config.comments === false ? { comments: false } : {}),
+    // Both written only when true or set, so a preview page carries exactly
+    // what it carried before either of these existed.
+    ...(config.published ? { published: true } : {}),
+    ...(config.contact ? { contact: config.contact } : {}),
   });
   return `<meta name="osp-review" content="${escapeHtml(content)}">`;
 }
@@ -798,7 +854,7 @@ export function reviewOverlayAppendix(config: ReviewOverlayConfig): string {
   // a page one folder down reaches the same file as one at the root.
   const root = pathToRoot(config.url);
   return (
-    `\n<!-- osp-review:start -- added to this preview only; not published -->\n` +
+    `\n<!-- osp-review:start -- added by the publisher; not in the source file -->\n` +
     reviewOverlayMeta(config) +
     `\n<script src="${root}${OVERLAY_SCRIPT_PATH}"></script>\n` +
     `<!-- osp-review:end -->\n`

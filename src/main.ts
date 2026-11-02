@@ -41,6 +41,13 @@ import {
   reviewNoteName,
   splitReviewInputs,
 } from "./overlay/importReview";
+import { lockSite } from "./publish/lockSite";
+import {
+  PAGE_MAP_FILE,
+  buildPageMap,
+  parsePageMap,
+  resolveToNotes,
+} from "./overlay/pageMap";
 import { OverlayComment, OverlayExport, OverlayExternalIssue } from "./overlay/types";
 import {
   RelayOutcome,
@@ -133,6 +140,36 @@ interface Settings {
    */
   commentOverlay: {
     enabled: boolean;
+    /**
+     * Put the overlay in published builds as well as previews.
+     *
+     * Off until asked for. A published page with the overlay on it carries
+     * the bundle to every reader of the site, which is a decision about the
+     * site rather than about how its owner works -- so it is opt-in, like
+     * every other thing here that reaches the public build.
+     *
+     * The vault path never travels with it: see `published` in
+     * `buildSite.ts` for the substitution that makes this safe.
+     */
+    onPublish: boolean;
+    /**
+     * Let a reader of the published site write comments, not only read them.
+     *
+     * Off, and nested under `onPublish`: shipping the overlay is one
+     * decision and inviting the public to write into it is another. With
+     * this off the published overlay is a reader -- pins, the panel, import
+     * and export -- and nothing in it writes a comment.
+     */
+    publishComments: boolean;
+    /**
+     * Where a reader of the published site should send an exported review.
+     *
+     * An email address or a URL, or empty. It reaches the published page,
+     * so it is a thing the owner is choosing to publish -- which is why it
+     * is typed in rather than taken from the GitHub settings, where the
+     * address is one somebody gave us for a different purpose.
+     */
+    publishContact: string;
     /** Prefills the comment author in the overlay. */
     reviewer: string;
     /** Vault folder the review file is saved in, and imported from. */
@@ -148,6 +185,21 @@ interface Settings {
    * needs the GitHub section as well, which is a thing the build is
    * deliberately not handed. See `sourceLink.ts`.
    */
+  /**
+   * A password the published site is encrypted behind, or empty.
+   *
+   * Outside `site` on purpose, like `commentOverlay` above and for the
+   * same structural reason: nothing that becomes a `SiteConfig` field can
+   * reach a page by accident, and this is the one value in the plugin that
+   * must never be published. The build never sees it. `lockSite` runs over
+   * the finished files afterwards, which is also why a preview is never
+   * locked -- you are reading your own vault.
+   *
+   * Stored through the same keychain the tracker token uses, so what sits
+   * in the vault's data file is ciphertext wherever the platform has
+   * somewhere to keep a key.
+   */
+  publishPassword: string;
   sourceLink: SourceLinkSettings;
   /**
    * Filing a review comment as an issue in a tracker.
@@ -241,10 +293,17 @@ const DEFAULT_SETTINGS: Settings = {
     requireFrontmatterFlag: null,
     updatedProperty: "updated",
     pinnedProperty: "pinned",
+    // Nothing excluded until somebody says so. The empty list is also what
+    // makes the setting safe to add to an existing vault: a build after an
+    // upgrade publishes exactly what the build before it did.
+    excludeFolders: [],
     theme: DEFAULT_THEME,
   },
   commentOverlay: {
     enabled: false,
+    onPublish: false,
+    publishComments: false,
+    publishContact: "",
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
   },
@@ -252,6 +311,7 @@ const DEFAULT_SETTINGS: Settings = {
   // published site and not one to make on somebody's behalf; blank because
   // the repository the site publishes to is the right guess once the link is
   // asked for, and no guess at all before that.
+  publishPassword: "",
   sourceLink: { enabled: false, url: "" },
   relay: {
     provider: "none",
@@ -487,6 +547,9 @@ export default class VaultPublisherPlugin extends Plugin {
     this.settings.relay.token = relay.token;
     this.relayTokenState = relay.state;
     this.sealedRelayToken = relay.sealed;
+    const sitePassword = revealToken(this.settings.publishPassword);
+    this.settings.publishPassword = sitePassword.token;
+    this.sealedPassword = sitePassword.sealed;
 
     // Write straight away, so the next load finds our own data and the
     // migration does not run again -- including after a deliberate reset.
@@ -531,6 +594,19 @@ export default class VaultPublisherPlugin extends Plugin {
 
   /** The tracker token exactly as it sits on disk. */
   sealedRelayToken = "";
+  sealedPassword = "";
+
+  /**
+   * Sets the password the published site is encrypted behind.
+   *
+   * Held like the two tokens: in memory as typed, sealed on the way to
+   * disk, and the sealed copy dropped the moment a new one is set so a
+   * stale ciphertext cannot be written back over it.
+   */
+  setPublishPassword(value: string): void {
+    this.settings.publishPassword = value;
+    this.sealedPassword = "";
+  }
 
   /** Replaces the tracker token, on the same terms as `setToken`. */
   setRelayToken(value: string): void {
@@ -573,11 +649,16 @@ export default class VaultPublisherPlugin extends Plugin {
       this.settings.relay.token,
       this.sealedRelayToken,
     );
+    const password = tokenForStorage(
+      this.settings.publishPassword,
+      this.sealedPassword,
+    );
 
     await this.saveData({
       ...this.settings,
       github: { ...this.settings.github, token },
       relay: { ...this.settings.relay, token: relayToken },
+      publishPassword: password,
     });
   }
 
@@ -833,6 +914,45 @@ export default class VaultPublisherPlugin extends Plugin {
   // -- review --------------------------------------------------------------
 
   /** Everything the review server may touch, and nothing else. */
+  /**
+   * Records which note produced which published page.
+   *
+   * In the review folder, beside the comments, because that is the folder
+   * that already holds the reviewer's working files and is not part of the
+   * site. A failure here is said and not thrown: the site is published by
+   * this point, and the worst a missing mapping does is leave a future
+   * import linking to pages instead of notes.
+   */
+  private async writePageMap(
+    pages: Array<{ url: string; sourcePath: string }>,
+  ): Promise<void> {
+    const adapter = this.app.vault.adapter;
+    const folder = normalizePath(this.settings.commentOverlay.reviewFolder);
+    try {
+      if (!(await adapter.exists(folder))) await adapter.mkdir(folder);
+      await adapter.write(
+        normalizePath(`${folder}/${PAGE_MAP_FILE}`),
+        JSON.stringify(buildPageMap(pages, new Date()), null, 2),
+      );
+    } catch {
+      // Left undone. An import without it still works; it links a comment
+      // to the page it was left on rather than to the note behind it.
+    }
+  }
+
+  /** The mapping a past publish left behind, or nothing. */
+  private async readPageMap(): Promise<Record<string, string>> {
+    const adapter = this.app.vault.adapter;
+    const path = normalizePath(
+      `${this.settings.commentOverlay.reviewFolder}/${PAGE_MAP_FILE}`,
+    );
+    try {
+      return parsePageMap((await adapter.exists(path)) ? await adapter.read(path) : null);
+    } catch {
+      return {};
+    }
+  }
+
   private reviewStore(): ReviewStore {
     const adapter = this.app.vault.adapter;
     const folder = () => normalizePath(this.settings.commentOverlay.reviewFolder);
@@ -841,6 +961,10 @@ export default class VaultPublisherPlugin extends Plugin {
     return {
       readComments: async () => {
         const path = commentsPath();
+        return (await adapter.exists(path)) ? adapter.read(path) : null;
+      },
+      readPages: async () => {
+        const path = normalizePath(`${folder()}/${PAGE_MAP_FILE}`);
         return (await adapter.exists(path)) ? adapter.read(path) : null;
       },
       writeComments: async (body: string) => {
@@ -990,6 +1114,16 @@ export default class VaultPublisherPlugin extends Plugin {
       return true;
     });
 
+    /*
+     * A review that came back from the published site names pages, because
+     * a published page is keyed on its own URL and never on the vault path
+     * behind it. The mapping a publish left in this folder is what turns
+     * those back into notes, so the note written below links to the writing
+     * rather than to the HTML. A comment from a preview already names its
+     * note and passes through untouched.
+     */
+    const resolved = resolveToNotes(unique, await this.readPageMap());
+
     // Two reviews in a day is the normal case -- read, import, fix some of
     // it, go round again -- so the second one must not overwrite the first.
     const existing = new Set(listing.files);
@@ -998,7 +1132,7 @@ export default class VaultPublisherPlugin extends Plugin {
       existing.has(normalizePath(`${folder}/${candidate}`)),
     );
     const target = normalizePath(`${folder}/${name}`);
-    await adapter.write(target, reviewNote({ comments: unique, site, now }));
+    await adapter.write(target, reviewNote({ comments: resolved, site, now }));
 
     for (const path of drops) {
       // Renaming rather than deleting, and tolerating a failure: the note is
@@ -1609,8 +1743,64 @@ export default class VaultPublisherPlugin extends Plugin {
         say(`WARNING: only ${remaining} GitHub API requests left this hour`);
       }
 
-      const result = await this.build();
+      const overlay = this.settings.commentOverlay;
+      const result = await this.build({
+        /*
+         * The overlay in the published site, when it was asked for.
+         *
+         * `published` is what keeps the vault out of it: the comment key
+         * becomes each page's own URL rather than the note behind it. And
+         * commenting is a second switch, so the normal shape of this is a
+         * site whose readers can read a review and not write one.
+         */
+        reviewOverlay: overlay.onPublish
+          ? {
+              reviewer: overlay.reviewer,
+              published: true,
+              comments: overlay.publishComments,
+              contact: overlay.publishContact,
+            }
+          : undefined,
+      });
       say(`built ${result.pages.length} pages, ${result.files.length} files`);
+
+      /*
+       * Encrypting the site, when one was asked for.
+       *
+       * After the build and before the manifest, so that what is diffed,
+       * uploaded and recorded is what will actually be served. In place,
+       * because every count and every check below this point should be
+       * about the files going out rather than the ones that were built.
+       *
+       * Note what this is not: a login. See `encrypt.ts`.
+       */
+      // Already in the clear: settings are revealed once at load, like the
+      // two tokens beside it.
+      const password = this.settings.publishPassword;
+      if (password) {
+        const locked = await lockSite(result.files, password);
+        result.files.length = 0;
+        result.files.push(...locked.files);
+        say(
+          `locked ${locked.pages} pages and ${locked.assets} attachments behind a password`,
+        );
+      }
+
+      /*
+       * What this publish published, written into the vault.
+       *
+       * The pages carry their own URL as the key a comment is grouped
+       * under, so that no vault path reaches a reader. This is the other
+       * half of that: the mapping back, kept where it is safe to keep it,
+       * so an imported review links to the writing rather than to the
+       * page. Written before the upload rather than after, because it
+       * describes the build either way and a failed upload does not make
+       * the mapping wrong.
+       */
+      if (overlay.onPublish) {
+        await this.writePageMap(result.pages);
+        say(`recorded ${result.pages.length} page sources for review imports`);
+      }
 
       // Before anything else is checked. A publish sends a complete tree, so
       // committing a build that selected nothing does not publish an empty
@@ -1630,6 +1820,22 @@ export default class VaultPublisherPlugin extends Plugin {
       // without going looking.
       for (const skip of result.skipped) {
         say(`SKIPPED ${skip.path}: ${skip.reason}`);
+      }
+
+      // What the author asked to be left out, and what it cost. A publish is
+      // the moment this matters: a folder excluded is a folder that was on
+      // the live site until now, and one that excluded nothing is a setting
+      // that is not protecting what its author thinks it is.
+      if (result.excluded.length) {
+        const kept = result.excluded.reduce((n, row) => n + row.count, 0);
+        say(`excluded folders left out ${kept} file(s)`);
+        const missed = result.excluded.filter((row) => row.count === 0);
+        for (const row of missed) {
+          say(
+            `WARNING: nothing in this build matched the excluded path "${row.entry}" ` +
+              `-- check it against the vault`,
+          );
+        }
       }
 
       // Said for the same reason as the skips: a page that went out
@@ -1815,6 +2021,22 @@ export default class VaultPublisherPlugin extends Plugin {
           ? `, ${result.assetsUnresolved.length} unresolved`
           : ""),
     );
+    if (result.excluded.length) {
+      const kept = result.excluded.reduce((n, row) => n + row.count, 0);
+      lines.push(
+        `Left out by excluded folders: ${kept} file(s) across ` +
+          `${result.excluded.length} entr${result.excluded.length === 1 ? "y" : "ies"}`,
+      );
+      for (const row of result.excluded) {
+        // An entry that excluded nothing is the one worth reading: it is
+        // almost always a path that is not in the vault, and a setting for
+        // keeping things out has no other way of saying it did not work.
+        lines.push(
+          `- \`${row.entry}\` — ${row.count === 0 ? "**nothing matched this path**" : `${row.count} file(s)`}`,
+        );
+      }
+    }
+
     lines.push("");
 
     lines.push(

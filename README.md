@@ -34,6 +34,7 @@ src/publish/    turning rendered HTML into a site
   source.ts       a note's markdown, minus what the rendering hides
   htmlFiles.ts    the vault's own .html pages, published untouched
   sourceLink.ts   which repository the site's bar links back to, if any
+  excludeFolders.ts  folders the author keeps out of whatever the scope took in
   landing.ts      the pages no note wrote: homepage, browse, a page per tag
   theme.ts        the site's own stylesheet (placeholder; design work pending)
   harvestCss.ts   lifts layout-critical rules from the running app

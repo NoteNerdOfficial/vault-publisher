@@ -90,6 +90,20 @@ describe("selectHtmlFiles", () => {
     ]);
   });
 
+  // A folder kept out of the site is kept out whatever is in it: a page
+  // published as-is is as public as a note, and the clippings folder is
+  // exactly the kind of thing somebody excludes.
+  it("leaves out the folders the author excluded", () => {
+    const selected = selectHtmlFiles(
+      stubApp(VAULT),
+      config({ folder: "", excludeFolders: ["clippings"] }),
+    );
+    expect(selected.map((f) => f.path)).toEqual([
+      "site/demo/chart.html",
+      "site/index.html",
+    ]);
+  });
+
   /**
    * The recursion this feature would otherwise have shipped with. The
    * preview is written into the vault as HTML, so the second build would

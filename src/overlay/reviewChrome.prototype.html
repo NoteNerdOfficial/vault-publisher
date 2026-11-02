@@ -1,0 +1,1656 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review chrome prototype</title>
+<!--
+  THROWAWAY PROTOTYPE. Not part of the plugin, not built, not deployed.
+
+  Question it answers: what should the review notch and the comment panel
+  look like? Five variants of the whole chrome -- bar plus panel plus where a
+  comment is read -- on a mocked published note page, switchable via
+  ?variant= and the bar at the bottom of the screen.
+
+    current  the design in src/overlay/overlayCss.ts today, reproduced
+    rail     a flush left rail and one continuous column, read like an inbox
+    stepper  a top status bar and one comment at a time, worked as a queue
+    margin   no bar at all; comments live in the margin beside their text
+    combined the iteration: the notch and the floating panel kept as they
+             are, the rail's two-line header on the panel, and the
+             stepper's card anchored at its pin
+
+  The mock data is fabricated. Nothing persists. Open it with:
+    open src/overlay/reviewChrome.prototype.html
+-->
+<style>
+/* ---------------------------------------------------------------- tokens */
+/* Copied from src/overlay/overlayCss.ts so the variants are judged in the
+   real palette. Light is the default; the switcher toggles dark. */
+:root {
+  --co-pin: #d4421e;
+  --co-pin-soft: rgba(212, 66, 30, 0.1);
+  --co-ink: #b3351a;
+  --co-done: #6b7076;
+  --co-bg: #ffffff;
+  --co-bg-2: #f2f3f5;
+  --co-fg: #15181c;
+  --co-fg-2: #596069;
+  --co-fg-3: #6e757d;
+  --co-line: #e1e4e8;
+  --co-aim-line: rgba(212, 66, 30, 0.5);
+  --co-pri-high-fg: #a3123f;
+  --co-pri-high-bg: #fdeaf0;
+  --co-pri-high-line: #f3bdd0;
+  --co-pri-medium-fg: #7a4e00;
+  --co-pri-medium-bg: #fdf2dc;
+  --co-pri-medium-line: #efd9a4;
+  --co-pri-low-fg: #1f5b7a;
+  --co-pri-low-bg: #e6f2f8;
+  --co-pri-low-line: #bbd9e9;
+  --co-r-1: 6px;
+  --co-r-2: 8px;
+  --co-r-3: 12px;
+  --co-shadow: 0 1px 2px rgba(16, 18, 22, 0.06), 0 8px 24px -6px rgba(16, 18, 22, 0.18);
+  --co-shadow-pin: drop-shadow(0 1px 1px rgba(0,0,0,0.18)) drop-shadow(0 3px 6px rgba(0,0,0,0.16));
+  --co-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* The page being reviewed, standing in for harvested Obsidian CSS. */
+  --pg-bg: #fdfdfc;
+  --pg-fg: #22262b;
+  --pg-fg-2: #5d646c;
+  --pg-line: #e6e7e9;
+  --pg-accent: #6a5acd;
+
+  /* The strip the switcher sits in, reserved out of the viewport so no
+     variant has to fight it for the bottom edge. */
+  --proto-gutter: 44px;
+}
+html[data-theme="dark"] {
+  --co-pin-soft: rgba(212, 66, 30, 0.18);
+  --co-ink: #f2603a;
+  --co-done: #7d858e;
+  --co-bg: #16181c;
+  --co-bg-2: #1e2126;
+  --co-fg: #e6e9ed;
+  --co-fg-2: #9ba3ac;
+  --co-fg-3: #7d858e;
+  --co-line: #2e333a;
+  --co-aim-line: rgba(242, 96, 58, 0.55);
+  --co-pri-high-fg: #ff9ab8;
+  --co-pri-high-bg: rgba(224, 37, 94, 0.16);
+  --co-pri-high-line: rgba(224, 37, 94, 0.42);
+  --co-pri-medium-fg: #f2c468;
+  --co-pri-medium-bg: rgba(201, 146, 24, 0.16);
+  --co-pri-medium-line: rgba(201, 146, 24, 0.42);
+  --co-pri-low-fg: #8cc8e8;
+  --co-pri-low-bg: rgba(56, 150, 200, 0.18);
+  --co-pri-low-line: rgba(56, 150, 200, 0.45);
+  --co-shadow: 0 1px 2px rgba(0,0,0,0.5), 0 12px 32px -8px rgba(0,0,0,0.6);
+  --pg-bg: #1b1b1f;
+  --pg-fg: #dcdde0;
+  --pg-fg-2: #9aa0a7;
+  --pg-line: #2c2e33;
+  --pg-accent: #9d8cff;
+}
+
+/* ------------------------------------------------- the page under review */
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--pg-bg);
+  color: var(--pg-fg);
+  font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding-bottom: var(--proto-gutter);
+  transition: padding 0.25s var(--co-ease);
+}
+.pg-top {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; align-items: center; gap: 14px;
+  height: 46px; padding: 0 20px;
+  background: color-mix(in srgb, var(--pg-bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--pg-line);
+  font-size: 13px; color: var(--pg-fg-2);
+}
+.pg-top b { color: var(--pg-fg); font-weight: 600; }
+.pg-top .pg-crumb { margin-left: auto; opacity: 0.7; }
+.pg-wrap { display: flex; justify-content: center; }
+.pg-main { width: 100%; max-width: 760px; padding: 44px 28px 120px; }
+.pg-main h1 { font-size: 34px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -0.02em; }
+.pg-main .pg-sub { color: var(--pg-fg-2); font-size: 14px; margin: 0 0 34px; }
+.pg-main h2 { font-size: 22px; margin: 38px 0 10px; letter-spacing: -0.01em; }
+.pg-main p { margin: 0 0 16px; }
+.pg-main a { color: var(--pg-accent); }
+.pg-main ul { margin: 0 0 16px; padding-left: 22px; }
+.pg-main li { margin-bottom: 6px; }
+.pg-main blockquote {
+  margin: 0 0 18px; padding: 10px 16px;
+  border-left: 3px solid var(--pg-accent);
+  background: color-mix(in srgb, var(--pg-accent) 7%, transparent);
+  color: var(--pg-fg-2);
+}
+.pg-main pre {
+  margin: 0 0 18px; padding: 14px 16px; overflow-x: auto;
+  background: var(--co-bg-2); border: 1px solid var(--pg-line);
+  border-radius: 8px;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pg-main table { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 14px; }
+.pg-main th, .pg-main td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--pg-line); }
+.pg-main th { color: var(--pg-fg-2); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* ------------------------------------------------- the overlay, in general */
+.co {
+  position: absolute; inset: 0 auto auto 0; width: 0; height: 0;
+  font: 13px/20px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--co-fg);
+}
+.co * { box-sizing: border-box; margin: 0; padding: 0; }
+.co button { font: inherit; cursor: pointer; }
+.co svg { flex: none; display: block; }
+.co [hidden] { display: none !important; }
+.co-num, .co-time, .co-pin span, .co-pop-mark, .co-filter b, .co-tab b { font-variant-numeric: tabular-nums; }
+.co :focus-visible { outline: 2px solid var(--co-pin); outline-offset: 2px; }
+.co-scroll { scrollbar-width: thin; scrollbar-color: var(--co-line) transparent; }
+.co-scroll::-webkit-scrollbar { width: 10px; }
+.co-scroll::-webkit-scrollbar-thumb { background: var(--co-line); border: 3px solid transparent; background-clip: content-box; border-radius: 999px; }
+
+/* pins -- same geometry as the real overlay: the sharp corner is the point */
+#pins { position: absolute; top: 0; left: 0; }
+.co-pin {
+  position: absolute; width: 32px; height: 32px; border: 0; padding: 0;
+  background: transparent; filter: var(--co-shadow-pin);
+  transform: translate(-5px, -27px); transform-origin: 5px 27px;
+  transition: filter 0.18s var(--co-ease), transform 0.18s var(--co-ease);
+  user-select: none;
+}
+.co-pin svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.co-pin svg path.shape { fill: var(--co-pin); stroke: var(--co-bg); stroke-width: 2.4; paint-order: stroke; }
+.co-pin[data-resolved] svg path.shape { fill: var(--co-done); }
+.co-pin span {
+  position: absolute; left: 5px; top: 3px; width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 650; line-height: 1;
+}
+.co-pin:hover { transform: translate(-5px, -29px); }
+.co-pin[data-selected] { z-index: 2; }
+.co-pin[data-selected] svg path.shape { stroke: var(--co-pin); stroke-width: 3.4; }
+.co-pin-sm { width: 22px; height: 22px; transform: translate(-3px, -19px); }
+
+/* the block a comment is attached to, outlined */
+.co-aim {
+  position: absolute; pointer-events: none; border-radius: 5px;
+  background: var(--co-pin-soft);
+  box-shadow: inset 0 0 0 1.5px var(--co-aim-line);
+  transition: all 0.14s var(--co-ease);
+}
+
+/* priority pills, one rule for every variant, as in the real overlay */
+.co-pri, .co-row-pri {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 2px 9px; border: 1px solid var(--co-line); border-radius: 999px;
+  background: var(--co-bg-2); color: var(--co-fg-2);
+  font-size: 11px; font-weight: 550; line-height: 15px;
+}
+.co-row-pri { padding: 1px 6px; font-size: 10px; line-height: 14px; }
+[data-level="high"] { --co-pri-fg: var(--co-pri-high-fg); --co-pri-bg: var(--co-pri-high-bg); --co-pri-line: var(--co-pri-high-line); }
+[data-level="medium"] { --co-pri-fg: var(--co-pri-medium-fg); --co-pri-bg: var(--co-pri-medium-bg); --co-pri-line: var(--co-pri-medium-line); }
+[data-level="low"] { --co-pri-fg: var(--co-pri-low-fg); --co-pri-bg: var(--co-pri-low-bg); --co-pri-line: var(--co-pri-low-line); }
+.co-pri[data-level], .co-row-pri[data-level] { background: var(--co-pri-bg); border-color: var(--co-pri-line); color: var(--co-pri-fg); }
+.co-pri-mark { width: 8px; text-align: center; font-weight: 700; }
+
+.co-tag {
+  flex: none; padding: 1px 6px; border: 1px solid var(--co-line); border-radius: 999px;
+  background: var(--co-bg-2); color: var(--co-fg-2);
+  font-size: 10px; font-weight: 550; line-height: 14px; letter-spacing: 0.04em; text-transform: uppercase;
+}
+a.co-tag { color: var(--co-ink); text-transform: none; letter-spacing: 0; text-decoration: none; }
+.co-quote {
+  padding-left: 7px; border-left: 1px solid var(--co-line);
+  color: var(--co-fg-3); font-size: 11px; line-height: 16px; font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.co-icon-btn {
+  width: 24px; height: 24px; flex: none; border: 0; border-radius: var(--co-r-1);
+  background: transparent; color: var(--co-fg-2);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+.co-icon-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
+@keyframes co-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ============================================================ VARIANT 1
+   current -- the notch at the bottom centre, the panel down the right  */
+.v1-notch {
+  position: fixed; bottom: calc(24px + var(--proto-gutter)); left: 50%;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 6px; padding: 4px;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: 24px;
+  box-shadow: var(--co-shadow); z-index: 4;
+}
+.v1-notch-btn {
+  width: 32px; height: 32px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--co-fg-2);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.v1-notch-btn:hover, .v1-notch-btn[data-open] { background: var(--co-bg-2); color: var(--co-fg); }
+.v1-div { width: 1px; height: 20px; background: var(--co-line); }
+.v1-modes {
+  position: relative; display: flex; padding: 2px;
+  border: 1px solid var(--co-line); border-radius: 16px; background: var(--co-bg-2);
+}
+.v1-slider {
+  position: absolute; top: 2px; left: 2px; width: calc(33.333% - 2px); height: calc(100% - 4px);
+  background: var(--co-pin); border-radius: 14px;
+  transition: transform 0.22s var(--co-ease); pointer-events: none;
+}
+.v1-slider[data-at="1"] { transform: translateX(100%); }
+.v1-slider[data-at="2"] { transform: translateX(200%); }
+.v1-mode {
+  position: relative; z-index: 1; padding: 5px 10px; border: 0; border-radius: 14px;
+  background: transparent; color: var(--co-fg-2);
+  display: flex; align-items: center; transition: color 0.2s;
+}
+.v1-mode[data-active] { color: #fff; }
+.v1-mode:not([data-active]):hover { background: var(--co-bg); color: var(--co-fg); }
+
+.v1-panel {
+  position: fixed; top: 8px; right: 8px; width: 320px;
+  height: calc(100vh - 16px - var(--proto-gutter));
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow); font-size: 11px; z-index: 3;
+  animation: v1-in 0.2s var(--co-ease);
+}
+@keyframes v1-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+.v1-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  height: 40px; padding: 0 8px; flex: none; border-bottom: 1px solid var(--co-line);
+}
+.v1-title { flex: 1; text-align: center; font-weight: 550; letter-spacing: 0.01em; color: var(--co-fg); }
+.v1-filters {
+  position: relative; display: flex; flex: none; margin: 8px 8px 0; padding: 2px;
+  border: 1px solid var(--co-line); border-radius: 14px; background: var(--co-bg-2);
+}
+.v1-fslider {
+  position: absolute; top: 2px; left: 2px; width: calc(33.333% - 2px); height: calc(100% - 4px);
+  background: var(--co-pin); border-radius: 12px;
+  transition: transform 0.22s var(--co-ease); pointer-events: none;
+}
+.v1-fslider[data-at="1"] { transform: translateX(100%); }
+.v1-fslider[data-at="2"] { transform: translateX(200%); }
+.v1-filter {
+  position: relative; z-index: 1; flex: 1; padding: 4px 0; border: 0; border-radius: 12px;
+  background: transparent; color: var(--co-fg-2); font-size: 11px; line-height: 16px; text-align: center;
+}
+.v1-filter b { font-weight: 550; opacity: 0.75; }
+.v1-filter[data-active] { color: #fff; }
+.v1-sortrow { display: flex; align-items: center; gap: 8px; flex: none; margin: 8px 8px 0; }
+.v1-sortlabel {
+  flex: none; padding-left: 2px; color: var(--co-fg-3);
+  font-size: 10px; font-weight: 550; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.v1-orders {
+  position: relative; display: flex; flex: 1; padding: 2px;
+  border: 1px solid var(--co-line); border-radius: 14px; background: var(--co-bg-2);
+}
+.v1-oslider {
+  position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: calc(100% - 4px);
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: 12px;
+  transition: transform 0.22s var(--co-ease); pointer-events: none;
+}
+.v1-oslider[data-at="1"] { transform: translateX(100%); }
+.v1-order {
+  position: relative; z-index: 1; flex: 1; padding: 4px 0; border: 0; border-radius: 12px;
+  background: transparent; color: var(--co-fg-3); font-size: 11px; line-height: 16px; text-align: center;
+}
+.v1-order[data-active] { color: var(--co-fg); font-weight: 550; }
+.v1-list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+.v1-group {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px 4px; background: var(--co-bg); color: var(--co-fg-3);
+  font-size: 10px; font-weight: 550; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.v1-group[data-here] { color: var(--co-fg-2); }
+.v1-group svg { opacity: 0.7; }
+.v1-group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v1-row { display: block; padding: 2px 8px; cursor: pointer; }
+.v1-card { display: flex; align-items: flex-start; gap: 10px; padding: 8px; border-radius: var(--co-r-2); transition: background 0.12s; }
+.v1-row:hover .v1-card { background: var(--co-bg-2); }
+.v1-row[data-selected] .v1-card { background: var(--co-pin-soft); }
+.co-num {
+  flex: none; width: 22px; height: 22px; border-radius: 999px;
+  background: var(--co-pin); color: #fff; font-size: 11px; font-weight: 650; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.v1-row[data-resolved] .co-num { background: var(--co-done); }
+.v1-body { flex: 1; min-width: 0; }
+.v1-name { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.v1-name strong {
+  font-weight: 550; font-size: 13px; line-height: 22px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.v1-row[data-resolved] .v1-name strong { color: var(--co-fg-2); font-weight: 450; }
+.co-time { flex: none; white-space: nowrap; color: var(--co-fg-2); font-size: 11px; }
+.v1-name .co-time { margin-left: auto; }
+.v1-text {
+  margin-top: 1px; color: var(--co-fg-2); font-size: 11px; line-height: 16px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.v1-row[data-resolved] .v1-text { color: var(--co-fg-3); }
+.v1-meta { margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+
+/* the popup, which only this variant has */
+.v1-pop {
+  position: absolute; width: 360px; max-height: 400px; overflow-y: auto;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow); animation: co-rise 0.15s var(--co-ease); z-index: 5;
+}
+.v1-pop-head {
+  display: flex; align-items: center; gap: 9px; min-height: 40px;
+  padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--co-line);
+}
+.v1-pop-title { flex: none; font-size: 13px; font-weight: 550; }
+.v1-pop-acts { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.v1-pop-sel { display: flex; gap: 9px; padding: 12px 14px 4px; }
+.co-pop-mark {
+  flex: none; width: 22px; height: 22px; border-radius: 999px; background: var(--co-pin);
+  color: #fff; font-size: 11px; font-weight: 650;
+  display: flex; align-items: center; justify-content: center;
+}
+.v1-pop-who { display: flex; align-items: baseline; gap: 8px; }
+.v1-pop-who strong { font-size: 13px; font-weight: 550; }
+.v1-pop-text { padding: 2px 14px 12px; font-size: 13px; line-height: 19px; }
+.v1-pop-reply { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--co-line); }
+.v1-field {
+  flex: 1; min-height: 32px; padding: 6px 10px; resize: none;
+  border: 1px solid var(--co-line); border-radius: var(--co-r-2);
+  background: var(--co-bg-2); color: var(--co-fg); font: inherit; font-size: 12px;
+}
+.v1-send {
+  flex: none; width: 32px; height: 32px; border: 0; border-radius: var(--co-r-2);
+  background: var(--co-pin); color: #fff; display: flex; align-items: center; justify-content: center;
+}
+
+/* ============================================================ VARIANT 2
+   rail -- one continuous surface against the left edge               */
+.v2-rail {
+  position: fixed; top: 0; left: 0; width: 52px;
+  height: calc(100vh - var(--proto-gutter));
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 10px 0; z-index: 4;
+  background: var(--co-bg); border-right: 1px solid var(--co-line);
+}
+.v2-drop {
+  width: 36px; height: 36px; flex: none; margin-bottom: 8px;
+  border: 0; border-radius: 50%; background: var(--co-pin); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px -2px rgba(212, 66, 30, 0.6);
+  transition: transform 0.16s var(--co-ease);
+}
+.v2-drop:hover { transform: scale(1.06); }
+.v2-drop[data-active] { box-shadow: 0 0 0 3px var(--co-pin-soft), 0 2px 8px -2px rgba(212,66,30,0.6); }
+.v2-btn {
+  position: relative; width: 36px; height: 32px; flex: none; border: 0; border-radius: var(--co-r-2);
+  background: transparent; color: var(--co-fg-2);
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.14s, color 0.14s;
+}
+.v2-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.v2-btn[data-active] { color: var(--co-fg); background: var(--co-bg-2); }
+/* the bar on the edge, not a filled chip: the rail reads as one column and
+   the marker says which rung of it you are on */
+.v2-btn[data-active]::before {
+  content: ""; position: absolute; left: -8px; top: 4px; bottom: 4px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--co-pin);
+}
+.v2-spacer { flex: 1; }
+.v2-tally {
+  flex: none; margin-bottom: 6px; padding: 3px 0; width: 36px;
+  border-radius: var(--co-r-2); background: var(--co-pin-soft);
+  color: var(--co-ink); text-align: center; font-size: 12px; font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.v2-tally small { display: block; font-size: 8px; font-weight: 550; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.8; }
+
+.v2-col {
+  position: fixed; top: 0; left: 52px; width: 316px;
+  height: calc(100vh - var(--proto-gutter));
+  display: flex; flex-direction: column; overflow: hidden; z-index: 3;
+  background: var(--co-bg); border-right: 1px solid var(--co-line);
+  animation: v2-in 0.22s var(--co-ease);
+}
+@keyframes v2-in { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+.v2-head { flex: none; padding: 14px 16px 0; }
+.v2-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.v2-head p { margin-top: 2px; color: var(--co-fg-3); font-size: 11px; }
+/* underlined text tabs, not a segmented pill: the column has one idiom and
+   it is a row of words */
+.v2-tabs { display: flex; align-items: center; gap: 2px; flex: none; padding: 10px 16px 0; border-bottom: 1px solid var(--co-line); }
+.v2-tab {
+  position: relative; padding: 6px 6px 8px; border: 0; background: transparent;
+  color: var(--co-fg-3); font-size: 12px; transition: color 0.14s;
+}
+.v2-tab b { font-weight: 550; margin-left: 3px; opacity: 0.7; }
+.v2-tab:hover { color: var(--co-fg-2); }
+.v2-tab[data-active] { color: var(--co-fg); font-weight: 550; }
+.v2-tab[data-active]::after {
+  content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px;
+  border-radius: 2px 2px 0 0; background: var(--co-pin);
+}
+.v2-sort {
+  margin-left: auto; white-space: nowrap; display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; border: 0; border-radius: var(--co-r-1); background: transparent;
+  color: var(--co-fg-3); font-size: 11px;
+}
+.v2-sort:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.v2-list { flex: 1; overflow-y: auto; }
+.v2-group {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 7px;
+  padding: 8px 16px; background: var(--co-bg-2);
+  border-bottom: 1px solid var(--co-line);
+  color: var(--co-fg-2); font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.v2-group span.n { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+/* a row, not a card: hairline ruled, with the priority as a bar on the edge
+   and the number in a gutter column, so twenty of them read as a list */
+.v2-row {
+  position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 10px;
+  width: 100%; padding: 10px 14px 10px 16px; border: 0; border-bottom: 1px solid var(--co-line);
+  background: transparent; text-align: left; cursor: pointer; transition: background 0.1s;
+}
+.v2-row::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--co-pri-fg, transparent);
+}
+.v2-row > span { min-width: 0; }
+.v2-row:hover { background: var(--co-bg-2); }
+.v2-row[data-selected] { background: var(--co-pin-soft); }
+.v2-rn {
+  width: 22px; height: 22px; border-radius: 999px; background: var(--co-pin); color: #fff;
+  font-size: 11px; font-weight: 650; display: flex; align-items: center; justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.v2-row[data-resolved] .v2-rn { background: transparent; border: 1px solid var(--co-line); color: var(--co-done); }
+.v2-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.v2-top strong, .v2-top .co-tag { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-top strong { font-size: 12px; font-weight: 600; }
+.v2-top .co-time { margin-left: auto; font-size: 10px; color: var(--co-fg-3); }
+.v2-txt { margin-top: 2px; color: var(--co-fg-2); font-size: 12px; line-height: 17px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.v2-row[data-selected] .v2-txt { -webkit-line-clamp: unset; }
+.v2-row[data-resolved] .v2-top strong { color: var(--co-fg-3); font-weight: 450; }
+.v2-row[data-resolved] .v2-txt { color: var(--co-fg-3); }
+.v2-quote { margin-top: 6px; }
+.v2-acts { display: none; gap: 6px; margin-top: 10px; }
+.v2-row[data-selected] .v2-acts { display: flex; }
+.v2-act {
+  padding: 4px 10px; border: 1px solid var(--co-line); border-radius: var(--co-r-1);
+  background: var(--co-bg); color: var(--co-fg-2); font-size: 11px; font-weight: 550;
+}
+.v2-act:hover { border-color: var(--co-fg-3); color: var(--co-fg); }
+.v2-act[data-primary] { background: var(--co-pin); border-color: var(--co-pin); color: #fff; }
+.v2-reply { display: none; margin-top: 8px; }
+.v2-row[data-selected] .v2-reply { display: block; }
+.v2-reply textarea {
+  width: 100%; min-height: 30px; padding: 6px 8px; resize: vertical;
+  border: 1px solid var(--co-line); border-radius: var(--co-r-1);
+  background: var(--co-bg); color: var(--co-fg); font: inherit; font-size: 11px;
+}
+
+/* ============================================================ VARIANT 3
+   stepper -- a status bar on top, one comment at a time below        */
+.v3-bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 5;
+  display: flex; align-items: center; gap: 16px; padding: 0 14px;
+  background: var(--co-bg); border-bottom: 1px solid var(--co-line);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.02), 0 6px 18px -12px rgba(0,0,0,0.3);
+}
+.v3-brand { display: flex; align-items: center; gap: 8px; flex: none; }
+.v3-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--co-pin); }
+.v3-brand strong { font-size: 13px; font-weight: 600; }
+.v3-brand span { color: var(--co-fg-3); font-size: 12px; }
+/* the headline fact: how much of the review is done */
+.v3-meter { flex: 1; max-width: 420px; display: flex; align-items: center; gap: 10px; }
+.v3-track { flex: 1; height: 6px; border-radius: 999px; background: var(--co-pin-soft); overflow: hidden; }
+.v3-fill { height: 100%; border-radius: 999px; background: var(--co-done); transition: width 0.3s var(--co-ease); }
+.v3-meter-txt { flex: none; color: var(--co-fg-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.v3-meter-txt b { color: var(--co-fg); font-weight: 600; }
+.v3-modes { margin-left: auto; display: flex; align-items: center; gap: 4px; flex: none; }
+/* labelled, with the key shown: the bar has room for words, so nothing here
+   has to be learned from an icon */
+.v3-mode {
+  display: flex; align-items: center; gap: 7px; padding: 5px 10px;
+  border: 1px solid transparent; border-radius: var(--co-r-1);
+  background: transparent; color: var(--co-fg-2); font-size: 12px; transition: all 0.14s;
+}
+.v3-mode:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.v3-mode[data-active] { background: var(--co-pin); border-color: var(--co-pin); color: #fff; }
+.v3-key {
+  padding: 0 4px; border-radius: 3px; background: var(--co-bg-2);
+  color: var(--co-fg-3); font-size: 10px; font-weight: 600; line-height: 15px;
+}
+.v3-mode[data-active] .v3-key { background: rgba(255,255,255,0.22); color: #fff; }
+.v3-sep { width: 1px; height: 22px; background: var(--co-line); flex: none; }
+
+.v3-card {
+  position: fixed; right: 20px; bottom: calc(20px + var(--proto-gutter)); width: 430px; z-index: 5;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow); animation: co-rise 0.2s var(--co-ease);
+}
+.v3-card-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--co-line); background: var(--co-bg-2);
+}
+.v3-pos { flex: none; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.v3-pos span { color: var(--co-fg-3); font-weight: 450; }
+.v3-step { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.v3-where { padding: 0 2px; color: var(--co-fg-3); font-size: 11px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.v3-where span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3-card-body { padding: 14px; }
+.v3-q { margin-bottom: 12px; padding: 8px 10px; border-left: 2px solid var(--co-pin); background: var(--co-pin-soft); border-radius: 0 var(--co-r-1) var(--co-r-1) 0; }
+.v3-q em { color: var(--co-fg-2); font-size: 12px; line-height: 17px; font-style: italic; }
+.v3-who { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.v3-av {
+  width: 24px; height: 24px; border-radius: 999px; background: var(--co-bg-2);
+  border: 1px solid var(--co-line); color: var(--co-fg-2);
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 650;
+}
+.v3-who strong { font-size: 13px; font-weight: 600; }
+.v3-body-txt { font-size: 14px; line-height: 21px; }
+.v3-replies { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--co-line); display: grid; gap: 10px; }
+.v3-reply { display: flex; gap: 8px; }
+.v3-reply div { flex: 1; }
+.v3-reply strong { font-size: 12px; font-weight: 600; }
+.v3-reply p { color: var(--co-fg-2); font-size: 12px; line-height: 18px; }
+.v3-card-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--co-line); }
+.v3-btn {
+  display: flex; align-items: center; gap: 6px; padding: 7px 14px;
+  border: 1px solid var(--co-line); border-radius: var(--co-r-2);
+  background: var(--co-bg); color: var(--co-fg); font-size: 12px; font-weight: 550;
+}
+.v3-btn:hover { border-color: var(--co-fg-3); }
+.v3-btn[data-primary] { background: var(--co-pin); border-color: var(--co-pin); color: #fff; }
+.v3-btn[data-primary]:hover { filter: brightness(1.06); }
+.v3-foot-end { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.v3-queue {
+  position: fixed; right: 20px; bottom: calc(20px + var(--proto-gutter)); width: 430px; max-height: 60vh;
+  overflow-y: auto; z-index: 6;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow); animation: co-rise 0.16s var(--co-ease);
+}
+.v3-qhead { position: sticky; top: 0; display: flex; align-items: center; padding: 10px 14px; background: var(--co-bg); border-bottom: 1px solid var(--co-line); font-size: 12px; font-weight: 600; }
+.v3-qhead button { margin-left: auto; }
+.v3-qrow {
+  display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: center;
+  width: 100%; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--co-line);
+  background: transparent; text-align: left; font-size: 12px; cursor: pointer;
+}
+.v3-qrow:hover { background: var(--co-bg-2); }
+.v3-qrow[data-at] { background: var(--co-pin-soft); }
+.v3-qrow em { color: var(--co-fg-3); font-size: 11px; font-style: normal; display: block; }
+.v3-qn { width: 20px; height: 20px; border-radius: 999px; background: var(--co-pin); color: #fff; font-size: 10px; font-weight: 650; display: flex; align-items: center; justify-content: center; }
+.v3-qrow[data-resolved] .v3-qn { background: var(--co-done); }
+
+/* ============================================================ VARIANT 4
+   margin -- the page gives up its right margin and the comments live in it */
+body[data-variant="margin"] .pg-wrap { justify-content: flex-start; }
+body[data-variant="margin"] .pg-main { margin-left: max(24px, calc(50vw - 600px)); }
+.v4-margin { position: absolute; top: 0; width: 272px; }
+.v4-note {
+  position: absolute; left: 0; width: 272px; padding: 10px 12px;
+  background: var(--co-bg); border: 1px solid var(--co-line);
+  border-left: 3px solid var(--co-pin); border-radius: var(--co-r-2);
+  box-shadow: 0 1px 2px rgba(16,18,22,0.05);
+  cursor: pointer; transition: top 0.2s var(--co-ease), box-shadow 0.16s, transform 0.16s;
+}
+.v4-note[data-resolved] { border-left-color: var(--co-done); opacity: 0.72; }
+.v4-note:hover { box-shadow: var(--co-shadow); }
+.v4-note[data-selected] { border-left-width: 3px; box-shadow: var(--co-shadow); transform: translateX(-6px); }
+.v4-nhead { display: flex; align-items: center; gap: 7px; }
+.v4-nn {
+  width: 18px; height: 18px; flex: none; border-radius: 999px; background: var(--co-pin); color: #fff;
+  font-size: 10px; font-weight: 650; display: flex; align-items: center; justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.v4-note[data-resolved] .v4-nn { background: var(--co-done); }
+.v4-nhead strong { font-size: 11px; font-weight: 600; }
+.v4-nhead .co-time { margin-left: auto; font-size: 10px; color: var(--co-fg-3); }
+.v4-ntxt { margin-top: 5px; font-size: 12px; line-height: 17px; color: var(--co-fg-2); }
+.v4-note[data-selected] .v4-ntxt { color: var(--co-fg); }
+.v4-nfoot { display: none; align-items: center; gap: 6px; margin-top: 9px; }
+.v4-note[data-selected] .v4-nfoot { display: flex; }
+.v4-nreply { display: none; margin-top: 8px; }
+.v4-note[data-selected] .v4-nreply { display: block; }
+.v4-nreply textarea {
+  width: 100%; min-height: 28px; padding: 5px 8px; resize: vertical;
+  border: 1px solid var(--co-line); border-radius: var(--co-r-1);
+  background: var(--co-bg-2); color: var(--co-fg); font: inherit; font-size: 11px;
+}
+/* the thread from the pin to its note, so a card is never orphaned from the
+   words it is about */
+.v4-leader { position: absolute; pointer-events: none; }
+.v4-leader path { fill: none; stroke: var(--co-line); stroke-width: 1.5; }
+.v4-leader path.on { stroke: var(--co-pin); }
+
+.v4-fabs {
+  position: fixed; right: 22px; bottom: calc(22px + var(--proto-gutter)); z-index: 5;
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 10px;
+}
+.v4-fab {
+  width: 46px; height: 46px; border: 1px solid var(--co-line); border-radius: 50%;
+  background: var(--co-bg); color: var(--co-fg-2); box-shadow: var(--co-shadow);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.16s var(--co-ease), background 0.16s, color 0.16s;
+}
+.v4-fab:hover { transform: translateY(-2px); color: var(--co-fg); }
+.v4-fab[data-active] { background: var(--co-pin); border-color: var(--co-pin); color: #fff; }
+.v4-fab-sm { width: 36px; height: 36px; }
+.v4-status {
+  position: fixed; top: 60px; right: 22px; z-index: 5;
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: 999px;
+  box-shadow: var(--co-shadow); font-size: 11px; color: var(--co-fg-2);
+}
+.v4-status b { color: var(--co-fg); font-weight: 650; font-variant-numeric: tabular-nums; }
+.v4-status button { border: 0; background: transparent; color: var(--co-ink); font: inherit; font-size: 11px; font-weight: 550; padding: 0; }
+.v4-elsewhere {
+  position: fixed; right: 22px; top: 96px; width: 272px; z-index: 5; overflow: hidden;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: var(--co-r-2);
+  box-shadow: var(--co-shadow); animation: co-rise 0.16s var(--co-ease);
+}
+.v4-ehead { padding: 9px 12px; border-bottom: 1px solid var(--co-line); font-size: 11px; font-weight: 600; display: flex; }
+.v4-ehead button { margin-left: auto; }
+.v4-erow { display: flex; gap: 8px; width: 100%; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--co-line); background: transparent; text-align: left; font-size: 11px; cursor: pointer; }
+.v4-erow:hover { background: var(--co-bg-2); }
+.v4-erow em { display: block; color: var(--co-fg-3); font-style: normal; }
+
+/* ============================================================ VARIANT 5
+   combined -- the notch and the floating panel exactly as they are, the
+   rail's two-line header on the panel, and the stepper's card at the pin */
+
+/* The header stops being a centred caption and becomes the first fact the
+   panel has: how much is left, over how many pages, how fresh. The two
+   buttons that were competing with the title for the row move up beside
+   it, so nothing is lost by the title going away. */
+.v5-head {
+  position: relative; display: block; flex: none;
+  padding: 12px 8px 11px 16px; border-bottom: 1px solid var(--co-line);
+}
+.v5-head-txt { display: block; min-width: 0; }
+/* The two buttons are taken out of the flow so they shorten the first line
+   only. Left in it they narrowed every line under them, which is what was
+   clipping "last mark 40m ago" off the end of the meta row. */
+.v5-head-acts { position: absolute; top: 9px; right: 8px; display: flex; gap: 2px; }
+.v5-head h2 { padding-right: 56px; font-size: 14px; font-weight: 600; line-height: 18px; letter-spacing: -0.01em; }
+.v5-head p { margin-top: 2px; color: var(--co-fg-3); font-size: 11px; line-height: 15px; }
+
+/*
+ * One control line instead of two.
+ *
+ * With a header on top, a filter row and an order row made three bands of
+ * chrome before the first comment. The segmented filter keeps its row and
+ * the order folds onto the end of it as a chip, which is two layers rather
+ * than three and leaves the filter as the unmistakable pick-one-of-three
+ * it already was.
+ */
+.v5-controls { display: flex; align-items: center; gap: 8px; flex: none; margin: 8px 8px 0; }
+.v5-controls .v1-filters { flex: 1; margin: 0; }
+
+/* Named for the order in force, with the glyph carrying the toggle. A bare
+   word in a row of its own read as a caption, which is why the order got a
+   labelled pair in the first place; on a shared line with a border around
+   it, it reads as a control again. */
+.v5-sort {
+  display: flex; align-items: center; gap: 5px; flex: none;
+  padding: 4px 9px; border: 1px solid var(--co-line); border-radius: 14px;
+  background: var(--co-bg-2); color: var(--co-fg-2);
+  font-size: 11px; line-height: 16px; white-space: nowrap;
+  transition: color 0.14s, border-color 0.14s;
+}
+.v5-sort:hover { color: var(--co-fg); border-color: var(--co-fg-3); }
+.v5-sort svg { opacity: 0.7; }
+
+
+/* The stepper's card, un-docked: it is anchored to its pin here, because
+   the notch and the floating panel put the reviewer in a spatial model and
+   a card that always appears bottom-right would be the one thing in the
+   variant that is not where you left it. */
+.v5-card {
+  position: absolute; width: 400px; z-index: 5; overflow: hidden;
+  display: flex; flex-direction: column;
+  background: var(--co-bg); border: 1px solid var(--co-line); border-radius: var(--co-r-3);
+  box-shadow: var(--co-shadow); animation: co-rise 0.16s var(--co-ease);
+}
+
+/* Filed, and saying so in the ink. The action and its result were the same
+   button in two states that looked alike, so a reviewer had to read the
+   label to find out whether the thing had already been done. The stroke
+   answers that before the label is read. */
+.v3-btn[data-filed] { border-color: var(--co-ink); color: var(--co-ink); }
+.v3-btn[data-filed]:hover { background: var(--co-pin-soft); border-color: var(--co-ink); }
+
+/* ====================================================== the switcher bar */
+#proto {
+  position: fixed; left: 0; right: 0; bottom: 0; height: var(--proto-gutter); z-index: 99;
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  background: #0d0f12; color: #f0f2f4; border-top: 1px solid #000;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 -8px 24px -16px rgba(0,0,0,0.7);
+}
+#proto .tagline { color: #7f8a95; flex: none; letter-spacing: 0.04em; text-transform: uppercase; font-size: 10px; }
+#proto .nav { display: flex; align-items: center; gap: 6px; margin: 0 auto; }
+#proto .arrow {
+  width: 26px; height: 26px; border: 1px solid #2a2f36; border-radius: 6px;
+  background: #16191d; color: #dfe3e7; display: flex; align-items: center; justify-content: center; font-size: 13px;
+}
+#proto .arrow:hover { background: #22272d; }
+#proto .label { min-width: 330px; text-align: center; }
+#proto .label b { color: #ff8a63; }
+#proto .label span { color: #8d97a1; }
+#proto .right { display: flex; align-items: center; gap: 8px; flex: none; }
+#proto .pip {
+  padding: 4px 9px; border: 1px solid #2a2f36; border-radius: 6px;
+  background: #16191d; color: #cfd5db; font: inherit; font-size: 11px;
+}
+#proto .pip:hover { background: #22272d; }
+#proto .dots { display: flex; gap: 4px; }
+#proto .dot { width: 6px; height: 6px; border-radius: 999px; background: #343a42; }
+#proto .dot[data-on] { background: #ff8a63; }
+@media (max-width: 860px) { #proto .label { min-width: 0; } #proto .tagline { display: none; } }
+</style>
+</head>
+<body data-variant="current">
+
+<header class="pg-top">
+  <b>Vault</b>
+  <span>Guides</span>
+  <span>/</span>
+  <span>Publishing a vault</span>
+  <span class="pg-crumb">preview build &middot; 2026-11-01</span>
+</header>
+
+<div class="pg-wrap">
+<main class="pg-main" id="article">
+  <h1 data-b="b1">Publishing a vault</h1>
+  <p class="pg-sub" data-b="b2">What the build does to a folder of notes, and which parts of it you are expected to look at before anyone else does.</p>
+
+  <p data-b="b3">A publish walks the vault once, renders every note through Obsidian's own renderer, and writes the result to a folder of plain HTML. Nothing in the output needs a server: the pages open from disk, the links between them resolve as files, and the whole thing can be dropped onto static hosting without a build step at the other end.</p>
+
+  <h2 data-b="b4">What the preview adds</h2>
+  <p data-b="b5">A preview build is the same output with a review overlay inlined into every page. The overlay is the only difference, and it is deliberately the last thing written: the article markup is never touched, so what you read in a preview is what a publish would have produced, down to the whitespace.</p>
+
+  <blockquote data-b="b6">A preview that edits the page to review the page is not a preview of anything. Everything the overlay draws lives in a shadow root, and nothing in it reaches back out.</blockquote>
+
+  <h2 data-b="b7">Marks travel with the words</h2>
+  <p data-b="b8">A comment is recorded against a block, not a pixel. The drop point is stored as a fraction across and down the block it landed on, so a pin comes back to the same few words after a rebuild, a reflow, or at a window width nobody tested. A pin dropped where no block covers the point keeps plain document coordinates instead, and says so.</p>
+
+  <pre data-b="b9"><code>$ npm run build
+$ npm run deploy
+  vault is open in Obsidian
+  hot-reload is enabled: the plugin will reload on its own</code></pre>
+
+  <p data-b="b10">Two separate things have to be true before a change is testable, which is why the deploy reports on both. A copy into a watched folder and a copy into an unwatched one look identical from the outside, and only one of them is a change you can see.</p>
+
+  <h2 data-b="b11">What gets left out</h2>
+  <ul data-b="b12">
+    <li>Folders listed as excluded, and everything under them.</li>
+    <li>Notes whose frontmatter asks to stay private.</li>
+    <li>Attachments nothing in the published set links to.</li>
+    <li>The review overlay itself, on a real publish.</li>
+  </ul>
+
+  <p data-b="b13">Exclusion is checked twice — once when the set of pages is chosen, and again when links are rewritten — because a link into a folder that was never published is the one failure a reader meets as a dead end rather than as a missing page.</p>
+
+  <h2 data-b="b14">Where the output lands</h2>
+  <table data-b="b15">
+    <thead><tr><th>Part</th><th>Written to</th><th>Rebuilt</th></tr></thead>
+    <tbody>
+      <tr><td>Pages</td><td><code>/</code></td><td>when the note changes</td></tr>
+      <tr><td>Harvested CSS</td><td><code>/assets/site.css</code></td><td>when the theme changes</td></tr>
+      <tr><td>Client script</td><td><code>/assets/site.js</code></td><td>on every build</td></tr>
+      <tr><td>Attachments</td><td><code>/assets/</code></td><td>when linked</td></tr>
+    </tbody>
+  </table>
+
+  <p data-b="b16">The incremental path compares a hash of each note's rendered output against the last build's, so a publish after a one-word edit rewrites one page and leaves the rest alone. The hash covers the rendered HTML rather than the source, which means a theme change correctly invalidates everything and a frontmatter-only edit correctly invalidates nothing.</p>
+
+  <p data-b="b17">Anything the build could not resolve is collected and reported at the end rather than thrown at the point it was found. A publish that stops halfway leaves a half-written site, and a half-written site is worse than a complete one with a list of things to fix.</p>
+</main>
+</div>
+
+<div class="co" id="co"></div>
+<div class="co" id="pins-host"><div id="pins"></div><div id="aim" class="co-aim" hidden></div></div>
+
+<div id="proto">
+  <span class="tagline">prototype</span>
+  <div class="nav">
+    <button class="arrow" id="prev" title="Previous variant (&larr;)">&larr;</button>
+    <span class="label" id="plabel"></span>
+    <button class="arrow" id="next" title="Next variant (&rarr;)">&rarr;</button>
+  </div>
+  <div class="right">
+    <span class="dots" id="dots"></span>
+    <button class="pip" id="theme">dark</button>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   PROTOTYPE SCRIPT. Mock data, no persistence, no error handling.
+   ===================================================================== */
+
+/* ------------------------------------------------------------- icons */
+function sv(body, size) {
+  size = size || 16;
+  return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
+}
+var I = {
+  gear: sv('<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7V20a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  cursor: sv('<path d="M4 4.7a.5.5 0 0 1 .7-.7l16 6.5a.5.5 0 0 1-.1.9l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-.9.1z"/>'),
+  bubble: sv('<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/>'),
+  panel: sv('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>'),
+  toLeft: sv('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9-3 3 3 3"/>'),
+  close: sv('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  more: sv('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
+  resolve: sv('<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="m9 12 2 2 4-4"/>'),
+  check: sv('<path d="M20 6 9 17l-5-5"/>'),
+  send: sv('<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>'),
+  note: sv('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h6"/>', 13),
+  app: sv('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20"/><path d="M6 6.5h.01"/><path d="M9 6.5h.01"/>', 13),
+  hide: sv('<path d="M10.7 5.1A10 10 0 0 1 12 5c7 0 10 7 10 7a13 13 0 0 1-1.7 2.7"/><path d="M6.6 6.6A13 13 0 0 0 2 12s3 7 10 7a9 9 0 0 0 5.4-1.6"/><path d="m2 2 20 20"/>'),
+  sort: sv('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/>', 13),
+  plus: sv('<path d="M5 12h14"/><path d="M12 5v14"/>', 18),
+  up: sv('<path d="m18 15-6-6-6 6"/>', 15),
+  down: sv('<path d="m6 9 6 6 6-6"/>', 15),
+  list: sv('<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>', 15),
+  issue: sv('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>', 13),
+};
+var PRI_MARK = { high: "↑", medium: "→", low: "↓" };
+var PRI_NAME = { high: "High", medium: "Medium", low: "Low" };
+
+/* -------------------------------------------------------- mock review */
+var PAGES = {
+  here: { name: "This page", kind: "note", here: true },
+  roadmap: { name: "Projects/Roadmap.md", kind: "note" },
+  clip: { name: "Inbox/Clipped tool.html", kind: "app" },
+};
+
+var C = [
+  { id: "c1", page: "here", n: 1, who: "Mara", when: "2d", block: "b3", fx: 0.62, fy: 0.45,
+    pri: "high", resolved: false,
+    quote: "A publish walks the vault once, renders every note…",
+    text: "This says “once” but the incremental path walks it twice — once to choose the set and again to rewrite links. Either say twice or stop promising once.",
+    replies: [{ who: "You", text: "Second pass is over the chosen set, not the vault. Rewording." }] },
+  { id: "c2", page: "here", n: 2, who: "You", when: "2d", block: "b6", fx: 0.3, fy: 0.5,
+    pri: null, resolved: true,
+    quote: "A preview that edits the page to review the page…",
+    text: "Good line. Keep it as the pull quote on the docs page too.", replies: [] },
+  { id: "c3", page: "here", n: 3, who: "Mara", when: "1d", block: "b8", fx: 0.48, fy: 0.62,
+    pri: "medium", resolved: false, issue: "VP-118",
+    quote: "A pin dropped where no block covers the point…",
+    text: "Where does it say so? I dropped one in the gap under a table and got nothing. If the fallback is silent it is not a fallback, it is a bug with a paragraph about it.",
+    replies: [
+      { who: "You", text: "It warns in the popup only. Agreed that is not visible enough." },
+      { who: "Mara", text: "Filed it so it does not get lost." }
+    ] },
+  { id: "c4", page: "here", n: 4, who: "Review file", when: "1d", block: "b9", fx: 0.2, fy: 0.3,
+    pri: "low", resolved: false, tag: "Imported",
+    quote: "$ npm run build",
+    text: "Deploy does not build. Worth putting that in the block rather than two paragraphs below it.", replies: [] },
+  { id: "c5", page: "here", n: 5, who: "Dev", when: "9h", block: "b12", fx: 0.4, fy: 0.3,
+    pri: "high", resolved: false,
+    quote: "Folders listed as excluded, and everything under them.",
+    text: "Excluded folders are matched case-sensitively on Linux and not on macOS, so this list is true on one machine and a lie on the other. Needs saying here, not in the settings tooltip.",
+    replies: [] },
+  { id: "c6", page: "here", n: 6, who: "Mara", when: "7h", block: "b15", fx: 0.75, fy: 0.55,
+    pri: null, resolved: true,
+    quote: "Harvested CSS | /assets/site.css",
+    text: "Table is right now. Thanks.", replies: [] },
+  { id: "c7", page: "here", n: 7, who: "Dev", when: "40m", block: "b17", fx: 0.55, fy: 0.4,
+    pri: "medium", resolved: false,
+    quote: "Anything the build could not resolve is collected…",
+    text: "Collected where? A reader cannot act on “reported at the end” without knowing whether that is a notice, a file, or a line in the console.",
+    replies: [] },
+
+  { id: "c8", page: "roadmap", n: 1, who: "Mara", when: "3d",
+    pri: "high", resolved: false,
+    quote: "Ship the overlay behind a flag",
+    text: "The flag is gone — the overlay is preview-only now, which is strictly better. Delete the row.", replies: [] },
+  { id: "c9", page: "roadmap", n: 2, who: "You", when: "3d",
+    pri: "low", resolved: true,
+    quote: "Q1: incremental builds",
+    text: "Done, so move it under Shipped.", replies: [] },
+  { id: "c10", page: "roadmap", n: 3, who: "Dev", when: "5h",
+    pri: "medium", resolved: false, issue: "VP-121",
+    quote: "Tracker integration",
+    text: "Two rows describe the same work. Merge them before anyone estimates it twice.", replies: [] },
+
+  { id: "c11", page: "clip", n: 1, who: "Mara", when: "1d",
+    pri: "high", resolved: false,
+    quote: "Screen 2 of 3",
+    text: "The second screen loses its scroll position when you come back to it, so a long form has to be re-found every time.",
+    replies: [] },
+  { id: "c12", page: "clip", n: 2, who: "Review file", when: "6h",
+    pri: null, resolved: true, tag: "Imported",
+    quote: "Screen 1",
+    text: "Runtime stamping works here. Pins survived a re-render.", replies: [] },
+];
+
+/* --------------------------------------------------------------- state */
+var VARIANTS = [
+  ["current", "Current", "bottom notch + floating right panel"],
+  ["rail", "Rail", "flush left rail + one continuous column"],
+  ["stepper", "Stepper", "top status bar + one comment at a time"],
+  ["margin", "Margin", "no bar; comments beside their own text"],
+  ["combined", "Combined", "our notch + our panel, rail's header, stepper's card"],
+];
+var S = {
+  variant: "combined",
+  mode: "review",
+  sel: "c1",
+  filter: "all",
+  order: "time",
+  side: "right",
+  step: 0,
+  menu: false,
+  queue: false,
+  elsewhere: false,
+};
+
+var co = document.getElementById("co");
+var pins = document.getElementById("pins");
+var article = document.getElementById("article");
+
+function byId(id) { for (var i = 0; i < C.length; i++) if (C[i].id === id) return C[i]; return null; }
+function open_() { return C.filter(function (c) { return !c.resolved; }); }
+function visible() {
+  return C.filter(function (c) {
+    if (S.filter === "open") return !c.resolved;
+    if (S.filter === "resolved") return c.resolved;
+    return true;
+  });
+}
+var PRI_RANK = { high: 0, medium: 1, low: 2 };
+function ordered() {
+  var rows = visible().slice();
+  if (S.order === "priority") {
+    rows.sort(function (a, b) {
+      var pa = a.pri ? PRI_RANK[a.pri] : 3, pb = b.pri ? PRI_RANK[b.pri] : 3;
+      if (a.resolved !== b.resolved) return a.resolved ? 1 : -1;
+      return pa - pb;
+    });
+    return [{ page: null, rows: rows }];
+  }
+  var groups = [];
+  ["here", "roadmap", "clip"].forEach(function (p) {
+    var rs = rows.filter(function (c) { return c.page === p; });
+    if (rs.length) groups.push({ page: p, rows: rs.sort(function (a, b) { return a.n - b.n; }) });
+  });
+  return groups;
+}
+function hereRows() { return C.filter(function (c) { return c.page === "here"; }); }
+
+function pageIcon(p) { return PAGES[p].kind === "app" ? I.app : I.note; }
+function priChip(c, cls) {
+  if (!c.pri) return "";
+  return '<span class="' + (cls || "co-row-pri") + '" data-level="' + c.pri + '">' +
+    '<span class="co-pri-mark">' + PRI_MARK[c.pri] + '</span>' + PRI_NAME[c.pri] + '</span>';
+}
+
+/* ------------------------------------------------------------- actions */
+function set(k, v) { S[k] = v; draw(); }
+function toggleResolved(id) { var c = byId(id); if (c) c.resolved = !c.resolved; draw(); }
+function select(id) {
+  S.sel = id;
+  var c = byId(id);
+  if (c) { var rows = ordered().reduce(function (a, g) { return a.concat(g.rows); }, []);
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === id) S.step = i; }
+  draw();
+}
+/*
+ * The comments on this page, in pin order, under whatever filter is on.
+ *
+ * The iteration's card is anchored to a pin, so it is always about the page
+ * being read -- a row for another page in the panel is a link that opens it
+ * there. That is why the card's counter and its arrows are scoped to this
+ * page while the panel beside it still counts the whole review.
+ */
+function pageRows() {
+  return hereRows().filter(function (c) {
+    if (S.filter === "open") return !c.resolved;
+    if (S.filter === "resolved") return c.resolved;
+    return true;
+  }).sort(function (a, b) { return a.n - b.n; });
+}
+function pageIndex() {
+  var rows = pageRows();
+  for (var i = 0; i < rows.length; i++) if (rows[i].id === S.sel) return i;
+  return -1;
+}
+function pageStep(d) {
+  var rows = pageRows();
+  if (!rows.length) return;
+  var i = pageIndex();
+  i = i < 0 ? (d > 0 ? 0 : rows.length - 1) : (i + d + rows.length) % rows.length;
+  S.sel = rows[i].id;
+  draw();
+}
+
+function stepBy(d) {
+  var rows = ordered().reduce(function (a, g) { return a.concat(g.rows); }, []);
+  if (!rows.length) return;
+  S.step = (S.step + d + rows.length) % rows.length;
+  S.sel = rows[S.step].id;
+  draw();
+}
+
+/* The notch, shared by the two variants that keep it: it is meant to be the
+   same control in both, so it is written once. */
+function notchHtml() {
+  return '<div class="v1-notch">' +
+    '<button class="v1-notch-btn" data-act="menu"' + (S.menu ? ' data-open' : '') + ' title="Settings">' + I.gear + '</button>' +
+    '<div class="v1-div"></div>' +
+    '<div class="v1-modes"><div class="v1-slider" data-at="' + ["view","comment","review"].indexOf(S.mode) + '"></div>' +
+      [["view", I.cursor], ["comment", I.bubble], ["review", I.panel]].map(function (m) {
+        return '<button class="v1-mode" data-act="mode" data-arg="' + m[0] + '"' + (S.mode === m[0] ? ' data-active' : '') +
+          ' title="' + m[0] + '">' + m[1] + '</button>';
+      }).join("") +
+    '</div></div>';
+}
+function menuHtml() {
+  if (!S.menu) return "";
+  return '<div style="position:fixed;bottom:calc(68px + var(--proto-gutter));left:50%;transform:translateX(-100px);' +
+    'min-width:200px;padding:4px;background:var(--co-bg);border:1px solid var(--co-line);border-radius:12px;' +
+    'box-shadow:var(--co-shadow);z-index:5;animation:co-rise .16s var(--co-ease)">' +
+    ['Change name', 'Clear comments on this page', 'Switch to dark', 'Hide the overlay'].map(function (t, i) {
+      return '<button style="display:flex;width:100%;gap:10px;padding:7px 10px;border:0;border-radius:8px;' +
+        'background:transparent;color:var(--co-fg);text-align:left;font:inherit;font-size:13px"' +
+        ' data-act="' + (i === 2 ? "theme" : "menu") + '">' + t + '</button>';
+    }).join("") + '</div>';
+}
+
+/* ============================================= variant 1: as it is now */
+function drawCurrent() {
+  var h = "";
+  var panel = S.mode === "review";
+  if (panel) {
+    var counts = { all: C.length, open: open_().length, resolved: C.length - open_().length };
+    h += '<div class="v1-panel" data-side="' + S.side + '">' +
+      '<div class="v1-head">' +
+        '<button class="co-icon-btn" data-act="side" title="Move to the other side">' + I.toLeft + '</button>' +
+        '<span class="v1-title">Review comments</span>' +
+        '<button class="co-icon-btn" data-act="mode" data-arg="view" title="Exit review mode">' + I.close + '</button>' +
+      '</div>' +
+      '<div class="v1-filters"><div class="v1-fslider" data-at="' + ["all","open","resolved"].indexOf(S.filter) + '"></div>' +
+        ["all","open","resolved"].map(function (f) {
+          return '<button class="v1-filter" data-act="filter" data-arg="' + f + '"' + (S.filter === f ? ' data-active' : '') + '>' +
+            f.charAt(0).toUpperCase() + f.slice(1) + ' <b>' + counts[f] + '</b></button>';
+        }).join("") +
+      '</div>' +
+      '<div class="v1-sortrow"><span class="v1-sortlabel">Order</span>' +
+        '<div class="v1-orders"><div class="v1-oslider" data-at="' + (S.order === "priority" ? 1 : 0) + '"></div>' +
+          '<button class="v1-order" data-act="order" data-arg="time"' + (S.order === "time" ? ' data-active' : '') + '>Mark order</button>' +
+          '<button class="v1-order" data-act="order" data-arg="priority"' + (S.order === "priority" ? ' data-active' : '') + '>Priority</button>' +
+        '</div></div>' +
+      '<div class="v1-list co-scroll">';
+    ordered().forEach(function (g) {
+      if (g.page) {
+        h += '<div class="v1-group"' + (PAGES[g.page].here ? ' data-here' : '') + '>' + pageIcon(g.page) +
+          '<span class="v1-group-name">' + PAGES[g.page].name + '</span>' +
+          '<span class="co-time">' + g.rows.length + '</span></div>';
+      }
+      g.rows.forEach(function (c) {
+        h += '<div class="v1-row" data-act="select" data-arg="' + c.id + '"' +
+          (S.sel === c.id ? ' data-selected' : '') + (c.resolved ? ' data-resolved' : '') + '>' +
+          '<div class="v1-card"><span class="co-num">' + c.n + '</span><div class="v1-body">' +
+            '<div class="v1-name"><strong>' + c.who + '</strong>' +
+              (c.tag ? '<span class="co-tag">' + c.tag + '</span>' : '') +
+              (c.issue ? '<a class="co-tag" href="#">' + c.issue + '</a>' : '') +
+              '<span class="co-time">' + c.when + '</span></div>' +
+            '<div class="v1-text">' + c.text + '</div>' +
+            '<div class="v1-meta">' + priChip(c) + '<span class="co-quote">' + c.quote + '</span></div>' +
+          '</div></div></div>';
+      });
+    });
+    h += '</div></div>';
+  }
+
+  h += notchHtml() + menuHtml();
+
+  var c = byId(S.sel);
+  if (panel && c && c.page === "here") {
+    var at = pinPoint(c);
+    if (at) {
+      h += '<div class="v1-pop co-scroll" style="left:' + Math.max(12, at.x - 180) + 'px;top:' + (at.y + 14) + 'px">' +
+        '<div class="v1-pop-head"><span class="v1-pop-title">Comment</span>' +
+          priChip(c, "co-pri") +
+          '<span class="v1-pop-acts">' +
+            '<button class="co-icon-btn" data-act="resolve" data-arg="' + c.id + '" title="Resolve">' + I.resolve + '</button>' +
+            '<button class="co-icon-btn" title="More">' + I.more + '</button>' +
+            '<button class="co-icon-btn" data-act="deselect" title="Close">' + I.close + '</button>' +
+          '</span></div>' +
+        '<div class="v1-pop-sel"><span class="co-pop-mark">' + c.n + '</span>' +
+          '<div style="min-width:0"><div class="v1-pop-who"><strong>' + c.who + '</strong>' +
+          '<span class="co-time">' + c.when + '</span></div>' +
+          '<div class="co-quote" style="margin-top:2px">' + c.quote + '</div></div></div>' +
+        '<div class="v1-pop-text">' + c.text + '</div>' +
+        c.replies.map(function (r) {
+          return '<div class="v1-pop-text" style="padding-top:0;color:var(--co-fg-2)"><strong style="color:var(--co-fg)">' +
+            r.who + '</strong> &middot; ' + r.text + '</div>';
+        }).join("") +
+        '<div class="v1-pop-reply"><textarea class="v1-field" placeholder="Reply…"></textarea>' +
+        '<button class="v1-send">' + I.send + '</button></div></div>';
+    }
+  }
+  return h;
+}
+
+/* ======================================== variant 2: rail and column */
+function drawRail() {
+  var counts = { all: C.length, open: open_().length, resolved: C.length - open_().length };
+  var column = S.mode !== "view";
+  var h = '<div class="v2-rail">' +
+    '<button class="v2-drop" data-act="mode" data-arg="comment"' + (S.mode === "comment" ? ' data-active' : '') +
+      ' title="Drop a comment (C)">' + I.plus + '</button>' +
+    '<button class="v2-btn" data-act="mode" data-arg="view"' + (S.mode === "view" ? ' data-active' : '') +
+      ' title="Read the page (V)">' + I.cursor + '</button>' +
+    '<button class="v2-btn" data-act="mode" data-arg="review"' + (S.mode === "review" ? ' data-active' : '') +
+      ' title="Work through the comments (R)">' + I.list + '</button>' +
+    '<div class="v2-spacer"></div>' +
+    '<div class="v2-tally" title="Still open">' + counts.open + '<small>open</small></div>' +
+    '<button class="v2-btn" data-act="menu" title="Settings">' + I.gear + '</button>' +
+    '<button class="v2-btn" title="Hide the overlay (H)">' + I.hide + '</button>' +
+    '</div>';
+
+  if (column) {
+    h += '<div class="v2-col">' +
+      '<div class="v2-head"><h2>' + counts.open + ' open, ' + counts.resolved + ' resolved</h2>' +
+      '<p>Across 3 pages · last mark 40m ago</p></div>' +
+      '<div class="v2-tabs">' +
+        ["all","open","resolved"].map(function (f) {
+          return '<button class="v2-tab" data-act="filter" data-arg="' + f + '"' + (S.filter === f ? ' data-active' : '') + '>' +
+            f.charAt(0).toUpperCase() + f.slice(1) + '<b>' + counts[f] + '</b></button>';
+        }).join("") +
+        '<button class="v2-sort" data-act="order" data-arg="' + (S.order === "time" ? "priority" : "time") + '">' +
+          I.sort + (S.order === "time" ? "Mark order" : "Priority") + '</button>' +
+      '</div><div class="v2-list co-scroll">';
+    ordered().forEach(function (g) {
+      if (g.page) {
+        h += '<div class="v2-group">' + pageIcon(g.page) + PAGES[g.page].name +
+          '<span class="n">' + g.rows.length + '</span></div>';
+      } else {
+        h += '<div class="v2-group">' + I.sort + 'One queue, blockers first<span class="n">' + g.rows.length + '</span></div>';
+      }
+      g.rows.forEach(function (c) {
+        h += '<div class="v2-row" tabindex="0" data-act="select" data-arg="' + c.id + '"' +
+          (S.sel === c.id ? ' data-selected' : '') + (c.resolved ? ' data-resolved' : '') +
+          (c.pri ? ' data-level="' + c.pri + '"' : '') + '>' +
+          '<span class="v2-rn">' + (c.resolved ? I.check : c.n) + '</span>' +
+          '<span><span class="v2-top"><strong>' + c.who + '</strong>' +
+            (c.tag ? '<span class="co-tag">' + c.tag + '</span>' : '') +
+            (c.issue ? '<span class="co-tag" style="color:var(--co-ink);text-transform:none">' + c.issue + '</span>' : '') +
+            '<span class="co-time">' + c.when + '</span></span>' +
+          '<span class="v2-txt">' + c.text + '</span>' +
+          '<span class="co-quote v2-quote" style="display:block">' + c.quote + '</span>' +
+          '<span class="v2-reply"><textarea placeholder="Reply…"></textarea></span>' +
+          '<span class="v2-acts">' +
+            '<span class="v2-act" data-primary data-act="resolve" data-arg="' + c.id + '">' +
+              (c.resolved ? 'Reopen' : 'Resolve') + '</span>' +
+            '<span class="v2-act">' + (c.issue ? 'Open ' + c.issue : 'File issue') + '</span>' +
+            '<span class="v2-act">Priority</span>' +
+          '</span></span></div>';
+      });
+    });
+    h += '</div></div>';
+  }
+  return h;
+}
+
+/* ===================================== variant 3: top bar and stepper */
+function drawStepper() {
+  var total = C.length, done = C.length - open_().length;
+  var rows = ordered().reduce(function (a, g) { return a.concat(g.rows); }, []);
+  if (S.step >= rows.length) S.step = 0;
+  var c = rows[S.step];
+  var h = '<div class="v3-bar">' +
+    '<span class="v3-brand"><span class="v3-dot"></span><strong>Review</strong>' +
+      '<span>Publishing a vault</span></span>' +
+    '<span class="v3-meter"><span class="v3-track"><span class="v3-fill" style="width:' +
+      Math.round((done / total) * 100) + '%"></span></span>' +
+      '<span class="v3-meter-txt"><b>' + done + '</b> of ' + total + ' resolved</span></span>' +
+    '<span class="v3-modes">' +
+      [["view", "View", "V"], ["comment", "Comment", "C"], ["review", "Review", "R"]].map(function (m) {
+        return '<button class="v3-mode" data-act="mode" data-arg="' + m[0] + '"' + (S.mode === m[0] ? ' data-active' : '') + '>' +
+          m[1] + '<span class="v3-key">' + m[2] + '</span></button>';
+      }).join("") +
+      '<span class="v3-sep"></span>' +
+      '<button class="co-icon-btn" data-act="menu">' + I.gear + '</button>' +
+      '<button class="co-icon-btn">' + I.hide + '</button>' +
+    '</span></div>';
+
+  if (S.mode === "review" && c) {
+    if (S.queue) {
+      h += '<div class="v3-queue co-scroll"><div class="v3-qhead">The whole queue · ' + rows.length +
+        '<button class="co-icon-btn" data-act="queue">' + I.close + '</button></div>' +
+        rows.map(function (r, i) {
+          return '<button class="v3-qrow" data-act="step" data-arg="' + i + '"' +
+            (i === S.step ? ' data-at' : '') + (r.resolved ? ' data-resolved' : '') + '>' +
+            '<span class="v3-qn">' + r.n + '</span>' +
+            '<span>' + r.text.slice(0, 64) + '…<em>' + r.who + ' · ' + PAGES[r.page].name + '</em></span>' +
+            priChip(r) + '</button>';
+        }).join("") + '</div>';
+    } else {
+      h += '<div class="v3-card">' +
+        '<div class="v3-card-head">' +
+          '<span class="v3-pos">' + (S.step + 1) + ' <span>of ' + rows.length + '</span></span>' +
+          priChip(c, "co-pri") +
+          '<span class="v3-where">' + pageIcon(c.page) + '<span>' + PAGES[c.page].name + '</span></span>' +
+          '<span class="v3-step">' +
+            '<button class="co-icon-btn" data-act="step-" title="Previous (K)">' + I.up + '</button>' +
+            '<button class="co-icon-btn" data-act="step+" title="Next (J)">' + I.down + '</button>' +
+            '<button class="co-icon-btn" data-act="queue" title="Show the whole queue">' + I.list + '</button>' +
+            '<button class="co-icon-btn" data-act="mode" data-arg="view" title="Close">' + I.close + '</button>' +
+          '</span></div>' +
+        '<div class="v3-card-body">' +
+          '<div class="v3-q"><em>' + c.quote + '</em></div>' +
+          '<div class="v3-who"><span class="v3-av">' + c.who.charAt(0) + '</span><strong>' + c.who + '</strong>' +
+            '<span class="co-time">' + c.when + '</span>' +
+            (c.tag ? '<span class="co-tag">' + c.tag + '</span>' : '') + '</div>' +
+          '<div class="v3-body-txt">' + c.text + '</div>' +
+          (c.replies.length ? '<div class="v3-replies">' + c.replies.map(function (r) {
+            return '<div class="v3-reply"><span class="v3-av">' + r.who.charAt(0) + '</span>' +
+              '<div><strong>' + r.who + '</strong><p>' + r.text + '</p></div></div>';
+          }).join("") + '</div>' : '') +
+        '</div>' +
+        '<div class="v3-card-foot">' +
+          '<button class="v3-btn" data-primary data-act="resolve-step" data-arg="' + c.id + '">' +
+            I.check + (c.resolved ? 'Reopen' : 'Resolve &amp; next') + '</button>' +
+          '<button class="v3-btn">Reply</button>' +
+          '<span class="v3-foot-end">' +
+            '<button class="v3-btn"' + (c.issue ? ' data-filed' : '') + '>' + I.issue +
+              (c.issue ? c.issue : 'File issue') + '</button>' +
+            '<button class="co-icon-btn">' + I.more + '</button>' +
+          '</span></div></div>';
+    }
+  }
+  return h;
+}
+
+/* ====================================== variant 4: notes in the margin */
+function drawMargin() {
+  var counts = { open: open_().length };
+  var h = '<div class="v4-status">' + I.bubble.replace('width="16" height="16"', 'width="13" height="13"') +
+    '<span><b>' + counts.open + '</b> open on this page and 2 others</span>' +
+    '<button data-act="elsewhere">' + (S.elsewhere ? 'hide' : 'show all') + '</button></div>';
+
+  if (S.elsewhere) {
+    var away = C.filter(function (c) { return c.page !== "here"; });
+    h += '<div class="v4-elsewhere"><div class="v4-ehead">On other pages · ' + away.length +
+      '<button class="co-icon-btn" data-act="elsewhere">' + I.close + '</button></div>' +
+      away.map(function (c) {
+        return '<button class="v4-erow">' + pageIcon(c.page) +
+          '<span>' + c.text.slice(0, 54) + '…<em>' + PAGES[c.page].name + ' · ' + c.who + '</em></span></button>';
+      }).join("") + '</div>';
+  }
+
+  h += '<div class="v4-fabs">' +
+    '<button class="v4-fab" data-act="mode" data-arg="comment"' + (S.mode === "comment" ? ' data-active' : '') +
+      ' title="Drop a comment (C)">' + I.plus + '</button>' +
+    '<button class="v4-fab v4-fab-sm" data-act="mode" data-arg="' + (S.mode === "view" ? "review" : "view") + '"' +
+      (S.mode === "review" ? ' data-active' : '') + ' title="Show or hide the margin (R)">' + I.bubble + '</button>' +
+    '<button class="v4-fab v4-fab-sm" data-act="menu" title="Settings">' + I.gear + '</button>' +
+    '</div>';
+
+  if (S.mode !== "view") {
+    h += '<svg class="v4-leader" id="leaders"></svg><div class="v4-margin" id="margin">' +
+      hereRows().map(function (c) {
+        return '<div class="v4-note" data-note="' + c.id + '" data-act="select" data-arg="' + c.id + '"' +
+          (S.sel === c.id ? ' data-selected' : '') + (c.resolved ? ' data-resolved' : '') + '>' +
+          '<div class="v4-nhead"><span class="v4-nn">' + c.n + '</span><strong>' + c.who + '</strong>' +
+            priChip(c) + '<span class="co-time">' + c.when + '</span></div>' +
+          '<div class="v4-ntxt">' + c.text + '</div>' +
+          '<div class="v4-nreply"><textarea placeholder="Reply…"></textarea></div>' +
+          '<div class="v4-nfoot">' +
+            '<span class="v2-act" data-primary data-act="resolve" data-arg="' + c.id + '">' +
+              (c.resolved ? 'Reopen' : 'Resolve') + '</span>' +
+            '<span class="v2-act">' + (c.issue ? c.issue : 'File issue') + '</span>' +
+          '</div></div>';
+      }).join("") + '</div>';
+  }
+  return h;
+}
+
+/* The order, as one chip that names the order in force. */
+function sortChip() {
+  var next = S.order === "time" ? "priority" : "time";
+  var now = S.order === "time" ? "Mark order" : "Priority";
+  return '<button class="v5-sort" data-act="order" data-arg="' + next + '" title="' +
+    (S.order === "time"
+      ? "Grouped by page, in pin order \u2014 switch to priority"
+      : "One queue across every page, blockers first \u2014 switch to mark order") +
+    '">' + I.sort + now + '</button>';
+}
+
+/* ===== variant 5: the iteration -- our notch, our panel, their header,
+   their card ============================================================ */
+function drawCombined() {
+  var counts = { all: C.length, open: open_().length, resolved: C.length - open_().length };
+  var pages = {};
+  C.forEach(function (c) { pages[c.page] = 1; });
+  var h = "";
+
+  if (S.mode === "review") {
+    var meta = 'Across ' + Object.keys(pages).length + ' pages \u00b7 last mark 40m ago';
+    var acts = '<span class="v5-head-acts">' +
+      '<button class="co-icon-btn" data-act="side" title="Move to the other side">' + I.toLeft + '</button>' +
+      '<button class="co-icon-btn" data-act="mode" data-arg="view" title="Exit review mode">' + I.close + '</button>' +
+      '</span>';
+
+    h += '<div class="v1-panel" data-side="' + S.side + '">' +
+      '<div class="v5-head"><span class="v5-head-txt">' +
+        '<h2>' + counts.open + ' open, ' + counts.resolved + ' resolved</h2>' +
+        '<p>' + meta + '</p>' +
+      '</span>' + acts + '</div>' +
+      '<div class="v5-controls">' +
+        '<div class="v1-filters"><div class="v1-fslider" data-at="' + ["all","open","resolved"].indexOf(S.filter) + '"></div>' +
+          ["all","open","resolved"].map(function (f) {
+            return '<button class="v1-filter" data-act="filter" data-arg="' + f + '"' + (S.filter === f ? ' data-active' : '') + '>' +
+              f.charAt(0).toUpperCase() + f.slice(1) + ' <b>' + counts[f] + '</b></button>';
+          }).join("") +
+        '</div>' + sortChip() +
+      '</div>' +
+      '<div class="v1-list co-scroll">';
+    ordered().forEach(function (g) {
+      if (g.page) {
+        h += '<div class="v1-group"' + (PAGES[g.page].here ? ' data-here' : '') + '>' + pageIcon(g.page) +
+          '<span class="v1-group-name">' + PAGES[g.page].name + '</span>' +
+          '<span class="co-time">' + g.rows.length + '</span></div>';
+      }
+      g.rows.forEach(function (c) {
+        h += '<div class="v1-row" data-act="select" data-arg="' + c.id + '"' +
+          (S.sel === c.id ? ' data-selected' : '') + (c.resolved ? ' data-resolved' : '') + '>' +
+          '<div class="v1-card"><span class="co-num">' + c.n + '</span><div class="v1-body">' +
+            '<div class="v1-name"><strong>' + c.who + '</strong>' +
+              (c.tag ? '<span class="co-tag">' + c.tag + '</span>' : '') +
+              (c.issue ? '<a class="co-tag" href="#">' + c.issue + '</a>' : '') +
+              '<span class="co-time">' + c.when + '</span></div>' +
+            '<div class="v1-text">' + c.text + '</div>' +
+            '<div class="v1-meta">' + priChip(c) + '<span class="co-quote">' + c.quote + '</span></div>' +
+          '</div></div></div>';
+      });
+    });
+    h += '</div></div>';
+  }
+
+  h += notchHtml() + menuHtml();
+
+  /* the card, at its pin */
+  var c = byId(S.sel);
+  if (S.mode === "review" && c && c.page === "here") {
+    var at = pinPoint(c);
+    var rows = pageRows(), i = pageIndex();
+    if (at && i >= 0) {
+      var W = 400;
+      var left = Math.max(12, at.x - 190);
+      var limit = window.innerWidth - W - (S.side === "right" ? 348 : 24);
+      if (S.side === "left") left = Math.max(348, left);
+      left = Math.min(left, Math.max(12, limit));
+      h += '<div class="v5-card" data-y="' + at.y + '" style="left:' + left + 'px;top:' + (at.y + 14) + 'px">' +
+        '<div class="v3-card-head">' +
+          '<span class="v3-pos">' + (i + 1) + ' <span>of ' + rows.length + '</span></span>' +
+          priChip(c, "co-pri") +
+          '<span class="v3-step">' +
+            '<button class="co-icon-btn" data-act="pstep-" title="Previous mark on this page">' + I.up + '</button>' +
+            '<button class="co-icon-btn" data-act="pstep+" title="Next mark on this page">' + I.down + '</button>' +
+            '<button class="co-icon-btn" data-act="deselect" title="Close">' + I.close + '</button>' +
+          '</span></div>' +
+        '<div class="v3-card-body">' +
+          '<div class="v3-q"><em>' + c.quote + '</em></div>' +
+          '<div class="v3-who"><span class="v3-av">' + c.who.charAt(0) + '</span><strong>' + c.who + '</strong>' +
+            '<span class="co-time">' + c.when + '</span>' +
+            (c.tag ? '<span class="co-tag">' + c.tag + '</span>' : '') + '</div>' +
+          '<div class="v3-body-txt">' + c.text + '</div>' +
+          (c.replies.length ? '<div class="v3-replies">' + c.replies.map(function (r) {
+            return '<div class="v3-reply"><span class="v3-av">' + r.who.charAt(0) + '</span>' +
+              '<div><strong>' + r.who + '</strong><p>' + r.text + '</p></div></div>';
+          }).join("") + '</div>' : '') +
+        '</div>' +
+        '<div class="v3-card-foot">' +
+          '<button class="v3-btn" data-primary data-act="resolve-page" data-arg="' + c.id + '">' +
+            I.check + (c.resolved ? 'Reopen' : 'Resolve &amp; next') + '</button>' +
+          '<button class="v3-btn">Reply</button>' +
+          '<span class="v3-foot-end">' +
+            '<button class="v3-btn"' + (c.issue ? ' data-filed' : '') + '>' + I.issue +
+              (c.issue ? c.issue : 'File issue') + '</button>' +
+            '<button class="co-icon-btn">' + I.more + '</button>' +
+          '</span></div></div>';
+    }
+  }
+  return h;
+}
+
+/*
+ * The card sits under its pin, unless there is no room under its pin.
+ *
+ * A pin two thirds of the way down a long paragraph puts four hundred
+ * pixels of card below the fold, and the footer -- which is where every
+ * action is -- is the part that goes. So the card is measured once it is
+ * in the document and flipped above the mark when it would not fit below,
+ * which is the one case the floating popup has always got wrong.
+ */
+function placeCard() {
+  var card = co.querySelector(".v5-card");
+  if (!card) return;
+  var py = +card.getAttribute("data-y");
+  var h = card.offsetHeight;
+  var floor = window.scrollY + window.innerHeight - 56;
+  var ceil = window.scrollY + 12;
+  var top = py + 14;
+  if (top + h > floor) {
+    var above = py - 34 - h;
+    top = above >= ceil ? above : Math.max(ceil, floor - h);
+  }
+  card.style.top = top + "px";
+}
+
+/* ------------------------------------------------------ pins and layout */
+function blockOf(c) { return article.querySelector('[data-b="' + c.block + '"]'); }
+function pinPoint(c) {
+  var b = blockOf(c);
+  if (!b) return null;
+  var r = b.getBoundingClientRect();
+  return { x: r.left + r.width * c.fx, y: r.top + window.scrollY + r.height * c.fy, rect: r };
+}
+function drawPins() {
+  if (S.mode === "view" && S.variant !== "current") { pins.innerHTML = ""; return; }
+  pins.innerHTML = hereRows().map(function (c) {
+    var at = pinPoint(c);
+    if (!at) return "";
+    return '<button class="co-pin" data-act="select" data-arg="' + c.id + '"' +
+      (S.sel === c.id ? ' data-selected' : '') + (c.resolved ? ' data-resolved' : '') +
+      ' style="left:' + at.x + 'px;top:' + at.y + 'px">' +
+      '<svg viewBox="0 0 32 32"><path class="shape" d="M13 3 L21 3 A8 8 0 0 1 29 11 L29 19 A8 8 0 0 1 21 27 L5 27 L5 11 A8 8 0 0 1 13 3 Z"/></svg>' +
+      '<span>' + c.n + '</span></button>';
+  }).join("");
+
+  var aim = document.getElementById("aim");
+  var sel = byId(S.sel);
+  if (sel && sel.page === "here" && S.mode !== "view") {
+    var b = blockOf(sel);
+    if (b) {
+      var r = b.getBoundingClientRect();
+      aim.hidden = false;
+      aim.style.left = (r.left - 4) + "px";
+      aim.style.top = (r.top + window.scrollY - 3) + "px";
+      aim.style.width = (r.width + 8) + "px";
+      aim.style.height = (r.height + 6) + "px";
+      aim.setAttribute("data-locked", "");
+      return;
+    }
+  }
+  aim.hidden = true;
+}
+
+/* The margin column: every note is placed at its own pin's height, then
+   pushed down far enough not to overlap the note above it. */
+function layoutMargin() {
+  var box = document.getElementById("margin");
+  if (!box) return;
+  var ar = article.getBoundingClientRect();
+  box.style.left = (ar.right + 34) + "px";
+  var notes = [].slice.call(box.querySelectorAll(".v4-note"));
+  var cursor = -1e9, placed = [];
+  notes.forEach(function (el) {
+    var c = byId(el.getAttribute("data-note"));
+    var at = pinPoint(c);
+    var want = at ? at.y - 14 : 0;
+    var top = Math.max(want, cursor + 10);
+    el.style.top = top + "px";
+    cursor = top + el.offsetHeight;
+    placed.push({ el: el, c: c, top: top, at: at });
+  });
+
+  var svg = document.getElementById("leaders");
+  if (!svg) return;
+  var docH = document.documentElement.scrollHeight;
+  svg.setAttribute("width", document.documentElement.scrollWidth);
+  svg.setAttribute("height", docH);
+  svg.style.width = document.documentElement.scrollWidth + "px";
+  svg.style.height = docH + "px";
+  /* Only the selected note is threaded back to its text. Drawing all seven
+     puts seven lines through the paragraphs they are about, which is the
+     one thing the margin was supposed to avoid. */
+  svg.innerHTML = placed.map(function (p) {
+    if (!p.at || S.sel !== p.c.id) return "";
+    var x1 = ar.right + 4, y1 = p.at.y - 10;
+    var x2 = ar.right + 34, y2 = p.top + 16;
+    return '<path class="on" d="M' + x1 + ' ' + y1 + ' Q' + x2 + ' ' + y1 + ' ' + x2 + ' ' + y2 + '" />';
+  }).join("");
+}
+
+/* ----------------------------------------------------------- the switch */
+function draw() {
+  document.body.setAttribute("data-variant", S.variant);
+  if (S.variant === "current") co.innerHTML = drawCurrent();
+  else if (S.variant === "rail") co.innerHTML = drawRail();
+  else if (S.variant === "stepper") co.innerHTML = drawStepper();
+  else if (S.variant === "margin") co.innerHTML = drawMargin();
+  else co.innerHTML = drawCombined();
+
+  /* Room for whichever chrome steals part of the viewport. */
+  document.querySelector(".pg-wrap").style.paddingLeft =
+    S.variant === "rail" ? (S.mode === "view" ? "52px" : "368px") : "";
+  document.querySelector(".pg-top").style.paddingLeft = S.variant === "rail" ? "64px" : "";
+  document.querySelector(".pg-top").style.top = S.variant === "stepper" ? "48px" : "0";
+  document.body.style.paddingTop = S.variant === "stepper" ? "48px" : "";
+
+  drawPins();
+  layoutMargin();
+  placeCard();
+  paintSwitcher();
+}
+
+var LABEL = document.getElementById("plabel");
+var DOTS = document.getElementById("dots");
+function paintSwitcher() {
+  var i = VARIANTS.findIndex(function (v) { return v[0] === S.variant; });
+  LABEL.innerHTML = '<b>' + S.variant + '</b> &mdash; <span>' + VARIANTS[i][2] + '</span>';
+  DOTS.innerHTML = VARIANTS.map(function (v, j) {
+    return '<span class="dot"' + (j === i ? ' data-on' : '') + '></span>';
+  }).join("");
+  var st = document.getElementById("pstate");
+  st.textContent = "mode=" + S.mode + "  sel=" + (S.sel || "—") +
+    "  filter=" + S.filter + "  order=" + S.order +
+    "  open=" + open_().length + "/" + C.length;
+}
+function go(d) {
+  var i = VARIANTS.findIndex(function (v) { return v[0] === S.variant; });
+  S.variant = VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length][0];
+  S.menu = S.queue = S.elsewhere = false;
+  /* file:// refuses replaceState in some browsers, and the prototype is
+     meant to survive a double-click, so the URL is a nicety here. */
+  try {
+    var u = new URL(location.href);
+    u.searchParams.set("variant", S.variant);
+    history.replaceState(null, "", u);
+  } catch (err) {}
+  draw();
+}
+
+/* ----------------------------------------------------------- wiring up */
+document.addEventListener("click", function (e) {
+  var tag = e.target.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT") return;
+  var t = e.target.closest ? e.target.closest("[data-act]") : null;
+  if (!t) { if (S.menu || S.queue) { S.menu = false; draw(); } return; }
+  var act = t.getAttribute("data-act"), arg = t.getAttribute("data-arg");
+  e.preventDefault();
+  e.stopPropagation();
+  if (act === "mode") { S.mode = arg; S.menu = false; draw(); }
+  else if (act === "filter") set("filter", arg);
+  else if (act === "order") set("order", arg);
+  else if (act === "side") set("side", S.side === "right" ? "left" : "right");
+  else if (act === "select") select(arg);
+  else if (act === "deselect") set("sel", null);
+  else if (act === "resolve") toggleResolved(arg);
+  else if (act === "resolve-step") { var c = byId(arg); if (c && !c.resolved) { c.resolved = true; stepBy(1); } else { toggleResolved(arg); } }
+  else if (act === "pstep+") pageStep(1);
+  else if (act === "pstep-") pageStep(-1);
+  else if (act === "resolve-page") { var pc = byId(arg); if (pc && !pc.resolved) { pc.resolved = true; pageStep(1); } else { toggleResolved(arg); } }
+  else if (act === "step+") stepBy(1);
+  else if (act === "step-") stepBy(-1);
+  else if (act === "step") { S.step = +arg; S.sel = ordered().reduce(function (a, g) { return a.concat(g.rows); }, [])[S.step].id; S.queue = false; draw(); }
+  else if (act === "queue") set("queue", !S.queue);
+  else if (act === "elsewhere") set("elsewhere", !S.elsewhere);
+  else if (act === "menu") set("menu", !S.menu);
+  else if (act === "theme") { S.menu = false; toggleTheme(); }
+}, true);
+
+document.getElementById("prev").addEventListener("click", function () { go(-1); });
+document.getElementById("next").addEventListener("click", function () { go(1); });
+
+function toggleTheme() {
+  var dark = document.documentElement.getAttribute("data-theme") === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  document.getElementById("theme").textContent = dark ? "dark" : "light";
+  draw();
+}
+document.getElementById("theme").addEventListener("click", toggleTheme);
+
+document.addEventListener("keydown", function (e) {
+  var tag = (document.activeElement || {}).tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || (document.activeElement || {}).isContentEditable) return;
+  if (e.key === "ArrowLeft") { go(-1); return; }
+  if (e.key === "ArrowRight") { go(1); return; }
+  if (e.key === "v") { S.mode = "view"; draw(); }
+  if (e.key === "c") { S.mode = "comment"; draw(); }
+  if (e.key === "r") { S.mode = "review"; draw(); }
+  if (e.key === "j") { if (S.variant === "combined") pageStep(1); else stepBy(1); }
+  if (e.key === "k") { if (S.variant === "combined") pageStep(-1); else stepBy(-1); }
+});
+
+window.addEventListener("resize", function () { drawPins(); layoutMargin(); });
+
+/* the state readout, so every switch says what it is showing */
+(function () {
+  var st = document.createElement("span");
+  st.id = "pstate";
+  st.style.cssText = "flex:none;color:#6f7985;font-size:10px;white-space:nowrap";
+  document.querySelector("#proto .tagline").after(st);
+})();
+
+(function start() {
+  var want = new URL(location.href).searchParams.get("variant");
+  if (want && VARIANTS.some(function (v) { return v[0] === want; })) S.variant = want;
+  draw();
+  /* a second pass once fonts have settled, so the margin column lines up */
+  setTimeout(function () { drawPins(); layoutMargin(); }, 120);
+})();
+</script>
+</body>
+</html>

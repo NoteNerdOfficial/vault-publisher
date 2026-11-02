@@ -30,12 +30,12 @@
  * 2 added the drop point (`x`, `y`, `rx`, `ry`) and `replies`. 3 added
  * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
  * `external` and the document's `withdrawn` list. 6 renamed the middle
- * priority from `normal` to `medium`. 7 added `route`. An older file still
- * reads: every added field is optional and defaults to what a comment
- * without it meant, and a `normal` priority is read as `medium` by every
- * reader of one.
+ * priority from `normal` to `medium`. 7 added `route`. 8 added `imported`.
+ * An older file still reads: every added field is optional and defaults to
+ * what a comment without it meant, and a `normal` priority is read as
+ * `medium` by every reader of one.
  */
-export const OVERLAY_SCHEMA_VERSION = 7;
+export const OVERLAY_SCHEMA_VERSION = 8;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
@@ -171,6 +171,23 @@ export interface OverlayComment {
    * writing into the review file does, and the overlay reads it back.
    */
   agent: string | null;
+  /**
+   * Where this comment came in from, or null for one made in this browser.
+   *
+   * Set by the overlay's own import, which is how a review crosses from one
+   * browser to another: a published build keeps nothing, so a reviewer who
+   * clears their site data, moves to another machine, or hands their notes
+   * to someone else has the file and nothing else. The value is the site
+   * the export named, so a row can say where it came from rather than only
+   * that it came from somewhere.
+   *
+   * Worth a pill for the same reason `agent` is. The author field carries a
+   * name either way, and a name does not say whether that person was
+   * looking at this build: an imported comment may have been written
+   * against an older one, which is the difference between "this is wrong"
+   * and "this was wrong when they read it".
+   */
+  imported: string | null;
   /** The issue filed from this comment, or null while none has been. */
   external: OverlayExternalIssue | null;
   replies: OverlayReply[];

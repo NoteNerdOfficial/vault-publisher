@@ -6,6 +6,7 @@ import {
   resolveHomeNote,
   selectNotes,
   urlForNote,
+  overlayKey,
 } from "./buildSite";
 
 /**
@@ -99,6 +100,50 @@ describe("selectNotes", () => {
     expect(selected.map((f) => f.path)).toEqual([".archive/old-note.md"]);
   });
 
+  /*
+   * The subtraction the scope cannot express. A vault that keeps everything
+   * in one tree had two answers before this -- publish all of it including
+   * the folders nobody should see, or ask every note to opt in -- and
+   * neither describes "all of it except these three".
+   */
+  it("leaves out the folders the author excluded", () => {
+    const selected = selectNotes(
+      stubApp(VAULT),
+      config({ folder: "", excludeFolders: ["private"] }),
+    );
+    expect(selected.map((f) => f.path)).toEqual([
+      "inbox.md",
+      "notes/nested/deep.md",
+      "notes/public.md",
+    ]);
+  });
+
+  it("excludes a subfolder of the scope as readily as a folder of the vault", () => {
+    const selected = selectNotes(
+      stubApp(VAULT),
+      config({ folder: "notes", excludeFolders: ["notes/nested"] }),
+    );
+    expect(selected.map((f) => f.path)).toEqual(["notes/public.md"]);
+  });
+
+  // Both are paths somebody typed, and the more specific of the two is the
+  // one that says "not this". The settings screen warns before it happens.
+  it("beats the scope where the two contradict each other", () => {
+    const selected = selectNotes(
+      stubApp(VAULT),
+      config({ folder: "notes", excludeFolders: ["notes"] }),
+    );
+    expect(selected).toEqual([]);
+  });
+
+  it("does not catch a folder that merely starts the same way", () => {
+    const selected = selectNotes(
+      stubApp([{ path: "notes/a.md" }, { path: "notebook/b.md" }]),
+      config({ folder: "", excludeFolders: ["notes"] }),
+    );
+    expect(selected.map((f) => f.path)).toEqual(["notebook/b.md"]);
+  });
+
   it("takes the caller's output folders over the default", () => {
     const selected = selectNotes(
       stubApp([{ path: "out/report.md" }, { path: "notes/a.md" }]),
@@ -168,6 +213,26 @@ describe("selectNotes", () => {
       config({ folder: "", requireFrontmatterFlag: "publish" }),
     );
     expect(selected).toEqual([]);
+  });
+});
+
+/*
+ * The one thing that must never reach a published page: the vault's own
+ * folder names. A preview keys comments on the note; a publish keys them
+ * on the page's public URL.
+ */
+describe("overlayKey", () => {
+  it("keys a preview on the note, so an import can find the writing", () => {
+    expect(overlayKey({}, "notes/plan.html", "Clients/Acme/Q3 Plan.md")).toBe(
+      "Clients/Acme/Q3 Plan.md",
+    );
+  });
+
+  it("keys a publish on the page, so no vault path is published", () => {
+    const key = overlayKey({ published: true }, "notes/plan.html", "Clients/Acme/Q3 Plan.md");
+    expect(key).toBe("notes/plan.html");
+    expect(key).not.toContain("Clients");
+    expect(key).not.toContain(".md");
   });
 });
 

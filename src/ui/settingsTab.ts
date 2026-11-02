@@ -8,6 +8,7 @@ import {
   storageMode,
 } from "../platform/secrets";
 import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
+import { parseExcludeFolders, swallowsScope } from "../publish/excludeFolders";
 import {
   SourceLinkSettings,
   resolveSourceUrl,
@@ -167,6 +168,7 @@ export interface SettingsHost {
   relayTokenState: TokenState;
   /** Replaces the tracker token, on the same terms as `setToken`. */
   setRelayToken(value: string): void;
+  setPublishPassword(value: string): void;
   settings: {
     autoRun: AutoRunMode;
     site: {
@@ -179,12 +181,17 @@ export interface SettingsHost {
       pinnedProperty?: string;
       theme?: string;
       publishHtmlFiles?: boolean;
+      excludeFolders?: string[];
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
       customDomain?: string;
     };
+    publishPassword: string;
     commentOverlay: {
       enabled: boolean;
+      onPublish: boolean;
+      publishComments: boolean;
+      publishContact: string;
       reviewer: string;
       reviewFolder: string;
     };
@@ -316,6 +323,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     this.renderContent(containerEl);
     this.renderTheme(containerEl);
     this.renderConnection(containerEl);
+    this.renderPassword(containerEl);
     this.renderReview(containerEl);
     this.renderRelay(containerEl);
     this.renderAutomation(containerEl);
@@ -920,6 +928,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         );
     }
 
+    this.renderExcludes(root);
+
     new Setting(root)
       .setName("Require a frontmatter flag")
       .setDesc(
@@ -1112,6 +1122,57 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * Obsidian's own settings, where "theme" already means the one the reader
    * is looking at rather than the one their site will be built with.
    */
+  /**
+   * The folders to leave out of whatever the scope took in.
+   *
+   * Under Scope, because it is the second half of the same sentence: this is
+   * what the scope cannot say on its own. Shown at every scope and not only
+   * for a vault published whole -- a folder with a private subfolder in it is
+   * the same problem one level down, and a control that appeared and
+   * disappeared with the dropdown above would be hiding the answer from the
+   * person most likely to want it.
+   *
+   * A textarea rather than a comma-separated field. A list of paths is
+   * written one per line, and a folder is allowed a comma in its name.
+   */
+  private renderExcludes(root: HTMLElement): void {
+    const site = this.host.settings.site;
+    const entries = parseExcludeFolders(site.excludeFolders);
+
+    new Setting(root)
+      .setName("Exclude folders")
+      .setDesc(
+        "One vault path per line. Nothing inside these is published, at any " +
+          "scope. This is a list of what to leave out, so a folder added to " +
+          "the vault later is published unless you add it here too -- for " +
+          "notes that must never go out, the frontmatter flag below is the " +
+          "setting that fails safe.",
+      )
+      .addTextArea((text) => {
+        text.inputEl.rows = 4;
+        text.inputEl.spellcheck = false;
+        text
+          .setPlaceholder("Journal\nPeople\nwork/clients")
+          .setValue(entries.join("\n"))
+          .onChange(async (value: string) => {
+            site.excludeFolders = parseExcludeFolders(value);
+            await this.host.saveSettings();
+          });
+      });
+
+    // The contradiction: "publish this folder, except this folder". The
+    // build's honest answer is an empty site, and here is the only place
+    // where saying so costs the reader nothing.
+    const swallowed = entries.filter((entry) => swallowsScope(entry, site.folder));
+    if (swallowed.length) {
+      this.warning(
+        root,
+        `"${swallowed[0]}" contains everything you are publishing, so this ` +
+          "build would have no pages in it at all.",
+      );
+    }
+  }
+
   private renderTheme(root: HTMLElement): void {
     new Setting(root).setName("Appearance").setHeading();
 
@@ -1352,12 +1413,96 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * working rather than part of setup, so it stays out of the first-run
    * checklist and out of the way of someone who only wants to publish.
    *
-   * The description says "preview" twice on purpose. The overlay never
-   * reaches a published page -- it cannot, since only `buildToPreview` can
-   * ask for it -- and someone who believed otherwise would either think
-   * their readers can comment, or worry that their vault's folder names are
-   * on the internet. Both are worth one extra sentence.
+   * The overlay can now reach a published page, which it could not before,
+   * so the two things someone would otherwise have to guess are both said
+   * here in full: whether readers of the site can write comments, and
+   * whether the vault's folder names travel with them. The answers are no
+   * and never, and both are worth a sentence rather than a reassuring
+   * silence.
    */
+  /**
+   * A password on the published site.
+   *
+   * The copy here is the whole of the honesty of this feature, so it is
+   * worth labouring. A reader who sets a password reasonably assumes it is
+   * a login; it is not, and cannot be, because GitHub Pages serves every
+   * byte of a public repository to anyone who asks. What it actually does
+   * is encrypt the files, which is real -- somebody without the password
+   * downloads ciphertext -- but it is one shared secret, it cannot be
+   * revoked without republishing, and anyone it is given to can pass it on.
+   *
+   * Saying so plainly is not a disclaimer. It is the difference between
+   * somebody using this for a draft they would rather not have indexed,
+   * which it is good at, and using it for something that matters, which it
+   * is not built for.
+   */
+  private renderPassword(root: HTMLElement): void {
+    new Setting(root).setName("Password").setHeading();
+
+    this.note(
+      root,
+      "A published site is public: anyone with the address can download " +
+        "every file. A password does not change that — it encrypts the " +
+        "files, so what they download cannot be read without it.",
+    );
+
+    const set = Boolean(this.host.settings.publishPassword);
+    new Setting(root)
+      .setName("Password for the published site")
+      .setDesc(
+        set
+          ? `Set. Pages and attachments are encrypted on publish. ${describeStorage()}`
+          : `Leave empty to publish normally. ${describeStorage()}`,
+      )
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.inputEl.autocomplete = "off";
+        text
+          .setValue(set ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : "")
+          .onChange(async (value) => {
+            // Dots mean untouched. A field that looks empty invites a save
+            // that empties it, which is how a password gets lost by opening
+            // settings to change something else.
+            if (value.includes("\u2022")) return;
+            this.host.setPublishPassword(value.trim());
+            await this.host.saveSettings();
+          });
+      });
+
+    if (set) {
+      this.note(
+        root,
+        "What this is: one shared secret. Everyone you give it to can read " +
+          "everything and pass it on, and changing it means publishing " +
+          "again. Forgetting it costs nothing — your vault is the original. " +
+          "What it is not: an account, a login, or a way to give one person " +
+          "access and not another. If your host can ask for a password " +
+          "itself, that is stronger than this.",
+      );
+      /*
+       * The limit worth knowing before trusting this with anything.
+       *
+       * Page contents are encrypted; the names of the files holding them
+       * are not, and cannot be while the pages still link to each other by
+       * name. On a public repository the whole tree is browsable anyway. So
+       * a note called "Acme layoffs" publishes a readable URL saying so,
+       * whatever is inside it -- and somebody deciding what to protect
+       * should hear that from the settings rather than discover it.
+       */
+      this.warning(
+        root,
+        "Page addresses stay readable. A note called “Acme layoffs” " +
+          "publishes a URL that says so, even though nobody can read the " +
+          "page. Rename anything whose title is the secret.",
+      );
+      this.note(
+        root,
+        "Your preview is never encrypted, and the review overlay still " +
+          "works on an unlocked page.",
+      );
+    }
+  }
+
   private renderReview(root: HTMLElement): void {
     const overlay = this.host.settings.commentOverlay;
 
@@ -1388,6 +1533,88 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await this.host.saveSettings();
           }),
       );
+
+    /*
+     * The overlay on the published site: three settings, in the order the
+     * decisions are actually made.
+     *
+     * Shipping the overlay, inviting people to write into it, and telling
+     * them where to send what they wrote are separate choices, and the
+     * second is much the largest. So they nest, each one off until the one
+     * above it is on.
+     *
+     * The copy is written for an invited reviewer rather than for a
+     * passing reader, because that is who this works for. There is no way
+     * back from a published page: a reviewer exports a file and sends it,
+     * which somebody who was asked to review the site will do and somebody
+     * who wandered in will not.
+     */
+    new Setting(root)
+      .setName("Include in the published site")
+      .setDesc(
+        "Puts the overlay on published pages, so someone you send the site " +
+          "to can read a review on it. Your vault's folder names never go " +
+          "with it: a published page groups comments by its own URL.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(overlay.onPublish).onChange(async (value) => {
+          overlay.onPublish = value;
+          await this.host.saveSettings();
+          this.display();
+        }),
+      );
+
+    if (overlay.onPublish) {
+      this.note(
+        root,
+        "A published page has no plugin behind it, so comments live in the " +
+          "reader's own browser and reach you only as a file they export " +
+          "and send. Best suited to reviewers you asked, rather than to " +
+          "whoever happens to visit.",
+      );
+
+      new Setting(root)
+        .setName("Let readers write comments")
+        .setDesc(
+          "Off, the published overlay only reads: pins, the comment list, " +
+            "and import and export. On, anyone who can open the site can " +
+            "leave comments in their own browser.",
+        )
+        .addToggle((toggle) =>
+          toggle.setValue(overlay.publishComments).onChange(async (value) => {
+            overlay.publishComments = value;
+            await this.host.saveSettings();
+          }),
+        );
+
+      /*
+       * Not nested under "let readers write comments".
+       *
+       * Exporting works on a read-only published page too -- it is how
+       * somebody passes on a review they imported -- so the address is
+       * useful whenever the overlay is published at all. It used to be
+       * hidden when commenting was off while still being written into
+       * every page, which meant a stale address could publish with
+       * nothing in the settings showing it.
+       */
+      new Setting(root)
+        .setName("Where to send a review")
+        .setDesc(
+          "Shown when a reader exports their comments, with the reminder " +
+            "to put the file in your review folder. A link is safer than " +
+            "an email address: this is written into every published page, " +
+            "where anything can read it.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("https://github.com/you/repo/issues/new")
+            .setValue(overlay.publishContact)
+            .onChange(async (value) => {
+              overlay.publishContact = value.trim();
+              await this.host.saveSettings();
+            }),
+        );
+    }
 
     new Setting(root)
       .setName("Review folder")

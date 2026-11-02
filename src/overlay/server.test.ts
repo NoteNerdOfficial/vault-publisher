@@ -35,14 +35,19 @@ const fetch = (url: string | URL, init: RequestInit = {}): Promise<Response> =>
 
 function store(seed: Record<string, string> = {}): ReviewStore & {
   comments: string | null;
+  pages: string | null;
   writes: number;
 } {
   const files = { ...seed };
   return {
     comments: null,
+    pages: null,
     writes: 0,
     async readComments() {
       return this.comments;
+    },
+    async readPages() {
+      return this.pages;
     },
     async writeComments(body: string) {
       this.comments = body;

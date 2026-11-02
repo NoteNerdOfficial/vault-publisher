@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { Heading } from "./page";
+import { siteCss } from "./theme";
 import {
   ShellInput,
   commandBar,
@@ -119,18 +120,70 @@ describe("the source link", () => {
     expect(bar).toContain('rel="noreferrer noopener"');
   });
 
-  // Icon-only, like every other control in this bar that has no room for a
-  // word.
-  it("names itself on the attributes, because it carries no word", () => {
+  // The word says what it is; the title says where it goes. Both, because
+  // where a link off the site leads is the thing a reader checks before
+  // following it, and the word cannot carry an address.
+  it("is named by its word and says the address it leads to", () => {
     const bar = commandBar(shell({ sourceUrl: SOURCE }));
-    expect(bar).toContain('aria-label="Source repository"');
-    expect(bar).toContain('title="Source repository"');
+    expect(bar).toContain("<span>GitHub repo</span>");
+    expect(bar).toContain(`title="${SOURCE}"`);
   });
 
-  // A branch rather than a service's own mark: the address is a setting, and
-  // a vault whose source is not on GitHub would be wearing the wrong logo.
-  it("is drawn as a branch rather than anybody's logo", () => {
-    expect(commandBar(shell({ sourceUrl: SOURCE }))).toContain('d="M6 3v12"');
+  // GitHub's own mark, which is the point of having one: a reader should
+  // know where this goes without reading the word beside it.
+  it("wears the GitHub mark, and says so, for an address GitHub serves", () => {
+    const bar = commandBar(shell({ sourceUrl: SOURCE }));
+    expect(bar).toContain('viewBox="0 0 16 16"');
+    expect(bar).toContain('fill="currentColor"');
+    expect(bar).toContain("<span>GitHub repo</span>");
+  });
+
+  // And does not wear it anywhere else. A logo on the wrong service is worse
+  // than no logo, and the address is a setting that takes any host.
+  it("falls back to a branch and a neutral word off GitHub", () => {
+    const bar = commandBar(shell({ sourceUrl: "https://gitlab.com/team/vault" }));
+    expect(bar).toContain('d="M6 3v12"');
+    expect(bar).not.toContain("GitHub repo");
+    expect(bar).toContain("<span>Source repo</span>");
+  });
+
+  // The word is the bar's. The drawer's copy is a square beside the close,
+  // where a label would be taking width off the search field.
+  it("carries no word in the drawer", () => {
+    const panel = vaultPanel(shell({ sourceUrl: SOURCE }));
+    expect(panel).toContain("osp-panel-source-btn");
+    expect(panel).not.toContain("<span>GitHub repo</span>");
+    expect(panel).toContain('aria-label="GitHub repo"');
+  });
+
+  /*
+   * The height is the one thing about this control that is not its own.
+   * It sits a row above the read/markdown toggle and has to match it, and
+   * that height is nowhere written down -- it is the toggle's padding, the
+   * padding of the button inside it, and the rule around the pair. So the
+   * link is built from the same three, and this is the test that notices
+   * when one side of that moves and the other does not.
+   */
+  it("is built to the view toggle's height rather than to a number of its own", () => {
+    const css = siteCss();
+    const block = (selector: string) =>
+      new RegExp(`\\${selector} \\{[^}]*\\}`).exec(css)?.[0] ?? "";
+
+    const seg = block(".osp-seg");
+    const segBtn = block(".osp-seg-btn");
+    const source = block(".osp-bar-source");
+
+    expect(seg).toContain("padding: 0.13rem;");
+    expect(segBtn).toContain("padding: 0.2rem 0.45rem;");
+    expect(source).toContain("padding: calc(0.13rem + 0.2rem) calc(0.13rem + 0.45rem);");
+    // The rest of the sum: the same rule around it, the same text inside it.
+    for (const rule of [seg, source]) {
+      expect(rule).toContain("border: var(--osp-rule) solid var(--osp-border);");
+    }
+    for (const rule of [segBtn, source]) {
+      expect(rule).toContain("font-size: var(--osp-ui-xs);");
+      expect(rule).toContain("line-height: 1.4;");
+    }
   });
 
   it("comes back in the drawer, where the bar's controls are gone", () => {

@@ -30,6 +30,7 @@ import {
   OverlayPriority,
   OverlayReply,
 } from "./types";
+import { labelPaths } from "./pageLabels";
 
 /**
  * The Tasks plugin's own priority signifiers.
@@ -139,6 +140,10 @@ function readComment(value: unknown, index: number): OverlayComment {
     priority: readPriority(row.priority),
     // A tool may write this in; nothing refuses a review for lacking it.
     agent: typeof row.agent === "string" && row.agent ? row.agent : null,
+    // Where the browser got it from, when it did not make it. Carried
+    // through so a comment that came in from a file still says so after a
+    // round trip through the vault.
+    imported: typeof row.imported === "string" && row.imported ? row.imported : null,
     external: readExternal(row.external),
     replies: readReplies(row.replies, index),
   };
@@ -219,6 +224,29 @@ export function noteName(sourcePath: string): string {
   return base.replace(/\.md$/i, "");
 }
 
+/**
+ * A heading's link to the file its comments are about.
+ *
+ * `[[Plan]]` while the filename says which file that is, which is the normal
+ * case and the one a reader would write by hand. `[[react-default/index.html|
+ * react-default/index]]` when it does not -- and that is not only a labelling
+ * problem. Obsidian resolves a short link by looking for the nearest file of
+ * that name, so a vault publishing four applications as they are gets four
+ * sections headed `[[index.html]]`, three of which open the wrong one. A link
+ * that carries the folder resolves to exactly the file the comment was left
+ * on, and the alias keeps the heading reading like the panel the comment was
+ * written in.
+ *
+ * The extension stays on a page published as-is and comes off a note, which
+ * is what each one needs to resolve: `[[library/Scope]]` finds `Scope.md`,
+ * and `[[react-default/index]]` would find nothing at all.
+ */
+export function noteLink(sourcePath: string, label: string): string {
+  const bare = noteName(sourcePath);
+  if (label === bare) return `[[${bare}]]`;
+  return `[[${sourcePath.replace(/\.md$/i, "")}|${label}]]`;
+}
+
 /** Comments grouped by the note they are about, each group in time order. */
 export function groupByNote(
   comments: OverlayComment[],
@@ -293,8 +321,15 @@ export function reviewNote(input: ReviewNoteInput): string {
   );
   lines.push("");
 
+  // Over the whole set at once, because whether a filename needs its folder
+  // is a fact about the list it is in rather than about the file. The same
+  // rule the overlay's own panel labels by, so a heading here and the group
+  // it was read under over there say the same thing.
+  const labels = labelPaths(groups.map((group) => group.sourcePath));
+
   for (const group of groups) {
-    lines.push(`## [[${noteName(group.sourcePath)}]]`);
+    const label = labels.get(group.sourcePath) ?? noteName(group.sourcePath);
+    lines.push(`## ${noteLink(group.sourcePath, label)}`);
     lines.push("");
     for (const comment of group.comments) {
       const box = comment.resolved ? "x" : " ";

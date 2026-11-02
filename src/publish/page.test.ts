@@ -302,13 +302,63 @@ describe("the overlay on a page this module did not build", () => {
     );
   });
 
-  // Delimited so a reader of a preview, or a diff of one, can see exactly
-  // what was added and that nothing else was.
+  /*
+   * Delimited so a reader of the output, or a diff of it, can see exactly
+   * what was added and that nothing else was.
+   *
+   * The marker used to say "not published", which stopped being true when
+   * the overlay became something a published build can carry. It says what
+   * is still true instead: this block is ours and the rest of the file is
+   * the author's.
+   */
   it("marks itself off from the author's own markup", () => {
     const appendix = reviewOverlayAppendix(config);
     expect(appendix).toContain("<!-- osp-review:start");
     expect(appendix).toContain("<!-- osp-review:end -->");
-    expect(appendix).toContain("not published");
+    expect(appendix).toContain("not in the source file");
+  });
+
+  /*
+   * The one thing that must never reach a published page.
+   *
+   * A vault path in the meta tag would hand every reader of the site the
+   * vault's folder names. `buildSite.ts` passes the page's own URL instead
+   * when the build is a publish, and this is the assertion that the meta
+   * writes down whatever it is handed without reaching for anything else.
+   */
+  it("carries only the key it was given, and says when commenting is off", () => {
+    const meta = reviewOverlayMeta({
+      ...config,
+      sourcePath: "hand-written.html",
+      comments: false,
+    });
+    expect(meta).toContain("hand-written.html");
+    expect(meta).not.toContain("pages/");
+    expect(meta).toContain("comments&quot;:false");
+    // Absent on a preview, which is what every page meant before the flag
+    // existed by saying nothing at all.
+    expect(reviewOverlayMeta(config)).not.toContain("comments");
+  });
+
+  /*
+   * The page has to say which kind of build it is.
+   *
+   * Without it the overlay decides from the protocol, and a published site
+   * is https like a served preview is -- so it would POST the reader's
+   * whole review to /api/comments on the site's own origin.
+   */
+  it("says when it is published, and who to send a review to", () => {
+    const meta = reviewOverlayMeta({
+      ...config,
+      published: true,
+      contact: "review@example.com",
+    });
+    expect(meta).toContain("published&quot;:true");
+    expect(meta).toContain("review@example.com");
+
+    // A preview says neither, which is what it meant before either existed.
+    expect(reviewOverlayMeta(config)).not.toContain("published");
+    expect(reviewOverlayMeta(config)).not.toContain("contact");
   });
 
   // The flag is the whole difference between the two callers: a rendered note

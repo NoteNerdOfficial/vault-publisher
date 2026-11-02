@@ -131,7 +131,7 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-num,
 .osp-overlay .co-time,
 .osp-overlay .co-pin span,
-.osp-overlay .co-pop-mark,
+.osp-overlay .co-pop-pos,
 .osp-overlay .co-filter b { font-variant-numeric: tabular-nums; }
 
 /* --- the surfaces the browser draws ---------------------------------- */
@@ -232,6 +232,10 @@ export const OVERLAY_CSS = `
 }
 .osp-overlay .co-mode-slider[data-at="1"] { transform: translateX(100%); }
 .osp-overlay .co-mode-slider[data-at="2"] { transform: translateX(200%); }
+/* Two stops, on a published build where commenting is off. The chip is
+   sized from the number of modes rather than assuming three, or it would
+   cover a third of a control with two buttons in it. */
+.osp-overlay .co-modes[data-modes="2"] .co-mode-slider { width: calc(50% - 2px); }
 
 .osp-overlay .co-mode {
   position: relative;
@@ -281,6 +285,13 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-menu-item svg { color: var(--co-fg-2); }
 .osp-overlay .co-menu-item:hover { background: var(--co-bg-2); }
 .osp-overlay .co-menu-item:hover svg { color: var(--co-fg); }
+/* Offered but not available, rather than missing: a row that disappears
+   when there is nothing to export leaves the reviewer wondering whether
+   exporting is a thing this does at all. */
+.osp-overlay .co-menu-item[disabled] { color: var(--co-fg-3); cursor: default; }
+.osp-overlay .co-menu-item[disabled] svg { opacity: 0.5; }
+.osp-overlay .co-menu-item[disabled]:hover { background: transparent; }
+.osp-overlay .co-menu-item[disabled]:hover svg { color: var(--co-fg-2); }
 .osp-overlay .co-menu-rule { height: 1px; margin: 4px 0; background: var(--co-line); }
 .osp-overlay .co-menu-key {
   margin-left: auto;
@@ -455,22 +466,46 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-resizer:hover,
 .osp-overlay .co-resizer[data-dragging] { background: var(--co-pin); opacity: 0.3; }
 
+/*
+ * The head says how much work is left, not what the panel is called.
+ *
+ * It was a centred title reading "Review comments", which is a label for a
+ * thing already on screen: by the time it can be read the reviewer has
+ * opened the panel and knows what it is. The one question a review panel is
+ * asked first is how much is still open, and the second is how old the
+ * newest mark is, so those are the two lines, left-aligned and read as a
+ * sentence rather than centred as a caption.
+ *
+ * The two buttons are taken out of the flow. Left in the row they shortened
+ * every line beneath them, which clipped the end off the meta line; pinned
+ * to the corner they shorten the first line only.
+ */
 .osp-overlay .co-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  height: 40px;
-  padding: 0 8px;
+  position: relative;
   flex: none;
+  padding: 11px 8px 10px 16px;
   border-bottom: 1px solid var(--co-line);
 }
-.osp-overlay .co-panel-title {
-  flex: 1;
-  text-align: center;
-  font-weight: 550;
-  letter-spacing: 0.01em;
+.osp-overlay .co-panel-tally {
+  padding-right: 56px;
   color: var(--co-fg);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: -0.01em;
+}
+.osp-overlay .co-panel-meta {
+  margin-top: 2px;
+  color: var(--co-fg-3);
+  font-size: 11px;
+  line-height: 15px;
+}
+.osp-overlay .co-panel-acts {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
 }
 
 .osp-overlay .co-icon-btn {
@@ -488,11 +523,26 @@ export const OVERLAY_CSS = `
 }
 .osp-overlay .co-icon-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
 
+/* The filter and the order on one line. With a two-line head above it,
+   a filter row and an order row of their own made three bands of chrome
+   before the first comment.
+
+   The margin underneath is the list's breathing space, held here rather
+   than as padding on the list itself: see co-list for why a scroll
+   container's top padding is a strip a sticky heading cannot cover. */
+.osp-overlay .co-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin: 8px 8px 7px;
+}
+
 .osp-overlay .co-filters {
   position: relative;
   display: flex;
-  flex: none;
-  margin: 8px 8px 0;
+  flex: 1;
+  min-width: 0;
   padding: 2px;
   border: 1px solid var(--co-line);
   border-radius: 14px;
@@ -533,80 +583,49 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-filter:not([data-active]):hover { color: var(--co-fg); }
 
 /*
- * The order the list is in: a labelled pair, not a word in a corner.
+ * The order the list is in: one chip on the end of the filter row.
  *
- * It was one small grey button right-aligned under the filters, carrying the
- * name of the order it would switch *to*. Two things were wrong with that.
- * A single muted word in an otherwise empty row reads as a caption, so it
- * was not seen as clickable at all; and once it was, it named the state you
- * were not in, which has to be reasoned about rather than read. Both are
- * fixed by showing both options at once with the one in force marked -- the
- * same control the filters above already are, so there is one idiom in the
- * panel rather than two.
+ * It has been three things. A small grey word right-aligned in a row of its
+ * own, naming the order it would switch *to* -- unseen as a control, and
+ * backwards once seen. Then a labelled pair built like the filter row, which
+ * fixed both but cost a whole band of chrome, and once the head above it
+ * grew to two lines that was three layers before the first comment.
  *
- * It takes a row's full width, which is what the wider panel bought.
+ * So: a chip, on the line the filters already own. It names the order in
+ * force rather than the one it would switch to, and the arrows carry the
+ * toggle. A bordered chip at the pill's own height reads as a control where
+ * a bare word in an empty row did not, which was the original complaint.
  */
-.osp-overlay .co-sortrow {
+.osp-overlay .co-sort {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   flex: none;
-  margin: 8px 8px 0;
-}
-.osp-overlay .co-sortrow-label {
-  flex: none;
-  padding-left: 2px;
-  color: var(--co-fg-3);
-  font-size: 10px;
-  font-weight: 550;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.osp-overlay .co-orders {
-  position: relative;
-  display: flex;
-  flex: 1;
-  padding: 2px;
+  padding: 4px 9px;
   border: 1px solid var(--co-line);
   border-radius: 14px;
   background: var(--co-bg-2);
-}
-/* The same moving ground as the filter row, over two stops instead of
-   three: the panel's two segmented controls behave identically, so neither
-   has to be learned twice. */
-.osp-overlay .co-order-slider {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: calc(50% - 2px);
-  height: calc(100% - 4px);
-  background: var(--co-bg);
-  border: 1px solid var(--co-line);
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.06);
-  transition: transform 0.22s var(--co-ease);
-  pointer-events: none;
-}
-.osp-overlay[data-theme="dark"] .co-order-slider { box-shadow: none; }
-.osp-overlay .co-order-slider[data-at="1"] { transform: translateX(100%); }
-.osp-overlay .co-order {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  padding: 4px 0;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--co-fg-3);
+  color: var(--co-fg-2);
   font-size: 11px;
   line-height: 16px;
-  text-align: center;
-  transition: color 0.15s;
+  white-space: nowrap;
+  transition: color 0.14s, border-color 0.14s;
 }
-.osp-overlay .co-order[data-active] { color: var(--co-fg); font-weight: 550; }
-.osp-overlay .co-order:not([data-active]):hover { color: var(--co-fg-2); }
+.osp-overlay .co-sort:hover { color: var(--co-fg); border-color: var(--co-fg-3); }
+.osp-overlay .co-sort svg { opacity: 0.7; }
 
-.osp-overlay .co-list { flex: 1; overflow-y: auto; padding: 4px 0 8px; }
+/*
+ * No padding at the top, deliberately.
+ *
+ * A sticky child is held inside the scroll container's *content* box, not
+ * its padding box -- so with \`padding-top: 4px\` here, a heading asking for
+ * \`top: 0\` came to rest 4px down, and rows scrolled past in the strip of
+ * bare panel above it. The breathing space the padding gave the first
+ * element belongs above the scroll container instead, as a margin under the
+ * controls -- space nothing can scroll through, rather than space the list
+ * owns and a stuck heading cannot cover.
+ */
+.osp-overlay .co-list { flex: 1; overflow-y: auto; padding: 0 0 8px; }
 
 /*
  * The page a run of rows belongs to.
@@ -753,6 +772,35 @@ export const OVERLAY_CSS = `
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/*
+ * The foot of a row: where the comment went, and what it is about.
+ *
+ * The priority spent a while down here, against the quote, and the issue
+ * pill sat on the top line beside the name. They have swapped. The popup
+ * puts the level in its title bar, at the top of the card, and a reviewer
+ * moving between the list and the card should find the same fact in the
+ * same place in both -- so the level goes up and the issue comes down,
+ * where it is also out of the way of the name and the date.
+ */
+.osp-overlay .co-row-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-top: 5px;
+}
+/* One line here, whatever it is elsewhere: a row is a summary, and three
+   lines of quoted prose in it would bury the comment above them. */
+.osp-overlay .co-row-foot .co-quote {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .osp-overlay .co-row-meta { margin-top: 4px; color: var(--co-fg-3); font-size: 11px; }
 
 .osp-overlay .co-quote {
@@ -859,6 +907,30 @@ export const OVERLAY_CSS = `
 }
 
 /*
+ * Stepping from one mark to the next, as a move rather than a cut.
+ *
+ * The arrows swapped the card's contents where it stood, which left a
+ * reviewer to work out for themselves that the card was now about
+ * something else -- and about words that were often not on screen at all.
+ * So the card travels to the next pin while the page scrolls it into view,
+ * and its new contents fade up rather than appearing mid-flight. The two
+ * movements are the same length, so they read as one.
+ *
+ * Only while a step is in progress: the attribute is set by the script for
+ * the duration and dropped afterwards, so the card still follows a reflow
+ * instantly, and still rises into place rather than sliding in when it is
+ * opened for the first time.
+ */
+.osp-overlay .co-pop[data-gliding] {
+  transition: left 0.34s var(--co-ease), top 0.34s var(--co-ease);
+}
+.osp-overlay .co-pop[data-gliding] > * { animation: co-fade 0.3s var(--co-ease); }
+@keyframes co-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/*
  * The title bar: what this is, how much it is asking for, and what can be
  * done to it. Three things, left to right, and the actions pushed to the far
  * edge so the eye has one place to look for a button rather than a row that
@@ -871,13 +943,24 @@ export const OVERLAY_CSS = `
   min-height: 40px;
   padding: 6px 8px 6px 14px;
   border-bottom: 1px solid var(--co-line);
+  background: var(--co-bg-2);
 }
-.osp-overlay .co-pop-title {
+/*
+ * Which mark this is, and how many the page has.
+ *
+ * It said "Comment", which the thing it titles is self-evidently already.
+ * The number is the pin's own -- comments are numbered by age within a page
+ * and so is this -- so the head ties the card to the mark under it and says
+ * how far through the page the reviewer is, which is what the arrows beside
+ * it are for.
+ */
+.osp-overlay .co-pop-pos {
   flex: none;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 600;
   letter-spacing: 0.01em;
 }
+.osp-overlay .co-pop-pos span { color: var(--co-fg-3); font-weight: 450; }
 .osp-overlay .co-pop-acts {
   display: flex;
   align-items: center;
@@ -976,35 +1059,25 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-pop-sel {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
   margin: 12px 16px 0;
   padding: 8px 10px;
-  border-radius: var(--co-r-2);
+  border-left: 2px solid var(--co-pin);
+  border-radius: 0 var(--co-r-1) var(--co-r-1) 0;
+  background: var(--co-pin-soft);
+}
+/* Drained, like the pin, once there is nothing left to do about it. */
+.osp-overlay .co-pop-sel[data-resolved],
+.osp-overlay .co-pop-sel[data-orphan] {
+  border-left-color: var(--co-done);
   background: var(--co-bg-2);
 }
-.osp-overlay .co-pop-mark {
-  flex: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--co-pin);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.osp-overlay .co-pop-sel[data-resolved] .co-pop-mark,
-.osp-overlay .co-pop-sel[data-orphan] .co-pop-mark { background: var(--co-done); }
 .osp-overlay .co-pop-quote {
   flex: 1;
   min-width: 0;
   color: var(--co-fg-2);
-  font-size: 11px;
-  line-height: 16px;
-  padding-top: 2px;
+  font-size: 12px;
+  line-height: 17px;
+  font-style: italic;
   overflow-wrap: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -1105,12 +1178,12 @@ export const OVERLAY_CSS = `
 }
 
 /*
- * Where this comment went, at the foot of the popup.
+ * Why a filing did not happen, under the comment it was attempted on.
  *
  * Built like the resolved row it sits beside, because the two say the same
- * kind of thing: not what the comment is, but what has become of it. The
- * issue key is the only link in the overlay that leaves the page, so it is
- * the only text in here drawn in the ink.
+ * kind of thing: not what the comment is, but what has become of it. Where
+ * a comment *did* go is the foot's own button now -- see co-act[data-filed]
+ * below -- so this row is only ever a refusal.
  */
 .osp-overlay .co-filed {
   display: flex;
@@ -1122,15 +1195,109 @@ export const OVERLAY_CSS = `
   color: var(--co-fg-2);
   font-size: 12px;
 }
-.osp-overlay .co-filed[data-pending] { color: var(--co-fg-3); }
 .osp-overlay .co-filed .co-warn { flex-basis: 100%; }
+/*
+ * A link that leaves the page, drawn in the ink wherever it appears.
+ *
+ * The colour was dropped from here when the filed-issue button took it over
+ * through \`co-act[data-filed]\`, which left the one other user of this class
+ * -- the address an export tells a reviewer to send the file to -- wearing
+ * the browser's default blue and underline inside an overlay that has
+ * neither anywhere else.
+ */
 .osp-overlay .co-ext {
   color: var(--co-ink);
   font-weight: 550;
   text-decoration: none;
-  border-bottom: 1px solid transparent;
 }
-.osp-overlay .co-ext:hover { border-bottom-color: currentColor; }
+/* The underline is for a link sitting in a sentence. The filed-issue button
+   wears this class too and has a stroke of its own on all four sides, which
+   a bottom border of its own would fight. */
+.osp-overlay .co-ext:not(.co-act) { border-bottom: 1px solid transparent; }
+.osp-overlay .co-ext:not(.co-act):hover { border-bottom-color: currentColor; }
+
+/*
+ * The foot: what can be done about this comment, as words.
+ *
+ * Resolve and the overflow used to be icons in the title bar, beside the
+ * close, where the one button that ends a comment's life looked exactly
+ * like the one that dismisses the card. Down here they are a labelled
+ * primary and a quiet overflow, which is the ordinary shape of a dialog and
+ * takes no learning.
+ */
+.osp-overlay .co-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--co-line);
+}
+/*
+ * The overflow is pinned to the far end and never shrinks.
+ *
+ * It holds Edit and Delete, which are the only way to either, so it going
+ * missing is worse than any label in here going short. The foot does not
+ * wrap -- two rows of buttons under a card this size reads as two separate
+ * questions -- so a label that cannot fit is ellipsized instead, and this
+ * button keeps its 26px whatever the rest comes to.
+ */
+.osp-overlay .co-pop-foot .co-pop-btn { flex: none; margin-left: auto; }
+.osp-overlay .co-act {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 7px 14px;
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-2);
+  background: var(--co-bg);
+  color: var(--co-fg);
+  font-size: 12px;
+  font-weight: 550;
+  text-decoration: none;
+  transition: border-color 0.14s, background 0.14s, filter 0.14s;
+}
+.osp-overlay .co-act:hover { border-color: var(--co-fg-3); }
+/* The icon stays; the word gives way. A button whose label is cut short
+   still says which button it is, where one pushed off the card says
+   nothing at all. */
+.osp-overlay .co-act svg { flex: none; }
+.osp-overlay .co-act span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The primary keeps its label whole. Its three wordings are known and
+   short; what has to give way is the issue key beside it, which is as long
+   as somebody's repository happens to be. */
+.osp-overlay .co-act[data-primary] {
+  flex: none;
+  background: var(--co-pin);
+  border-color: var(--co-pin);
+  color: #fff;
+}
+.osp-overlay .co-act[data-primary]:hover { filter: brightness(1.06); }
+/*
+ * Filed, and saying so in the ink.
+ *
+ * The action and its result were the same button in two states that looked
+ * alike, so whether an issue already existed had to be read off the label.
+ * The stroke answers it first, and the ink is the same one the issue key
+ * wears everywhere else: this is the one control in the overlay that leaves
+ * the page.
+ */
+.osp-overlay .co-act[data-filed] {
+  border-color: var(--co-ink);
+  color: var(--co-ink);
+}
+.osp-overlay .co-act[data-filed]:hover {
+  background: var(--co-pin-soft);
+  border-color: var(--co-ink);
+}
+.osp-overlay .co-act[disabled] { opacity: 0.5; cursor: default; }
+.osp-overlay .co-act[disabled]:hover { border-color: var(--co-line); }
 
 .osp-overlay .co-pop-reply {
   display: flex;
@@ -1320,6 +1487,14 @@ export const OVERLAY_CSS = `
   margin-bottom: 14px;
   color: var(--co-fg-2);
   line-height: 19px;
+}
+/* The part of an answer nobody asked for but is owed anyway: what the
+   import left out, and why the number is smaller than expected. */
+.osp-overlay .co-modal-body .co-modal-note {
+  margin-top: -6px;
+  color: var(--co-fg-3);
+  font-size: 11px;
+  line-height: 17px;
 }
 
 .osp-overlay .co-field {

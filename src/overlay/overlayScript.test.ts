@@ -22,7 +22,7 @@ import { OVERLAY_SCHEMA_VERSION, type OverlayComment } from "./types";
 const STORE_KEY = "osp-overlay-comments";
 const PREFS_KEY = "osp-overlay-prefs";
 
-function mountPage(over: Record<string, string> = {}): void {
+function mountPage(over: Record<string, unknown> = {}): void {
   document.head.innerHTML = `<meta name="osp-review" content='${JSON.stringify({
     sourcePath: "notes/Plan.md",
     page: "notes/plan.html",
@@ -166,6 +166,7 @@ function row(over: Partial<OverlayComment>): OverlayComment {
     resolved: false,
     priority: "medium",
     agent: null,
+    imported: null,
     external: null,
     replies: [],
     ...over,
@@ -205,11 +206,23 @@ describe("the overlay bundle", () => {
     expect(OVERLAY_SCRIPT).toContain("osp-review");
   });
 
-  // It was replaced by the vault sync, and a button that hands a reviewer a
-  // file to move by hand is a step nobody has to take any more.
-  it("has no way to download a file", () => {
-    expect(overlayBundle()).not.toContain("createObjectURL");
-    expect(overlayBundle()).not.toContain("download");
+  /*
+   * This used to assert the opposite, on the grounds that the vault sync had
+   * replaced it and a file somebody moves by hand is a step nobody has to
+   * take any more. That was true while the overlay shipped in preview builds
+   * only, where the plugin is always on the other end of it.
+   *
+   * It is not true in a published build. There is no plugin there and no
+   * vault to sync to: the comments live in one browser's localStorage and
+   * nowhere else, so clearing site data, opening the site on another
+   * machine, or handing the notes to whoever has to act on them loses the
+   * lot. A file is the only answer that needs no server, which is why the
+   * download is back.
+   */
+  it("can write a review out to a file and read one back", () => {
+    expect(overlayBundle()).toContain("createObjectURL");
+    expect(overlayBundle()).toContain("download");
+    expect(overlayBundle()).toContain("FileReader");
   });
 });
 
@@ -511,6 +524,51 @@ describe("which screen a comment belongs to", () => {
     mountApp();
     shadow = run();
     expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+  });
+
+  /*
+   * One published file is any number of screens, and the arrows walk every
+   * mark on the file -- so stepping crosses between them. A card opened
+   * over a screen with no such pin on it is the seam: the step takes the
+   * router there instead, which it does by the address bar, because that is
+   * the one thing every router listens to.
+   */
+  it("steps across to the screen the next mark was left on", () => {
+    search("/app/index.html#/settings");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          id: "here",
+          page: "app/index.html",
+          sourcePath: "app/index.html",
+          route: "/app/index.html#/settings",
+          text: "On settings.",
+        }),
+        row({
+          id: "there",
+          page: "app/index.html",
+          sourcePath: "app/index.html",
+          route: "/app/index.html#/account",
+          text: "On account.",
+        }),
+      ]),
+    );
+    mountApp();
+    const shadow = run();
+
+    // Only this screen's pin is drawn, which is why stepping to the other
+    // one has to move the page rather than just the card.
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+    click(shadow.querySelector(".co-pin"));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 2");
+
+    click(shadow.querySelector('.co-pop-btn[title="Next mark on this page"]'));
+    expect(location.hash).toBe("#/account");
+    expect(shadow.querySelector(".co-pop-body")?.textContent).toBe("On account.");
+
+    // Closing stops the overlay waiting for a router that is not coming.
+    click(shadow.querySelector('.co-pop-btn[title="Close"]'));
   });
 });
 
@@ -981,7 +1039,7 @@ describe("the panel", () => {
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Here.");
     mode(shadow, "review");
-    click(shadow.querySelector('.co-order[data-order="priority"]'));
+    click(shadow.querySelector('.co-sort[data-order="time"]'));
 
     expect(shadow.querySelectorAll(".co-group")).toHaveLength(0);
     const pages = Array.from(shadow.querySelectorAll(".co-row")).map(
@@ -1056,12 +1114,97 @@ describe("the panel", () => {
     leaveComment(shadow, { x: 20, y: 20 }, "Two.");
     mode(shadow, "review");
     click(shadow.querySelector(".co-pin"));
-    click(shadow.querySelector('.co-pop-btn[title="Resolve"]'));
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
 
     const counts = Array.from(shadow.querySelectorAll(".co-filter")).map((button) =>
       button.textContent?.trim(),
     );
     expect(counts).toEqual(["All 2", "Open 1", "Resolved 1"]);
+  });
+
+  /*
+   * A row's foot: what the comment is worth, and what it points at.
+   *
+   * The quote matters most on a row for another page, which is read in this
+   * list and nowhere else -- there is no pin beside it to say what it is
+   * about.
+   */
+  it("says under each comment what it is worth and what it marks", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          id: "a",
+          priority: "high",
+          blockText: "The second paragraph.",
+          text: "This contradicts the first.",
+        }),
+      ]),
+    );
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+
+    // Beside the name, where the popup's own card says it too, so moving
+    // between the list and a card does not move the fact.
+    const name = shadow.querySelector(".co-row-name");
+    expect(name?.querySelector(".co-row-pri")?.getAttribute("data-level")).toBe("high");
+    expect(shadow.querySelector(".co-row-foot .co-quote")?.textContent).toBe(
+      "The second paragraph.",
+    );
+    expect(shadow.querySelector(".co-row-foot .co-row-pri")).toBeNull();
+  });
+
+  // A chip on every row saying MEDIUM is a word the eye reads past on every
+  // row to find the two that are not.
+  it("leaves the middle priority off a row", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "a", priority: "medium", blockText: "Some text." })]),
+    );
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row-pri")).toBeNull();
+    expect(shadow.querySelector(".co-row-foot .co-quote")?.textContent).toBe("Some text.");
+  });
+
+  /*
+   * The head answers the two questions a review panel is asked first: how
+   * much is left, and how fresh the newest mark is. It used to carry a
+   * centred title naming the panel, which can only be read by someone who
+   * has already opened it.
+   */
+  it("heads the panel with what is left rather than with its name", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([away("Elsewhere.")]));
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+    mode(shadow, "review");
+    click(shadow.querySelector(".co-pin"));
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
+
+    expect(shadow.querySelector(".co-panel-tally")?.textContent).toBe(
+      "2 open, 1 resolved",
+    );
+    // Over the whole review, like the counts above it: the pages a reviewer
+    // is not looking at are the part worth saying out loud.
+    expect(shadow.querySelector(".co-panel-meta")?.textContent).toContain(
+      "Across 2 pages",
+    );
+    expect(shadow.querySelector(".co-panel-meta")?.textContent).toContain("last mark");
+    expect(shadow.querySelector(".co-panel-title")).toBeNull();
+  });
+
+  it("says the review is empty rather than counting nothing twice", () => {
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-panel-tally")?.textContent).toBe("Nothing marked yet");
+    expect((shadow.querySelector(".co-panel-meta") as HTMLElement).hidden).toBe(true);
   });
 
   it("moves to the other side and remembers it", () => {
@@ -1292,9 +1435,10 @@ describe("the popup", () => {
     expect(shadow.querySelector(".co-pop-body")?.textContent).toBe("Fix the heading.");
   });
 
-  // The header is three things in one row: what this is, how much it is
-  // asking for, and what can be done to it, with the buttons at the far edge.
-  it("heads itself with the title, the priority and then the actions", () => {
+  // The header is three things in one row: which mark this is, how much it
+  // is asking for, and the way through the page, with the buttons at the
+  // far edge.
+  it("heads itself with the mark, the priority and then the actions", () => {
     mountPage();
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Fix the heading.");
@@ -1303,13 +1447,118 @@ describe("the popup", () => {
     const head = shadow.querySelector(".co-pop-head") as HTMLElement;
     expect(
       Array.from(head.children).map((child) => child.className),
-    ).toEqual(["co-pop-title", "co-pri", "co-pop-acts"]);
-    expect(head.querySelector(".co-pop-title")?.textContent).toBe("Comment");
+    ).toEqual(["co-pop-pos", "co-pri", "co-pop-acts"]);
+    expect(head.querySelector(".co-pop-pos")?.textContent).toBe("1 of 1");
     expect(head.querySelectorAll(".co-pop-acts .co-pop-btn")).toHaveLength(3);
   });
 
-  // What was marked, read before what was said about it.
-  it("quotes the selection above the comments, with the mark number", () => {
+  // The first number is the pin's own, so the card and the page agree about
+  // which mark is open; the second says how many the page has.
+  it("counts the mark against the page's other marks", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+    leaveComment(shadow, { x: 30, y: 30 }, "Three.");
+
+    click(shadow.querySelectorAll(".co-pin")[1]);
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("2 of 3");
+  });
+
+  // The arrows walk the pins, in the order the pins are numbered.
+  it("steps to the next mark and wraps round at the end", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+
+    click(shadow.querySelector(".co-pin"));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 2");
+
+    click(shadow.querySelector('.co-pop-btn[title="Next mark on this page"]'));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("2 of 2");
+    expect(shadow.querySelector(".co-pop-body")?.textContent).toBe("Two.");
+
+    click(shadow.querySelector('.co-pop-btn[title="Next mark on this page"]'));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 2");
+
+    click(shadow.querySelector('.co-pop-btn[title="Previous mark on this page"]'));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("2 of 2");
+  });
+
+  /*
+   * A step is a move, not a cut: the card travels to the next pin while the
+   * page scrolls it into view. The attribute is what the stylesheet hangs
+   * the transition on, and it is only ever on while a step is in progress.
+   */
+  it("glides the card to the next mark, and does not glide it open", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+
+    const popup = shadow.querySelector(".co-pop") as HTMLElement;
+    // Opening a row from the panel with no card on screen is a rise into
+    // place, not a journey from wherever the last card happened to stand.
+    mode(shadow, "review");
+    click(shadow.querySelector(".co-row"));
+    expect(popup.hidden).toBe(false);
+    expect(popup.hasAttribute("data-gliding")).toBe(false);
+
+    click(shadow.querySelector('.co-pop-btn[title="Next mark on this page"]'));
+    expect(popup.hasAttribute("data-gliding")).toBe(true);
+  });
+
+  // The page comes to the mark, so the reviewer is not left to work out
+  // which words a card is about -- often words that were off screen.
+  it("brings the next mark's pin into view", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+
+    // On the prototype, not on the pins: every render builds new ones, and
+    // the pin that is scrolled to is drawn after the step is taken.
+    const seen: { on: string | null; options: unknown }[] = [];
+    const proto = Element.prototype as unknown as Record<string, unknown>;
+    const had = Object.prototype.hasOwnProperty.call(proto, "scrollIntoView");
+    const was = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: Element, options?: unknown) {
+      seen.push({ on: this.getAttribute("data-comment"), options });
+    };
+    try {
+      click(shadow.querySelectorAll(".co-pin")[0]);
+      click(shadow.querySelector('.co-pop-btn[title="Next mark on this page"]'));
+    } finally {
+      if (had) proto.scrollIntoView = was;
+      else delete proto.scrollIntoView;
+    }
+
+    const second = stored()[1].id;
+    expect(seen).toContainEqual({
+      on: second,
+      options: { behavior: "smooth", block: "center" },
+    });
+  });
+
+  // An arrow that can only land where it started is a control lying about
+  // having somewhere to go.
+  it("turns the arrows off when the page has one mark", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "Only one.");
+    open(shadow);
+
+    const next = shadow.querySelector(
+      '.co-pop-btn[title="Next mark on this page"]',
+    ) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+  });
+
+  // What was marked, read before what was said about it. The mark's own
+  // number is in the head, where it is also the position the arrows move
+  // through, so it is not repeated down here.
+  it("quotes the selection above the comments", () => {
     mountPage();
     const shadow = run();
     const target = document.querySelector("p:nth-of-type(1)") as HTMLElement;
@@ -1322,7 +1571,7 @@ describe("the popup", () => {
     expect(classes.indexOf("co-pop-sel")).toBeLessThan(
       classes.indexOf("co-pop-threads"),
     );
-    expect(shadow.querySelector(".co-pop-sel .co-pop-mark")?.textContent).toBe("1");
+    expect(shadow.querySelector(".co-pop-mark")).toBeNull();
     expect(shadow.querySelector(".co-pop-quote")?.textContent).toBe(
       "The first paragraph.",
     );
@@ -1364,17 +1613,63 @@ describe("the popup", () => {
     expect(shadow.querySelectorAll(".co-pop-row")).toHaveLength(2);
   });
 
-  it("resolves and reopens from the title bar", () => {
+  it("resolves and reopens from the foot", () => {
     mountPage();
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Fix the heading.");
     open(shadow);
 
-    click(shadow.querySelector('.co-pop-btn[title="Resolve"]'));
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
     expect(stored()[0].resolved).toBe(true);
 
-    click(shadow.querySelector('.co-pop-btn[title="Reopen"]'));
+    click(shadow.querySelector('.co-act[title="Reopen"]'));
     expect(stored()[0].resolved).toBe(false);
+  });
+
+  // Resolving is followed by the next mark, because that is what is done
+  // next. The label says so rather than leaving the jump to be discovered.
+  it("moves to the next mark once one is resolved", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+
+    click(shadow.querySelector(".co-pin"));
+    expect(shadow.querySelector('.co-act[title="Resolve"]')?.textContent).toBe(
+      "Resolve & next",
+    );
+
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
+    expect(stored()[0].resolved).toBe(true);
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("2 of 2");
+    expect(shadow.querySelector(".co-pop-body")?.textContent).toBe("Two.");
+  });
+
+  // Reopening is a correction to this comment, not a step through the page.
+  it("stays put when a mark is reopened", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+
+    click(shadow.querySelector(".co-pin"));
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
+    click(shadow.querySelector('.co-pop-btn[title="Previous mark on this page"]'));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 2");
+
+    click(shadow.querySelector('.co-act[title="Reopen"]'));
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 2");
+  });
+
+  // One mark on the page, so there is nowhere to go next and the label
+  // should not promise one.
+  it("says only Resolve when the page has one mark", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "Only one.");
+    open(shadow);
+
+    expect(shadow.querySelector('.co-act[title="Resolve"]')?.textContent).toBe("Resolve");
   });
 
   it("edits a comment in place", () => {
@@ -1626,7 +1921,7 @@ describe("priority", () => {
 
     // And it is written back under the new name the next time anything is
     // saved, rather than being carried as "normal" forever.
-    click(shadow.querySelector('.co-pop-btn[title="Resolve"]'));
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
     expect(stored()[0].priority).toBe("medium");
   });
 
@@ -1693,8 +1988,11 @@ describe("sorting the panel", () => {
     leaveComment(shadow, { x: 30, y: 30 }, "A blocker.", "high");
   }
 
+  // One chip, which toggles. Clicking it when it already names the order
+  // asked for would switch away from it, so this checks first.
   function order(shadow: ShadowRoot, name: string): void {
-    click(shadow.querySelector(`.co-order[data-order="${name}"]`));
+    if (shadow.querySelector(`.co-sort[data-order="${name}"]`)) return;
+    click(shadow.querySelector(".co-sort"));
   }
 
   it("starts in mark order, which is the order the pins are numbered in", () => {
@@ -1703,7 +2001,8 @@ describe("sorting the panel", () => {
     three(shadow);
     mode(shadow, "review");
 
-    expect(shadow.querySelector(".co-order[data-active]")?.textContent).toBe("Mark order");
+    expect(shadow.querySelector(".co-sort")?.textContent).toBe("Mark order");
+    expect(shadow.querySelector(".co-sort")?.getAttribute("data-order")).toBe("time");
     expect(texts(shadow)).toEqual(["A nit.", "A question.", "A blocker."]);
   });
 
@@ -1714,24 +2013,42 @@ describe("sorting the panel", () => {
     mode(shadow, "review");
     order(shadow, "priority");
 
-    expect(shadow.querySelector(".co-order[data-active]")?.textContent).toBe("Priority");
+    expect(shadow.querySelector(".co-sort")?.textContent).toBe("Priority");
+    expect(shadow.querySelector(".co-sort")?.getAttribute("data-order")).toBe("priority");
     expect(texts(shadow)).toEqual(["A blocker.", "A question.", "A nit."]);
   });
 
-  // Both orders are on screen with the one in force marked, rather than one
-  // button carrying the name of the order it would switch to.
-  it("shows both orders, and moves the marker to the one in force", () => {
+  // The chip names the order in force, not the one it would switch to --
+  // which is what the label said the first time this control existed, and
+  // had to be reasoned about rather than read. What it switches to is in
+  // the tooltip, where a hover asks for it.
+  it("names the order in force, and says in the tooltip what it would switch to", () => {
     mountPage();
     const shadow = run();
     mode(shadow, "review");
 
-    expect(
-      Array.from(shadow.querySelectorAll(".co-order")).map((node) => node.textContent),
-    ).toEqual(["Mark order", "Priority"]);
-    expect(shadow.querySelector(".co-order-slider")?.getAttribute("data-at")).toBe("0");
+    const chip = () => shadow.querySelector(".co-sort");
+    expect(chip()?.textContent).toBe("Mark order");
+    expect(chip()?.getAttribute("title")).toContain("switch to priority");
 
     order(shadow, "priority");
-    expect(shadow.querySelector(".co-order-slider")?.getAttribute("data-at")).toBe("1");
+    expect(chip()?.textContent).toBe("Priority");
+    expect(chip()?.getAttribute("title")).toContain("switch to mark order");
+  });
+
+  // Nothing between the head and the list but the one line the filters and
+  // the order share.
+  it("puts the filters and the order on a single row", () => {
+    mountPage();
+    const shadow = run();
+    mode(shadow, "review");
+
+    const controls = shadow.querySelector(".co-controls");
+    expect(controls?.querySelector(".co-filters")).not.toBeNull();
+    expect(controls?.querySelector(".co-sort")).not.toBeNull();
+    expect(
+      Array.from(shadow.querySelectorAll(".co-panel > *")).map((node) => node.className),
+    ).toEqual(["co-resizer", "co-panel-head", "co-controls", "co-list"]);
   });
 
   // The number on a pin is its place in the order the comments were made.
@@ -1773,6 +2090,521 @@ describe("sorting the panel", () => {
   });
 });
 
+/*
+ * Carrying a review between builds.
+ *
+ * The published build has no plugin behind it, so a file is the only way a
+ * reviewer's notes leave the browser that made them.
+ */
+describe("exporting and importing a review", () => {
+  function menuRow(shadow: ShadowRoot, label: string): HTMLButtonElement | null {
+    return (
+      (Array.from(shadow.querySelectorAll(".co-menu-item")).find((item) =>
+        item.textContent?.startsWith(label),
+      ) as HTMLButtonElement | undefined) ?? null
+    );
+  }
+
+  function openSettings(shadow: ShadowRoot): void {
+    click(shadow.querySelector('.co-notch-btn[title="Settings"]'));
+  }
+
+  it("offers both halves in the settings menu", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "Something to carry.");
+    openSettings(shadow);
+
+    expect(menuRow(shadow, "Export comments")).not.toBeNull();
+    expect(menuRow(shadow, "Import comments")).not.toBeNull();
+  });
+
+  // Offered but not available, so that exporting is visibly a thing this
+  // does even on a page where there is nothing yet to export.
+  it("disables the export when the review is empty", () => {
+    mountPage();
+    const shadow = run();
+    openSettings(shadow);
+
+    expect(menuRow(shadow, "Export comments")?.hasAttribute("disabled")).toBe(true);
+    expect(menuRow(shadow, "Export comments")?.getAttribute("title")).toBe(
+      "Nothing to export yet",
+    );
+  });
+
+  it("writes the whole review to a file, whatever the panel is filtered to", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+    leaveComment(shadow, { x: 20, y: 20 }, "Two.");
+    mode(shadow, "review");
+    click(shadow.querySelector('.co-filter[data-filter="resolved"]'));
+
+    let written = "";
+    let name = "";
+    const blobs: string[] = [];
+    vi.stubGlobal("Blob", class {
+      constructor(parts: string[]) {
+        blobs.push(parts.join(""));
+      }
+    });
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    const realCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const node = realCreate(tag);
+      if (tag === "a") {
+        node.addEventListener("click", (event: Event) => {
+          event.preventDefault();
+          written = blobs[blobs.length - 1] ?? "";
+          name = (node as HTMLAnchorElement).download;
+        });
+      }
+      return node;
+    });
+
+    openSettings(shadow);
+    click(menuRow(shadow, "Export comments"));
+
+    const doc = JSON.parse(written);
+    expect(doc.comments).toHaveLength(2);
+    expect(doc.version).toBe(OVERLAY_SCHEMA_VERSION);
+    expect(name).toMatch(/^review-.*\.json$/);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Drives the hidden picker as a file chosen in the dialog would.
+   *
+   * `pages` is what the plugin would answer with: the mapping a publish
+   * left behind, which turns page keys back into notes. An import asks for
+   * it before it ingests anything, so this is asynchronous.
+   */
+  async function choose(
+    shadow: ShadowRoot,
+    text: string,
+    filename = "review.json",
+    pages: Record<string, string> = {},
+  ): Promise<void> {
+    const picker = shadow.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: [{ name: filename }],
+    });
+    vi.stubGlobal("fetch", (url: string) =>
+      String(url).includes("/api/pages")
+        ? Promise.resolve({ ok: true, json: () => Promise.resolve({ pages }) } as Response)
+        : Promise.resolve({ ok: true, json: () => Promise.resolve({ comments: [] }) } as Response),
+    );
+    vi.stubGlobal(
+      "FileReader",
+      class {
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        result = "";
+        readAsText() {
+          this.result = text;
+          this.onload?.();
+        }
+      },
+    );
+    picker.dispatchEvent(new Event("change"));
+    // Two turns: one for the mapping request, one for its body.
+    await new Promise((done) => setTimeout(done, 0));
+    vi.unstubAllGlobals();
+  }
+
+  function doc(comments: unknown[], site = "Handbook"): string {
+    return JSON.stringify({ version: OVERLAY_SCHEMA_VERSION, site, comments });
+  }
+
+  it("takes in comments from a file and says where they came from", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "from-file", text: "Written elsewhere." })]));
+
+    expect(stored()).toHaveLength(1);
+    expect(stored()[0].imported).toBe("Handbook");
+    mode(shadow, "review");
+    expect(shadow.querySelector(".co-row-text")?.textContent).toBe("Written elsewhere.");
+  });
+
+  // The pill the panel shows for one, which is the same job the agent pill
+  // does: a name in the author field does not say which build they read.
+  it("pills an imported comment in the panel", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "from-file" })]));
+    mode(shadow, "review");
+
+    const tag = shadow.querySelector(".co-row .co-tag");
+    expect(tag?.textContent).toBe("Imported");
+    expect(tag?.getAttribute("title")).toBe("Imported from Handbook");
+  });
+
+  /*
+   * Additive, never destructive: the file may be older than what is on
+   * screen and there is no way to tell from here, so an import can only add.
+   */
+  it("leaves a comment it already holds exactly as it is", async () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ id: "mine", text: "Mine." })]));
+    mountPage();
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "mine", text: "Theirs." })]));
+
+    expect(stored()).toHaveLength(1);
+    expect(stored()[0].text).toBe("Mine.");
+    expect(shadow.querySelector(".co-modal-body p")?.textContent).toBe(
+      "Nothing new: every comment in that file is already here.",
+    );
+  });
+
+  it("says what it skipped rather than quietly dropping it", async () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ id: "mine" })]));
+    mountPage();
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "mine" }), row({ id: "new" }), { nonsense: true }]));
+
+    expect(shadow.querySelector(".co-modal-body p")?.textContent).toBe(
+      "Added 1 comment from Handbook.",
+    );
+    expect(shadow.querySelector(".co-modal-note")?.textContent).toBe(
+      "1 comment already here, left alone. 1 row could not be read.",
+    );
+  });
+
+  // A comment carried through two imports came from wherever it was first
+  // written, not from the file it most recently travelled in.
+  it("keeps the first source when a comment is imported twice", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "a", imported: "Original site" })]));
+
+    expect(stored()[0].imported).toBe("Original site");
+  });
+
+  /*
+   * The case this whole mapping exists for: a reviewer comments on the
+   * published site, sends the file, and the owner imports it into their
+   * preview. Without the mapping the comment arrives keyed on a page URL,
+   * which this build has never heard of -- no pin, and a link that opens
+   * nothing.
+   */
+  it("puts the notes back on a review that came from the published site", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(
+      shadow,
+      doc([row({ id: "from-site", sourcePath: "notes/plan.html" })]),
+      "review.json",
+      { "notes/plan.html": "notes/Plan.md" },
+    );
+
+    expect(stored()[0].sourcePath).toBe("notes/Plan.md");
+    // On this page now, so it has a pin like any other.
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+    expect(shadow.querySelector(".co-modal-note")?.textContent).toContain(
+      "1 comment came from the published site and were matched to their notes",
+    );
+  });
+
+  /*
+   * A comment from a preview already names its note, and the mapping only
+   * ever lists published page URLs -- `buildPageMap` writes url -> note --
+   * so a note's own path is never a key and nothing moves it.
+   */
+  it("leaves a comment the mapping does not list alone", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "a", sourcePath: "notes/Plan.md" })]), "review.json", {
+      "notes/other.html": "notes/Other.md",
+    });
+
+    expect(stored()[0].sourcePath).toBe("notes/Plan.md");
+    expect(shadow.querySelector(".co-modal-note")?.textContent ?? "").not.toContain(
+      "published site",
+    );
+  });
+
+  // No plugin behind the page, so nothing to ask: the comments arrive as
+  // they are rather than the import failing over a mapping it cannot get.
+  it("imports without a mapping when there is no plugin to ask", async () => {
+    mountPage({ published: true, sourcePath: "notes/plan.html" });
+    const shadow = run();
+    await choose(shadow, doc([row({ id: "a", sourcePath: "notes/plan.html" })]));
+
+    expect(stored()).toHaveLength(1);
+    expect(stored()[0].sourcePath).toBe("notes/plan.html");
+  });
+
+  it("refuses a file that is not a review, and says so", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, "{\"hello\": true}");
+
+    expect(stored()).toHaveLength(0);
+    expect(shadow.querySelector(".co-modal-head h3")?.textContent).toBe("That did not work");
+    expect(shadow.querySelector(".co-modal-body p")?.textContent).toBe(
+      "That file is not a review: it has no comments in it.",
+    );
+  });
+
+  it("refuses a file that is not JSON", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, "not json at all");
+
+    expect(shadow.querySelector(".co-modal-body p")?.textContent).toBe(
+      "That file is not JSON.",
+    );
+  });
+
+  // The filename is the only name a file without a site in it has.
+  it("falls back to the filename when the file names no site", async () => {
+    mountPage();
+    const shadow = run();
+    await choose(shadow, JSON.stringify({ comments: [row({ id: "x" })] }), "notes-from-sam.json");
+
+    expect(stored()[0].imported).toBe("notes-from-sam.json");
+  });
+});
+
+/*
+ * The overlay on a published page.
+ *
+ * It goes out only when the vault's owner asked for it, and when it does,
+ * writing is off unless they asked for that separately. What is left is a
+ * reader: the pins, the panel, and the file that carries a review in.
+ */
+describe("a published build with commenting off", () => {
+  function published(): ShadowRoot {
+    mountPage({ sourcePath: "notes/plan.html", comments: false });
+    return run();
+  }
+
+  it("offers two modes, and dropping a pin is not one of them", () => {
+    const shadow = published();
+
+    const names = Array.from(shadow.querySelectorAll(".co-mode")).map((node) =>
+      node.getAttribute("data-mode"),
+    );
+    expect(names).toEqual(["view", "review"]);
+    expect(shadow.querySelector(".co-modes")?.getAttribute("data-modes")).toBe("2");
+  });
+
+  // Not only the button: a build with no comment mode must not be put into
+  // one by a keystroke, or the capture sheet goes over the page with no
+  // visible way to take it off again.
+  it("will not enter comment mode from the keyboard", () => {
+    const shadow = published();
+
+    key("c");
+    expect((shadow.querySelector(".co-capture") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("reads a comment without offering to answer, edit or reprioritise it", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "theirs", sourcePath: "notes/plan.html", text: "Theirs." })]),
+    );
+    const shadow = published();
+    click(shadow.querySelector(".co-pin"));
+
+    expect(shadow.querySelector(".co-pop-body")?.textContent).toBe("Theirs.");
+    expect(shadow.querySelector(".co-pop-reply")).toBeNull();
+    expect(shadow.querySelector('.co-pop-btn[title="More"]')).toBeNull();
+    // The level is still said, just not as a control that opens a menu.
+    expect(shadow.querySelector(".co-pri")?.tagName).toBe("SPAN");
+  });
+
+  /*
+   * Resolving stays. It is triage of comments that already exist rather
+   * than authoring, and it is what makes an imported review usable as a
+   * checklist by the person who has to work through it.
+   */
+  it("still resolves, which is what an imported review is for", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "theirs", sourcePath: "notes/plan.html" })]),
+    );
+    const shadow = published();
+    click(shadow.querySelector(".co-pin"));
+    click(shadow.querySelector('.co-act[title="Resolve"]'));
+
+    expect(stored()[0].resolved).toBe(true);
+  });
+
+  // The whole reason the overlay is worth shipping to a published page.
+  it("still carries a review in and out", () => {
+    const shadow = published();
+    click(shadow.querySelector('.co-notch-btn[title="Settings"]'));
+
+    const labels = Array.from(shadow.querySelectorAll(".co-menu-item")).map(
+      (item) => item.textContent,
+    );
+    expect(labels.some((label) => label?.startsWith("Export comments"))).toBe(true);
+    expect(labels.some((label) => label?.startsWith("Import comments"))).toBe(true);
+  });
+
+  // Absent means yes: every page built before the flag existed is a preview.
+  it("leaves commenting on when the page says nothing about it", () => {
+    mountPage();
+    const shadow = run();
+
+    expect(Array.from(shadow.querySelectorAll(".co-mode"))).toHaveLength(3);
+  });
+});
+
+/*
+ * A published page must never talk to /api/comments.
+ *
+ * The protocol alone used to decide this, and a published site is https
+ * like a served preview is -- so every save POSTed the reader's whole
+ * review to the site's own origin, where it 404ed and looked fine.
+ */
+describe("a published build and the plugin", () => {
+  it("asks the plugin for nothing, and tells it nothing", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      calls.push(String(url));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ comments: [] }) } as Response);
+    });
+
+    mountPage({ sourcePath: "notes/plan.html", published: true });
+    const shadow = run();
+    await new Promise((done) => setTimeout(done, 0));
+    leaveComment(shadow, { x: 10, y: 10 }, "Typed by a reader.");
+    await new Promise((done) => setTimeout(done, 0));
+
+    expect(calls).toEqual([]);
+    // Still saved, just not shared: the browser is the only copy.
+    expect(stored()).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  // The preview is the case the protocol test was written for, and it has
+  // to keep working exactly as it did.
+  it("still syncs a preview served over http", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      calls.push(String(url));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ comments: [] }) } as Response);
+    });
+
+    mountPage();
+    run();
+    await new Promise((done) => setTimeout(done, 0));
+
+    expect(calls).toContain("/api/comments");
+    vi.unstubAllGlobals();
+  });
+});
+
+/*
+ * What to do with the file, said at the moment it is saved. A reviewer who
+ * finds a .json in their Downloads folder and does not know who wants it
+ * has not fed back, they have made a file.
+ */
+describe("exporting from a published page", () => {
+  function exportFrom(shadow: ShadowRoot): void {
+    vi.stubGlobal("Blob", class {});
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: () => {} });
+    const realCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const node = realCreate(tag);
+      if (tag === "a") node.addEventListener("click", (event: Event) => event.preventDefault());
+      return node;
+    });
+    click(shadow.querySelector('.co-notch-btn[title="Settings"]'));
+    const out = Array.from(shadow.querySelectorAll(".co-menu-item")).find((item) =>
+      item.textContent?.startsWith("Export comments"),
+    );
+    click(out ?? null);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+
+  it("says who to send it to, as something to click", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ sourcePath: "notes/plan.html" })]));
+    mountPage({
+      sourcePath: "notes/plan.html",
+      published: true,
+      contact: "review@example.com",
+    });
+    const shadow = run();
+    exportFrom(shadow);
+
+    expect(shadow.querySelector(".co-modal-head h3")?.textContent).toBe("Review saved");
+    const link = shadow.querySelector(".co-modal-body a") as HTMLAnchorElement;
+    expect(link.textContent).toBe("review@example.com");
+    expect(link.getAttribute("href")).toBe("mailto:review@example.com");
+  });
+
+  it("links a URL as a URL", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ sourcePath: "notes/plan.html" })]));
+    mountPage({
+      sourcePath: "notes/plan.html",
+      published: true,
+      contact: "https://github.com/o/r/issues/new",
+    });
+    const shadow = run();
+    exportFrom(shadow);
+
+    expect(shadow.querySelector(".co-modal-body a")?.getAttribute("href")).toBe(
+      "https://github.com/o/r/issues/new",
+    );
+  });
+
+  // Anything that is neither is shown as the words it is, rather than
+  // guessed at and turned into a broken link.
+  it("shows an instruction that is not an address as plain words", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ sourcePath: "notes/plan.html" })]));
+    mountPage({
+      sourcePath: "notes/plan.html",
+      published: true,
+      contact: "the #docs channel",
+    });
+    const shadow = run();
+    exportFrom(shadow);
+
+    expect(shadow.querySelector(".co-modal-body a")).toBeNull();
+    expect(shadow.querySelector(".co-modal-body strong")?.textContent).toBe(
+      "the #docs channel",
+    );
+  });
+
+  /*
+   * The two situations are different and the note says which one this is:
+   * in a preview the vault already has the comments, and on a published
+   * page the file is the only copy that leaves the browser.
+   */
+  // The file is only a review once it is back in a vault, so the export
+  // says which door it goes through rather than leaving it to be guessed.
+  it("says what the person receiving it should do with it", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ sourcePath: "notes/plan.html" })]));
+    mountPage({ sourcePath: "notes/plan.html", published: true });
+    const shadow = run();
+    exportFrom(shadow);
+
+    const notes = Array.from(shadow.querySelectorAll(".co-modal-note")).map(
+      (node) => node.textContent,
+    );
+    expect(notes.join(" ")).toContain("review folder");
+    expect(notes.join(" ")).toContain("Import review comments");
+  });
+
+  it("says whether the file is the only copy", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ sourcePath: "notes/plan.html" })]));
+    mountPage({ sourcePath: "notes/plan.html", published: true });
+    const shadow = run();
+    exportFrom(shadow);
+
+    expect(shadow.querySelector(".co-modal-note")?.textContent).toContain(
+      "only copy that leaves it",
+    );
+  });
+});
+
 describe("a comment an agent filed", () => {
   it("carries a pill naming the agent, where a person's comment carries none", () => {
     localStorage.setItem(
@@ -1810,6 +2642,63 @@ describe("a comment an agent filed", () => {
     run();
 
     expect(stored()[0].agent).toBe("Codex");
+  });
+
+  /*
+   * The path an agent actually takes: it writes a comment into the review
+   * file in the vault, the plugin serves that file, and this page pulls it.
+   * The localStorage tests above start past the interesting part.
+   */
+  it("carries the pill on a comment that arrives from the vault", async () => {
+    vi.stubGlobal("fetch", (url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            comments: [
+              {
+                id: "from-vault",
+                text: "The second paragraph contradicts the first.",
+                author: "Claude",
+                agent: "Claude Code",
+                sourcePath: "notes/Plan.md",
+                page: "notes/plan.html",
+                createdAt: "2026-10-28T08:00:00.000Z",
+              },
+            ],
+          }),
+      } as Response),
+    );
+    mountPage();
+    const shadow = run();
+    await new Promise((done) => setTimeout(done, 0));
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row .co-tag")?.textContent).toBe("Agent");
+    vi.unstubAllGlobals();
+  });
+
+  /*
+   * The gap worth knowing about: the vault is authoritative for two fields
+   * and `agent` is not one of them, so adding it to a comment this browser
+   * already holds does not reach the page.
+   */
+  it("does not pick up an agent field added to a comment it already has", async () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ id: "shared", agent: null })]));
+    vi.stubGlobal("fetch", (url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({ comments: [{ ...row({ id: "shared" }), agent: "Claude Code" }] }),
+      } as Response),
+    );
+    mountPage();
+    const shadow = run();
+    await new Promise((done) => setTimeout(done, 0));
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row .co-tag")).toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it("ignores an agent field that is not a name", () => {
@@ -2230,6 +3119,15 @@ describe("filing a comment in a tracker", () => {
     click(shadow.querySelector('.co-pop-btn[title="More"]'));
   }
 
+  /** The foot's filing button, whichever of its two states it is in. */
+  function sendBtn(shadow: ShadowRoot, tracker = "GitHub"): Element | null {
+    return shadow.querySelector(`.co-act[title="Send to ${tracker}"]`);
+  }
+
+  function filedBtn(shadow: ShadowRoot): HTMLAnchorElement | null {
+    return shadow.querySelector(".co-pop-foot .co-act[data-filed]");
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -2243,7 +3141,7 @@ describe("filing a comment in a tracker", () => {
     leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
     openMore(shadow);
 
-    expect(menuItem(shadow, "Send to GitHub")).toBeNull();
+    expect(sendBtn(shadow)).toBeNull();
     expect(menuItem(shadow, "Edit")).not.toBeNull();
   });
 
@@ -2252,8 +3150,8 @@ describe("filing a comment in a tracker", () => {
     mountPage({ tracker: "GitHub" });
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
-    openMore(shadow);
-    click(menuItem(shadow, "Send to GitHub"));
+    click(shadow.querySelector(".co-pin"));
+    click(sendBtn(shadow));
     await flush();
 
     const ask = sent.find((call) => call.url.includes("/api/relay"));
@@ -2264,10 +3162,18 @@ describe("filing a comment in a tracker", () => {
     // and the next Send cannot file a second issue for the same comment.
     expect(stored()[0].external).toEqual(ISSUE);
 
-    const link = shadow.querySelector(".co-filed .co-ext") as HTMLAnchorElement;
-    expect(link.textContent).toBe("owner/repo#41");
+    // The action became its own result: one button, which is now the issue
+    // and leads to it.
+    const link = filedBtn(shadow) as HTMLAnchorElement;
+    // The short name, as the panel's pill wears it: `owner/repo#41` in full
+    // is wider than the card, and a button that wide pushed the overflow
+    // menu off the end of a foot that does not wrap. The full key is in the
+    // tooltip.
+    expect(link.textContent).toBe("#41");
+    expect(link.getAttribute("title")).toBe("Open owner/repo#41");
     expect(link.getAttribute("href")).toBe(ISSUE.url);
     expect(link.getAttribute("target")).toBe("_blank");
+    expect(shadow.querySelector(".co-filed")).toBeNull();
   });
 
   it("stops offering to send a comment it has already sent", async () => {
@@ -2275,10 +3181,12 @@ describe("filing a comment in a tracker", () => {
     mountPage({ tracker: "GitHub" });
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
-    openMore(shadow);
-    click(menuItem(shadow, "Send to GitHub"));
+    click(shadow.querySelector(".co-pin"));
+    click(sendBtn(shadow));
     await flush();
 
+    expect(sendBtn(shadow)).toBeNull();
+    expect(filedBtn(shadow)).not.toBeNull();
     openMore(shadow);
     expect(menuItem(shadow, "Send to GitHub")).toBeNull();
   });
@@ -2290,8 +3198,8 @@ describe("filing a comment in a tracker", () => {
     mountPage({ tracker: "GitHub" });
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
-    openMore(shadow);
-    click(menuItem(shadow, "Send to GitHub"));
+    click(shadow.querySelector(".co-pin"));
+    click(sendBtn(shadow));
     await flush();
 
     expect(shadow.querySelector(".co-filed .co-warn")?.textContent).toBe(
@@ -2299,8 +3207,8 @@ describe("filing a comment in a tracker", () => {
     );
     expect(stored()[0].external).toBeNull();
 
-    click(shadow.querySelector('.co-pop-btn[title="More"]'));
-    expect(menuItem(shadow, "Send to GitHub")).not.toBeNull();
+    click(shadow.querySelector(".co-pin"));
+    expect(sendBtn(shadow)).not.toBeNull();
   });
 
   it("says so when the plugin cannot be reached at all", async () => {
@@ -2313,8 +3221,8 @@ describe("filing a comment in a tracker", () => {
     mountPage({ tracker: "GitHub" });
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
-    openMore(shadow);
-    click(menuItem(shadow, "Send to GitHub"));
+    click(shadow.querySelector(".co-pin"));
+    click(sendBtn(shadow));
     await flush();
 
     expect(shadow.querySelector(".co-filed .co-warn")?.textContent).toContain(
@@ -2378,10 +3286,17 @@ describe("filing a comment in a tracker", () => {
     const shadow = run();
     mode(shadow, "review");
 
-    const chip = shadow.querySelector(".co-row a.co-tag[data-ext]") as HTMLAnchorElement;
+    // In the foot, not on the top line: the priority has that place now, so
+    // the list and the card say how much a comment is worth in the same
+    // spot. The issue is the other thing a row carries, and down here it is
+    // out of the way of the name and the date.
+    const chip = shadow.querySelector(
+      ".co-row .co-row-foot a.co-tag[data-ext]",
+    ) as HTMLAnchorElement;
     expect(chip.textContent).toBe("#41");
     expect(chip.getAttribute("href")).toBe(ISSUE.url);
     expect(chip.getAttribute("title")).toBe("Filed as owner/repo#41");
+    expect(shadow.querySelector(".co-row-name a.co-tag[data-ext]")).toBeNull();
   });
 
   // A record off a file in the vault ends up as a link somebody clicks, and
@@ -2412,9 +3327,8 @@ describe("filing a comment in a tracker", () => {
     // Read as a comment that has not been filed, so the action is still
     // there -- rather than as one filed somewhere nobody can go.
     click(shadow.querySelector(".co-pin"));
-    click(shadow.querySelector('.co-pop-btn[title="More"]'));
-    expect(shadow.querySelector(".co-ext")).toBeNull();
-    expect(menuItem(shadow, "Send to GitHub")).not.toBeNull();
+    expect(filedBtn(shadow)).toBeNull();
+    expect(sendBtn(shadow)).not.toBeNull();
   });
 
   /*
@@ -2502,11 +3416,17 @@ describe("a comment filed somewhere other than GitHub", () => {
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Needs a citation.");
     click(shadow.querySelector(".co-pin"));
-    click(shadow.querySelector('.co-pop-btn[title="More"]'));
 
+    expect(shadow.querySelector('.co-act[title="Send to Jira"]')?.textContent).toBe(
+      "Send to Jira",
+    );
+
+    // Filing is a button of its own, so the overflow is only the two things
+    // that are neither resolving nor filing.
+    click(shadow.querySelector('.co-pop-btn[title="More"]'));
     expect(
       Array.from(shadow.querySelectorAll(".co-pop-menu-item")).map((i) => i.textContent),
-    ).toEqual(["Send to Jira", "Edit", "Delete"]);
+    ).toEqual(["Edit", "Delete"]);
   });
 
   // A Jira key is already short enough to read in a row, so it is shown as

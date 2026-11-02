@@ -80,6 +80,12 @@ import {
 import { noteSource } from "./source";
 import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput, isHiddenPath } from "./outputFolders";
 import {
+  ExcludeTally,
+  excludeTallies,
+  isExcluded,
+  parseExcludeFolders,
+} from "./excludeFolders";
+import {
   CompanionRef,
   HtmlFileStats,
   baseHref,
@@ -106,6 +112,31 @@ import { PublishFile } from "../github/client";
  * So selection happens first and completely, then rendering.
  */
 
+/**
+ * What a page's comments are grouped under, which is not the same question
+ * in a preview as in a publish.
+ *
+ * A preview uses the vault path of the note behind the page. That is what
+ * lets `importReview` put a comment back beside the writing it is about,
+ * and a preview is served from the vault to the person who owns it.
+ *
+ * A publish uses the page's own URL. The overlay needs a key that is stable
+ * across builds and unique per page, and the URL is both -- while a vault
+ * path in a published page would hand every reader of the site the vault's
+ * folder names, which is the class of leak `privacy.ts` exists to prevent
+ * and the reason the overlay was preview-only until now.
+ *
+ * A function, and exported, so the guarantee has a test of its own rather
+ * than living in a ternary inside a loop no test reaches.
+ */
+export function overlayKey(
+  overlay: { published?: boolean },
+  url: string,
+  sourcePath: string,
+): string {
+  return overlay.published ? url : sourcePath;
+}
+
 export interface SiteConfig {
   siteName: string;
   /**
@@ -122,6 +153,21 @@ export interface SiteConfig {
   folder: string | null;
   /** When set, a note must also have this frontmatter key set to true. */
   requireFrontmatterFlag: string | null;
+  /**
+   * Folders to leave out of whatever the scope took in, as vault paths.
+   *
+   * The subtraction the scope cannot express: publish the whole vault except
+   * these three folders. Applied at every scope rather than only to a vault
+   * published whole, because a folder with a private subfolder in it is the
+   * same problem one level down.
+   *
+   * Applied after the scope and before anything else, and it beats the scope
+   * where the two contradict each other -- an entry that contains the scope
+   * publishes nothing, which is what it says. See `excludeFolders.ts`, and
+   * note that this is a blacklist: `requireFrontmatterFlag` is the setting
+   * that fails safe.
+   */
+  excludeFolders?: string[];
   /**
    * Publish the vault's own `.html` files, exactly as they are.
    *
@@ -241,6 +287,34 @@ export interface SiteConfig {
      * talking to would be a page that had to be taught about the next one.
      */
     tracker?: string;
+    /**
+     * This is a published build, not a preview.
+     *
+     * It changes one thing and it matters: the key a comment is grouped
+     * under becomes the page's own public URL instead of the vault path of
+     * the note behind it. A published page carrying `notes/Clients/Acme Q3.md`
+     * would hand every reader of the site the vault's folder structure,
+     * which is the reason the overlay was preview-only until now.
+     *
+     * The cost is that a review exported from a published page names pages
+     * rather than notes, so `importReview` links it to the page it was left
+     * on rather than to the note that produced it.
+     */
+    published?: boolean;
+    /**
+     * Whether a reader of this build may write comments.
+     *
+     * Defaults to true, which is what a preview is. A published build sets
+     * it from a setting that is off until somebody turns it on.
+     */
+    comments?: boolean;
+    /**
+     * Where a reader should send a review they exported.
+     *
+     * Only useful on a published build, where there is no plugin to sync
+     * to and a file is the only way back to whoever owns the site.
+     */
+    contact?: string;
   };
   /**
    * Largest single attachment to publish, in bytes. Defaults to 25 MiB.
@@ -372,6 +446,15 @@ export interface BuildResult {
    * difference between a rule and a bug.
    */
   htmlFilesBlockedByFlag: number;
+  /**
+   * What each excluded folder kept out of this build, in the order written.
+   *
+   * Empty when nothing is excluded. An entry with a count of zero is the one
+   * worth reading: it is a path that excluded nothing, which is usually a
+   * typo in a setting whose whole job is keeping things out, and which has
+   * no other way of announcing itself.
+   */
+  excluded: ExcludeTally[];
   /**
    * Whether the build got slower as it ran, measured from control notes.
    *
@@ -837,9 +920,12 @@ export async function buildSite(
         // anything.
         overlay: config.reviewOverlay
           ? {
-              sourcePath: page.sourcePath,
+              sourcePath: overlayKey(config.reviewOverlay, page.url, page.sourcePath),
               reviewer: config.reviewOverlay.reviewer,
               tracker: config.reviewOverlay.tracker,
+              comments: config.reviewOverlay.comments !== false,
+              published: config.reviewOverlay.published,
+              contact: config.reviewOverlay.contact,
             }
           : undefined,
         shell: {
@@ -951,12 +1037,15 @@ export async function buildSite(
     const content = overlay
       ? html +
         reviewOverlayAppendix({
-          sourcePath: target.sourcePath,
+          sourcePath: overlayKey(overlay, target.url, target.sourcePath),
           url: target.url,
           siteName: config.siteName,
           reviewer: overlay.reviewer,
           tracker: overlay.tracker,
           stamp: true,
+          comments: overlay.comments !== false,
+          published: overlay.published,
+          contact: overlay.contact,
         })
       : html;
 
@@ -1037,8 +1126,9 @@ export async function buildSite(
   // each one. See `SITE_SCRIPT_PATH`.
   files.push({ path: SITE_SCRIPT_PATH, content: CLIENT_SCRIPT });
 
-  // Preview only, like everything else about the overlay: a published page
-  // links nothing of the sort, so the file would be served to nobody.
+  // Wherever the overlay is on. A published build links it too now, when
+  // the vault's owner asked for that; without the flag no page references
+  // it and the file would be served to nobody.
   if (config.reviewOverlay) {
     files.push({ path: OVERLAY_SCRIPT_PATH, content: overlayBundle() });
   }
@@ -1162,19 +1252,49 @@ export async function buildSite(
     ),
     htmlFiles: htmlStats,
     htmlFilesBlockedByFlag: countHtmlFilesBlockedByFlag(app, config),
+    excluded: excludedTally(app, config),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
     selectedCount: selected.length,
   };
 }
 
+/**
+ * What the author's excluded folders cost this build, per entry.
+ *
+ * Counted against what the build *would* have taken with the setting empty,
+ * rather than against the vault: a folder outside the scope excludes nothing,
+ * and reporting it as having done work would send somebody looking for pages
+ * that were never going to be published.
+ *
+ * Both selectors, because both publish: a folder kept out of the site has to
+ * be kept out of it whether it holds notes or the vault's own HTML.
+ */
+export function excludedTally(app: App, config: SiteConfig): ExcludeTally[] {
+  const entries = parseExcludeFolders(config.excludeFolders);
+  if (!entries.length) return [];
+
+  const everything = { ...config, excludeFolders: [] };
+  const paths = [
+    ...selectNotes(app, everything),
+    ...selectHtmlFiles(app, everything),
+  ].map((file) => file.path);
+
+  return excludeTallies(paths, entries);
+}
+
 export function selectNotes(app: App, config: SiteConfig): TFile[] {
   const excluded = config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS;
+  const leftOut = parseExcludeFolders(config.excludeFolders);
 
   return app.vault
     .getMarkdownFiles()
     .filter((file) => {
       if (config.folder && !file.path.startsWith(`${config.folder}/`))
         return false;
+      // The author's own list, which beats the scope where they disagree:
+      // both are things somebody typed, and the more specific of the two is
+      // the one that says "not this".
+      if (isExcluded(file.path, leftOut)) return false;
       // The build's own folders are output, not input. A vault published
       // whole otherwise publishes `_vault-publisher/build-report.md` as a
       // page of the site that build just made, along with the publish log

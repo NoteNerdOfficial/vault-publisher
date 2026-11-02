@@ -4,6 +4,7 @@ import {
   isBuildOutput,
   isHiddenPath,
 } from "./outputFolders";
+import { isExcluded, parseExcludeFolders } from "./excludeFolders";
 
 /**
  * Publishing a vault's own HTML files, exactly as they are.
@@ -371,18 +372,23 @@ export function selectHtmlFiles(
     requireFrontmatterFlag: string | null;
     publishHtmlFiles?: boolean;
     outputFolders?: string[];
+    excludeFolders?: string[];
   },
 ): TFile[] {
   if (!config.publishHtmlFiles) return [];
   if (config.requireFrontmatterFlag) return [];
 
   const excluded = config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS;
+  const leftOut = parseExcludeFolders(config.excludeFolders);
 
   return app.vault
     .getFiles()
     .filter((file) => {
       if (!isHtmlFilePath(file.path)) return false;
       if (config.folder && !file.path.startsWith(`${config.folder}/`)) return false;
+      // The author's own list. A folder kept out of the site is kept out
+      // whatever is in it: a page published as-is is as public as a note.
+      if (isExcluded(file.path, leftOut)) return false;
       if (isBuildOutput(file.path, excluded, config.folder)) return false;
       // `.obsidian/plugins/**` alone holds a great deal of HTML that is
       // nobody's web page. Shared with note selection, which needed the same
@@ -407,6 +413,7 @@ export function countHtmlFilesBlockedByFlag(
     requireFrontmatterFlag: string | null;
     publishHtmlFiles?: boolean;
     outputFolders?: string[];
+    excludeFolders?: string[];
   },
 ): number {
   if (!config.publishHtmlFiles || !config.requireFrontmatterFlag) return 0;

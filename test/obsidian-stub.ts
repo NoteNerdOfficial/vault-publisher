@@ -84,6 +84,10 @@ export class Setting {
     build(new StubText(this.controlEl));
     return this;
   }
+  addTextArea(build: (text: any) => unknown): this {
+    build(new StubTextArea(this.controlEl));
+    return this;
+  }
   addToggle(build: (toggle: any) => unknown): this {
     build(new StubToggle(this.controlEl));
     return this;
@@ -227,6 +231,31 @@ class StubText {
   inputEl: HTMLInputElement;
   constructor(parent: HTMLElement) {
     this.inputEl = parent.ownerDocument.createElement("input");
+    parent.appendChild(this.inputEl);
+  }
+  setPlaceholder(value: string): this {
+    this.inputEl.placeholder = value;
+    return this;
+  }
+  setValue(value: string): this {
+    this.inputEl.value = value;
+    return this;
+  }
+  onChange(handler: (value: string) => unknown): this {
+    this.inputEl.addEventListener("input", () => void handler(this.inputEl.value));
+    return this;
+  }
+}
+
+/**
+ * The multi-line field. Same three methods as the single-line one, over a
+ * `<textarea>`, which is what the panel reads back when a test asks what is
+ * in a list somebody typed.
+ */
+class StubTextArea {
+  inputEl: HTMLTextAreaElement;
+  constructor(parent: HTMLElement) {
+    this.inputEl = parent.ownerDocument.createElement("textarea");
     parent.appendChild(this.inputEl);
   }
   setPlaceholder(value: string): this {

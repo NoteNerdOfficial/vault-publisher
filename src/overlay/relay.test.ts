@@ -53,6 +53,7 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     resolved: false,
     priority: "medium",
     agent: null,
+    imported: null,
     external: null,
     replies: [],
     ...over,
