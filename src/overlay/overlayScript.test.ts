@@ -1541,18 +1541,28 @@ describe("the popup", () => {
     });
   });
 
-  // An arrow that can only land where it started is a control lying about
-  // having somewhere to go.
-  it("turns the arrows off when the page has one mark", () => {
+  /*
+   * An arrow that can only land where it started is a control lying about
+   * having somewhere to go.
+   *
+   * One mark in the whole *review*, which is the question now that the
+   * arrows walk all of it: a page with one mark and a review with several
+   * has somewhere to step to, and used to say it did not. See "stepping
+   * across pages" below.
+   */
+  it("turns the arrows off when the review has one mark", () => {
     mountPage();
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "Only one.");
     open(shadow);
 
-    const next = shadow.querySelector(
-      '.co-pop-btn[title="Next mark on this page"]',
-    ) as HTMLButtonElement;
-    expect(next.disabled).toBe(true);
+    const buttons = Array.from(
+      shadow.querySelectorAll(".co-pop-acts .co-pop-btn"),
+    ) as HTMLButtonElement[];
+    expect(buttons[0].getAttribute("title")).toBe("Previous mark");
+    expect(buttons[0].disabled).toBe(true);
+    expect(buttons[1].getAttribute("title")).toBe("Next mark");
+    expect(buttons[1].disabled).toBe(true);
   });
 
   // What was marked, read before what was said about it. The mark's own
@@ -3479,5 +3489,245 @@ describe("a comment filed somewhere other than GitHub", () => {
     const chip = shadow.querySelector("a.co-tag[data-ext]") as HTMLAnchorElement;
     expect(chip.textContent).toBe("Asana");
     expect(chip.getAttribute("title")).toBe("Filed as Asana task 1201234567890123");
+  });
+});
+
+/**
+ * Stepping out of the page.
+ *
+ * The arrows in a comment's card used to walk that page's pins and nothing
+ * else, so the last mark on a page was a dead end with the rest of the
+ * review still waiting behind it. A reviewer working through what they had
+ * marked had to go back to the panel at every page boundary, which is the
+ * one moment they are least likely to: the card is open, the arrow is right
+ * there, and it looked like it had simply run out of marks.
+ */
+describe("stepping across pages", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Catches an assignment to `location.href` instead of navigating.
+   *
+   * Everything else delegates to the real location, because the overlay
+   * reads the query at startup to find the comment a link asked for -- a
+   * stub that answered nothing for `search` would open no card at all and
+   * the test would pass for the wrong reason.
+   */
+  function navigation(): { to: string | null } {
+    const seen: { to: string | null } = { to: null };
+    const real = window.location;
+    vi.stubGlobal("location", {
+      get href() {
+        return real.href;
+      },
+      set href(value: string) {
+        seen.to = value;
+      },
+      get search() {
+        return real.search;
+      },
+      get pathname() {
+        return real.pathname;
+      },
+      get hash() {
+        return real.hash;
+      },
+      get protocol() {
+        return real.protocol;
+      },
+    });
+    return seen;
+  }
+
+  function arrows(shadow: ShadowRoot): HTMLButtonElement[] {
+    return Array.from(
+      shadow.querySelectorAll(".co-pop-acts .co-pop-btn"),
+    ) as HTMLButtonElement[];
+  }
+
+  /** The card for a comment, opened the way a link from another page does. */
+  function open(id: string): ShadowRoot {
+    mountPage();
+    search(`?osp-comment=${id}`);
+    return run();
+  }
+
+  /*
+   * The regression. One mark here and one on another page: the arrows were
+   * disabled, because the page had a queue of one.
+   */
+  it("offers a step when the only other mark is on another page", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "here" }), away("Elsewhere.", { id: "far" })]),
+    );
+    const shadow = open("here");
+
+    const [prev, next] = arrows(shadow);
+    expect(next.disabled).toBe(false);
+    expect(prev.disabled).toBe(false);
+    // The card still counts the page's own pins: that is what the pin under
+    // it and the panel row beside it both say.
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 1");
+  });
+
+  it("says which page the step leaves for", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "here" }), away("Elsewhere.", { id: "far" })]),
+    );
+    const shadow = open("here");
+
+    const [, next] = arrows(shadow);
+    expect(next.getAttribute("title")).toBe("Next mark — on Other");
+    expect(next.hasAttribute("data-away")).toBe(true);
+  });
+
+  it("goes to the page, asking for the comment on it", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "here" }), away("Elsewhere.", { id: "far" })]),
+    );
+    const shadow = open("here");
+    const went = navigation();
+
+    click(arrows(shadow)[1]);
+    // The same relative href the panel's own rows use, so it works both
+    // served and opened off disk.
+    expect(went.to).toBe("../notes/other.html?osp-comment=far");
+  });
+
+  /*
+   * A step within the page is still a step within the page. The walk crosses
+   * a boundary only at one, which is the whole of what changed.
+   */
+  it("stays put while this page still has marks ahead", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({ id: "first", text: "The first.", createdAt: "2026-10-28T07:00:00.000Z" }),
+        row({ id: "second", text: "The second.", createdAt: "2026-10-28T08:00:00.000Z" }),
+        away("Elsewhere.", { id: "far" }),
+      ]),
+    );
+    const shadow = open("first");
+    const went = navigation();
+
+    const [, next] = arrows(shadow);
+    expect(next.getAttribute("title")).toBe("Next mark on this page");
+    expect(next.hasAttribute("data-away")).toBe(false);
+
+    click(next);
+    expect(went.to).toBeNull();
+    expect(shadow.querySelector(".co-pop-threads")?.textContent).toContain("The second.");
+    expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("2 of 2");
+  });
+
+  /* ...and off the end of it, having walked the page first. */
+  it("leaves once the page's own marks are behind it", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({ id: "first", createdAt: "2026-10-28T07:00:00.000Z" }),
+        row({ id: "second", createdAt: "2026-10-28T08:00:00.000Z" }),
+        away("Elsewhere.", { id: "far" }),
+      ]),
+    );
+    const shadow = open("second");
+    const went = navigation();
+
+    click(arrows(shadow)[1]);
+    expect(went.to).toBe("../notes/other.html?osp-comment=far");
+  });
+
+  /*
+   * A comment with no page is not a place.
+   *
+   * One written into the review file by hand may name no page, and a step
+   * onto it would be a step that visibly did nothing -- so it is passed
+   * over, and where it is the only other mark the arrow is disabled rather
+   * than dead.
+   */
+  it("passes over a mark that names no page", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({ id: "here" }),
+        away("Nowhere.", { id: "lost", page: "" }),
+      ]),
+    );
+    const shadow = open("here");
+
+    const [prev, next] = arrows(shadow);
+    expect(next.disabled).toBe(true);
+    expect(prev.disabled).toBe(true);
+    expect(next.getAttribute("title")).toBe("Next mark");
+  });
+
+  /*
+   * Resolving is not a navigation.
+   *
+   * It steps to what is done next, and what is done next is on the page in
+   * front of you. A click on Resolve that moved the browser to another page
+   * would be a button doing something it never offered to do.
+   */
+  it("does not leave the page when a comment is resolved", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "here" }), away("Elsewhere.", { id: "far" })]),
+    );
+    const shadow = open("here");
+    const went = navigation();
+
+    const resolve = Array.from(shadow.querySelectorAll(".co-pop-btn, .co-act")).find(
+      (node) => /resolve/i.test(node.getAttribute("title") ?? ""),
+    );
+    expect(resolve).toBeTruthy();
+    click(resolve!);
+
+    expect(went.to).toBeNull();
+    expect(stored().find((comment) => comment.id === "here")?.resolved).toBe(true);
+  });
+
+  /*
+   * The order is the same from every page.
+   *
+   * The panel hoists the page being read to the top of the list, which is
+   * right for reading and wrong for walking: the sequence would be rebuilt
+   * around wherever the last step landed, so pressing next could come back
+   * to a mark already visited while leaving another unseen. Two pages, and
+   * the step between them is the same in both directions from both sides.
+   */
+  it("walks a stable order rather than one built around this page", () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "here" }), away("Elsewhere.", { id: "far" })]),
+    );
+
+    const shadow = open("here");
+    const went = navigation();
+    click(arrows(shadow)[1]);
+    expect(went.to).toBe("../notes/other.html?osp-comment=far");
+
+    // And back: the mark here is what lies on the other side of the one
+    // over there, whichever arrow is pressed.
+    vi.unstubAllGlobals();
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "here" }), away("Elsewhere.", { id: "far" })]),
+    );
+    document.head.innerHTML = `<meta name="osp-review" content='${JSON.stringify({
+      sourcePath: "notes/Other.md",
+      page: "notes/other.html",
+      site: "Handbook",
+    })}'>`;
+    document.body.innerHTML = `<article class="osp-article"><p>Over here.</p></article>`;
+    search("?osp-comment=far");
+    const other = run();
+    const back = navigation();
+    click(arrows(other)[1]);
+    expect(back.to).toBe("../notes/plan.html?osp-comment=here");
   });
 });

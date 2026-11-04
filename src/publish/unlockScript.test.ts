@@ -42,6 +42,30 @@ describe("the unlock reader", () => {
     expect(UNLOCK_SCRIPT).toContain("removeItem");
   });
 
+  /*
+   * The trap this file sits over.
+   *
+   * The reader is a string in a template literal, so every backslash in it
+   * is read twice -- once by TypeScript and once by the browser. A regex
+   * written with one backslash loses it on the way out: `/\s+/` becomes
+   * `/s+/`, which matches the letter s, and `/\.css$/` becomes `/.css$/`,
+   * which matches any character. Both are valid JavaScript and neither is
+   * what was meant, so nothing fails until a page quietly misbehaves.
+   *
+   * It has happened. These are the escapes that have to arrive intact.
+   */
+  it("keeps its backslashes through the template literal", () => {
+    const want = [
+      "/\\.css$/i",
+      "/url\\(\\s*(['\"]?)([^'\")]*)\\1\\s*\\)/gi",
+      "split(/\\s+/)",
+      '"<!doctype html>\\n"',
+    ];
+    for (const needle of want) {
+      expect(UNLOCK_SCRIPT, needle).toContain(needle);
+    }
+  });
+
   // The cost is carried by the payload, so a site published before the
   // figure was raised still opens.
   it("derives from what the payload says rather than its own figure", () => {

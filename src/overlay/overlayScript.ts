@@ -2136,26 +2136,48 @@ export const OVERLAY_SCRIPT = `(function () {
 
     var acts = el("div", "co-pop-acts");
 
+    /*
+     * The arrows walk the whole review, not only this page.
+     *
+     * A reviewer stepping through what they marked is working through a
+     * list, and that list does not end at the foot of a page -- it ended
+     * there only because the arrows were built from the page's own pins. The
+     * last mark on a page was a dead end with more of the review still
+     * waiting behind it, and the only way on was the panel.
+     *
+     * Where the next mark is on another page the step is a navigation, and
+     * the title says so before it is pressed: leaving the page is a bigger
+     * thing than moving down it, and an arrow that does it silently is an
+     * arrow that loses the reviewer's place.
+     */
+    var queue = reviewOrder();
+    var behind = neighbour(comment, -1, queue);
+    var ahead = neighbour(comment, 1, queue);
+
     var prevBtn = el("button", "co-pop-btn");
-    prevBtn.setAttribute("title", "Previous mark on this page");
+    prevBtn.setAttribute("title", stepTitle(behind, "Previous"));
     prevBtn.appendChild(icon(ICONS.chevUp));
     prevBtn.addEventListener("click", function () {
       stepMark(-1);
     });
 
     var nextBtn = el("button", "co-pop-btn");
-    nextBtn.setAttribute("title", "Next mark on this page");
+    nextBtn.setAttribute("title", stepTitle(ahead, "Next"));
     nextBtn.appendChild(icon(ICONS.chevDown));
     nextBtn.addEventListener("click", function () {
       stepMark(1);
     });
 
-    // One mark is not a queue, and an arrow that can only land where it
-    // started is a control that lies about having somewhere to go.
-    if (siblings.length < 2) {
-      prevBtn.disabled = true;
-      nextBtn.disabled = true;
-    }
+    // One mark in the whole review is not a queue, and an arrow that can
+    // only land where it started is a control that lies about having
+    // somewhere to go. Each side is asked separately, because a review of
+    // two has one of each and neither arrow should be dead.
+    if (!behind) prevBtn.disabled = true;
+    if (!ahead) nextBtn.disabled = true;
+
+    // Which page the step leaves for, for a reader rather than a pointer.
+    if (behind && elsewhere(behind)) prevBtn.setAttribute("data-away", "");
+    if (ahead && elsewhere(ahead)) nextBtn.setAttribute("data-away", "");
 
     var closeBtn = el("button", "co-pop-btn");
     closeBtn.setAttribute("title", "Close");
@@ -2344,14 +2366,113 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   /*
-   * The next mark on this page, in the order the pins are numbered.
+   * Every comment in the review, in the order the arrows walk them.
    *
-   * Deliberately not filtered. The arrows walk the pins, and every pin is
-   * on the page whatever the panel has been filtered to -- so "3 of 7" is
-   * the pin's own number out of the number of pins, and stepping never
-   * skips a mark the reviewer can see.
+   * Grouped by page and ordered by age inside a page, which is the order the
+   * pins are numbered in and the order the panel lists them in. Pages are
+   * ordered by the name the panel shows them under.
+   *
+   * **The order does not depend on which page is being read.** The panel
+   * hoists the current page to the top, because a list is read from the top
+   * and the rows for the page in front of you are the ones you want first.
+   * A walk cannot be hoisted the same way: the page would change under the
+   * sequence at every step, so pressing next three times could land back
+   * where it started. So this is the one ordering in the overlay that is the
+   * same from every page, and stepping through a review from any comment in
+   * it reaches every other one exactly once.
+   *
+   * Deliberately not filtered. The arrows walk the marks, and a mark exists
+   * whatever the panel has been filtered to -- so stepping never skips one
+   * the reviewer can see.
    */
+  function reviewOrder() {
+    // So \`pageName\` can answer for every row. The same set the panel labels,
+    // so this computes the labels it would have computed anyway.
+    relabel(all);
+
+    var byPage = Object.create(null);
+    var keys = [];
+    for (var i = 0; i < all.length; i++) {
+      if (!all[i]) continue;
+      var key = pageKey(all[i]);
+      if (byPage[key] === undefined) {
+        byPage[key] = [];
+        keys.push(key);
+      }
+      byPage[key].push(all[i]);
+    }
+
+    keys.sort(function (a, b) {
+      var byName = String(labels[a] || a).localeCompare(String(labels[b] || b));
+      // The key itself as a tiebreak, so two pages that happen to be called
+      // the same thing still have one order rather than whichever one the
+      // sort happened to leave first.
+      return byName !== 0 ? byName : String(a).localeCompare(String(b));
+    });
+
+    var out = [];
+    for (var k = 0; k < keys.length; k++) {
+      var rows = byPage[keys[k]];
+      rows.sort(byAge);
+      for (var r = 0; r < rows.length; r++) out.push(rows[r]);
+    }
+    return out;
+  }
+
+  /*
+   * Where one step from here lands, or null when there is nowhere to go.
+   *
+   * It walks rather than adding one, because a comment can be a mark with
+   * nothing behind it: one written into the review file by hand may name no
+   * page, and a step onto it would be a step that visibly did nothing. Those
+   * are passed over, so an arrow either moves or is disabled -- it never
+   * looks broken.
+   *
+   * Null when the only comment it could reach is the one already open, which
+   * is what disables the arrows rather than leaving a control that can only
+   * land where it started.
+   */
+  function neighbour(comment, step, rows) {
+    var len = rows.length;
+    if (len < 2) return null;
+
+    var at = -1;
+    for (var i = 0; i < len; i++) if (rows[i].id === comment.id) at = i;
+    if (at === -1) return null;
+
+    for (var n = 1; n <= len; n++) {
+      var next = rows[(((at + step * n) % len) + len) % len];
+      if (next.id === comment.id) return null;
+      if (!elsewhere(next) || reachable(next)) return next;
+    }
+    return null;
+  }
+
+  /** What an arrow says it will do, which depends on where it goes. */
+  function stepTitle(target, which) {
+    if (!target) return which + " mark";
+    return elsewhere(target)
+      ? which + " mark \u2014 on " + pageName(target)
+      : which + " mark on this page";
+  }
+
   function stepMark(step) {
+    var comment = selected ? byId(selected) : null;
+    if (!comment) return;
+    var next = neighbour(comment, step, reviewOrder());
+    if (next) goToMark(next);
+  }
+
+  /*
+   * The next mark on this page alone, for resolving.
+   *
+   * Resolving moves to what is done next, and what is done next is on the
+   * page in front of you. Carrying the walk across a page boundary here
+   * would mean a click on Resolve could navigate the browser, which is not
+   * what that button offers to do -- the arrows are where somebody asks to
+   * leave the page.
+   */
+  function stepWithinPage(step) {
     var comment = selected ? byId(selected) : null;
     if (!comment) return;
     var rows = pageRows(comment.sourcePath);
@@ -2413,6 +2534,20 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   function goToMark(next) {
+    /*
+     * Another page is a navigation, whatever its route says.
+     *
+     * This is the order the two checks have to be in. A comment with no
+     * route reads as "show this wherever its page is shown", which
+     * \`onThisRoute\` answers true for -- correctly, for a mark on the page
+     * being read, and disastrously for one on a different page, where it
+     * would open a card over a document that has no such pin on it. The
+     * page is the coarser question and is therefore asked first.
+     */
+    if (elsewhere(next)) {
+      leaveFor(next);
+      return;
+    }
     if (onThisRoute(next)) {
       glide();
       openPopup(next.id);
@@ -2420,6 +2555,21 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
     crossTo(next);
+  }
+
+  /*
+   * Off to a mark on another page.
+   *
+   * \`pageHref\` is the relative link the panel's own rows use, and it
+   * carries the comment in the query so the overlay on the other side opens
+   * it on arrival. The route's fragment goes on the end, after the query, so
+   * a step onto a particular screen of an application lands on that screen
+   * rather than on the application's first one.
+   */
+  function leaveFor(next) {
+    // Nothing to navigate to. A comment that names no page is not a place.
+    if (!reachable(next)) return;
+    location.href = pageHref(next) + splitRoute(next.route).hash;
   }
 
   /*
@@ -2490,7 +2640,7 @@ export const OVERLAY_SCRIPT = `(function () {
     comment.resolved = !comment.resolved;
     writeAll();
     render();
-    if (!reopening) stepMark(1);
+    if (!reopening) stepWithinPage(1);
   }
 
   /* One row of the thread: the comment itself, or one reply to it. */

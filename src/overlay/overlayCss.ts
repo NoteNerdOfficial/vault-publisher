@@ -1100,6 +1100,30 @@ export const OVERLAY_CSS = `
 .osp-overlay .co-pop-btn:hover { background: var(--co-bg-2); color: var(--co-fg); }
 .osp-overlay .co-pop-btn[data-on] { color: var(--co-pin); }
 
+/*
+ * An arrow with nowhere to go, and an arrow that leaves the page.
+ *
+ * The arrows walk the whole review, so the next mark is often on another
+ * page -- a navigation rather than a scroll, which is a bigger thing than
+ * the control looks like it does. The title says which page, but a title is
+ * read only by somebody who already wondered; the dot is what makes them
+ * wonder, and it costs four pixels.
+ */
+.osp-overlay .co-pop-btn:disabled { opacity: 0.3; }
+.osp-overlay .co-pop-btn:disabled:hover { background: transparent; color: var(--co-fg-2); }
+.osp-overlay .co-pop-btn[data-away] { position: relative; }
+.osp-overlay .co-pop-btn[data-away]::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--co-pin);
+}
+.osp-overlay .co-pop-btn:disabled::after { display: none; }
+
 .osp-overlay .co-pop-threads {
   display: flex;
   flex-direction: column;

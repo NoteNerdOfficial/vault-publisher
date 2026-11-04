@@ -185,6 +185,7 @@ interface Settings {
    * needs the GitHub section as well, which is a thing the build is
    * deliberately not handed. See `sourceLink.ts`.
    */
+  sourceLink: SourceLinkSettings;
   /**
    * A password the published site is encrypted behind, or empty.
    *
@@ -200,7 +201,6 @@ interface Settings {
    * somewhere to keep a key.
    */
   publishPassword: string;
-  sourceLink: SourceLinkSettings;
   /**
    * Filing a review comment as an issue in a tracker.
    *
@@ -307,11 +307,14 @@ const DEFAULT_SETTINGS: Settings = {
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
   },
+  // Blank, so a build after an upgrade publishes in the clear exactly as the
+  // build before it did. A site is only encrypted once somebody has typed a
+  // password and knows they will need it again to read their own pages.
+  publishPassword: "",
   // Off, and blank. Off because a link in the bar is a decision about the
   // published site and not one to make on somebody's behalf; blank because
   // the repository the site publishes to is the right guess once the link is
   // asked for, and no guess at all before that.
-  publishPassword: "",
   sourceLink: { enabled: false, url: "" },
   relay: {
     provider: "none",
@@ -913,7 +916,6 @@ export default class VaultPublisherPlugin extends Plugin {
 
   // -- review --------------------------------------------------------------
 
-  /** Everything the review server may touch, and nothing else. */
   /**
    * Records which note produced which published page.
    *
@@ -953,6 +955,7 @@ export default class VaultPublisherPlugin extends Plugin {
     }
   }
 
+  /** Everything the review server may touch, and nothing else. */
   private reviewStore(): ReviewStore {
     const adapter = this.app.vault.adapter;
     const folder = () => normalizePath(this.settings.commentOverlay.reviewFolder);
