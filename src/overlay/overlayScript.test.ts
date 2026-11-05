@@ -1757,7 +1757,8 @@ describe("the popup", () => {
 });
 
 describe("the menu", () => {
-  it("clears the comments on this page, once it is confirmed", () => {
+  it("clears every comment in the review, once it is confirmed", () => {
+    localStorage.setItem(STORE_KEY, JSON.stringify([away("On another page.")]));
     mountPage();
     const shadow = run();
     leaveComment(shadow, { x: 10, y: 10 }, "One.");
@@ -1765,13 +1766,38 @@ describe("the menu", () => {
 
     click(shadow.querySelector('.co-notch-btn[title="Settings"]'));
     const clear = Array.from(shadow.querySelectorAll(".co-menu-item")).find((item) =>
-      item.textContent?.includes("Clear comments"),
+      item.textContent?.includes("Clear all comments"),
     );
     click(clear ?? null);
+
+    // The count is the whole review, and it names the part that is out of
+    // sight rather than leaving it to be discovered afterwards.
+    expect(shadow.querySelector(".co-modal-head h3")?.textContent).toBe("Clear all comments?");
+    expect(shadow.querySelector(".co-modal-body p")?.textContent).toBe(
+      "3 comments will be deleted, here and in the vault, including 1 comment on other pages.",
+    );
+
     click(shadow.querySelector(".co-submit"));
 
     expect(stored()).toHaveLength(0);
     expect(shadow.querySelectorAll(".co-pin")).toHaveLength(0);
+  });
+
+  it("does not single out other pages when every comment is on this one", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "One.");
+
+    click(shadow.querySelector('.co-notch-btn[title="Settings"]'));
+    click(
+      Array.from(shadow.querySelectorAll(".co-menu-item")).find((item) =>
+        item.textContent?.includes("Clear all comments"),
+      ) ?? null,
+    );
+
+    expect(shadow.querySelector(".co-modal-body p")?.textContent).toBe(
+      "1 comment will be deleted, here and in the vault.",
+    );
   });
 
   // Two themes, named for where the row takes you rather than for where you

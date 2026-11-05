@@ -3094,7 +3094,7 @@ export const OVERLAY_SCRIPT = `(function () {
 
     menu.appendChild(el("div", "co-menu-rule"));
     menu.appendChild(
-      item("Clear comments on this page", ICONS.trash, null, function () {
+      item("Clear all comments", ICONS.trash, null, function () {
         confirmClear();
       })
     );
@@ -3568,29 +3568,37 @@ export const OVERLAY_SCRIPT = `(function () {
     askName(then);
   }
 
+  /*
+   * Clears the whole review, not only the page being looked at. The row says
+   * "all", so the dialog counts what is about to go and names the part that
+   * is out of sight: a reviewer should not have to find out afterwards that
+   * comments on pages they were not looking at went with it.
+   */
   function confirmClear() {
-    var rows = mine();
-    openModal("Clear comments on this page?", function (body) {
+    var total = all.length;
+    var elsewhere = total - mine().length;
+    openModal("Clear all comments?", function (body) {
       body.appendChild(
         el(
           "p",
           null,
-          rows.length
-            ? count(rows.length, "comment") +
-                " on this page will be deleted, here and in the vault. Comments on other pages are left alone."
-            : "There are none on this page."
+          total
+            ? count(total, "comment") +
+                " will be deleted, here and in the vault" +
+                (elsewhere
+                  ? ", including " +
+                    count(elsewhere, "comment") +
+                    " on other pages."
+                  : ".")
+            : "There are none to delete."
         )
       );
       var go = el("button", "co-submit", "Delete");
       go.setAttribute("data-danger", "");
-      go.disabled = !rows.length;
+      go.disabled = !total;
       go.addEventListener("click", function () {
-        for (var i = all.length - 1; i >= 0; i--) {
-          if (all[i].sourcePath === SOURCE_PATH) {
-            withdraw(all[i]);
-            all.splice(i, 1);
-          }
-        }
+        for (var i = 0; i < all.length; i++) withdraw(all[i]);
+        all.length = 0;
         selected = null;
         popup.hidden = true;
         writeAll();

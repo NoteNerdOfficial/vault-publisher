@@ -1067,7 +1067,7 @@ function menuHtml() {
   return '<div style="position:fixed;bottom:calc(68px + var(--proto-gutter));left:50%;transform:translateX(-100px);' +
     'min-width:200px;padding:4px;background:var(--co-bg);border:1px solid var(--co-line);border-radius:12px;' +
     'box-shadow:var(--co-shadow);z-index:5;animation:co-rise .16s var(--co-ease)">' +
-    ['Change name', 'Clear comments on this page', 'Switch to dark', 'Hide the overlay'].map(function (t, i) {
+    ['Change name', 'Clear all comments', 'Switch to dark', 'Hide the overlay'].map(function (t, i) {
       return '<button style="display:flex;width:100%;gap:10px;padding:7px 10px;border:0;border-radius:8px;' +
         'background:transparent;color:var(--co-fg);text-align:left;font:inherit;font-size:13px"' +
         ' data-act="' + (i === 2 ? "theme" : "menu") + '">' + t + '</button>';
