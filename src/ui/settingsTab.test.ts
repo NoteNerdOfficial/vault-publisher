@@ -772,3 +772,35 @@ describe("the custom stylesheet", () => {
     expect(root.textContent).toContain("Found design/site.css");
   });
 });
+
+describe("the issue tracker section", () => {
+  /*
+   * The one fact about filing that the rows themselves cannot show, and the
+   * one whose discovery is expensive and backwards: you configure a tracker,
+   * publish, and find the Send action missing from the site you configured
+   * it for. Twice over -- a published page is never given the tracker's
+   * name, and there is no plugin behind a static host to file through.
+   */
+  it("says that filing needs a served preview, not a published site", () => {
+    const root = render({ overlay: { enabled: true } });
+    const text = root.textContent ?? "";
+
+    expect(text).toContain("Open preview in browser");
+    expect(text).toContain("Published pages carry no Send action");
+  });
+
+  it("says it where the tracker is configured, not somewhere else", () => {
+    const root = render({ overlay: { enabled: true } });
+    const headings = Array.from(root.querySelectorAll(".setting-item"));
+    const at = (needle: string) =>
+      headings.findIndex((node) => (node.textContent ?? "").includes(needle));
+
+    const heading = at("Issue tracker");
+    const note = at("Published pages carry no Send action");
+    const firstRow = at("File comments as issues");
+
+    expect(heading).toBeGreaterThan(-1);
+    expect(note).toBe(heading + 1);
+    expect(firstRow).toBe(note + 1);
+  });
+});

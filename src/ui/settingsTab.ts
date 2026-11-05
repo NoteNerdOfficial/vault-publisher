@@ -1802,6 +1802,28 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     new Setting(root).setName("Issue tracker").setHeading();
 
+    /*
+     * The one thing about this section that cannot be worked out from it.
+     *
+     * Filing goes through the plugin's own local server, which is also what
+     * serves the preview -- so the Send action exists in a preview opened
+     * with "Open preview in browser" and nowhere else. A published page is
+     * never given the tracker's name, so it builds no Send action at all,
+     * and could not reach one: there is no plugin behind a static host.
+     *
+     * Said here rather than left to be discovered, because the discovery is
+     * expensive and backwards: you configure a tracker, publish, and find
+     * the action missing from the site you published it for.
+     */
+    this.note(
+      root,
+      "Filing works in a preview opened with \u201cOpen preview in " +
+        "browser\u201d, which is the only build with the plugin behind it. " +
+        "Published pages carry no Send action: a static host has nothing to " +
+        "file through. Reviewing a published site means exporting the " +
+        "comments and importing them here, then filing from a preview.",
+    );
+
     new Setting(root)
       .setName("File comments as issues")
       .setDesc(
