@@ -8,9 +8,15 @@
 # clone, by any human or any tool, whether or not they have read anything.
 #
 # The three checks:
-#   1. Author and committer use a github.com noreply address. Yours is on
+#   1. Author and committer use a github.com noreply address, and the name
+#      this project publishes under. Your noreply address is on
 #      https://github.com/settings/emails -- turn on "Keep my email address
 #      private" and git will be told the address to use.
+#
+#      The name is checked because for a long time it was not, and 39
+#      commits went in under a personal handle while every address was
+#      correct. An identity is both halves, and a log with two authors in
+#      it for a one-person project is a log nobody can read.
 #   2. No GitHub token or keychain ciphertext in the added lines.
 #   3. No personal email address and no absolute home path in them either.
 #      A published repository is a published home directory otherwise: an
@@ -23,6 +29,9 @@
 set -e
 
 NOREPLY="users.noreply.github.com"
+# The name this project publishes under, as in manifest.json's `author`.
+# A fork should change this line rather than work around the check.
+NAME="NoteNerdOfficial"
 fail=0
 say() { printf '\033[31mpre-commit:\033[0m %s\n' "$1" >&2; fail=1; }
 
@@ -40,6 +49,13 @@ case "$committer" in
   *"$NOREPLY") ;;
   *) say "committer email is '$committer', not a $NOREPLY address" ;;
 esac
+
+author_name=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*\) <.*/\1/p')
+committer_name=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*\) <.*/\1/p')
+[ "$author_name" = "$NAME" ] \
+  || say "author name is '$author_name', not '$NAME' (git config user.name)"
+[ "$committer_name" = "$NAME" ] \
+  || say "committer name is '$committer_name', not '$NAME' (git config user.name)"
 
 # -- 2. Secrets and personal data in the staged content --------------------
 # Only added lines are checked: a pre-existing problem is not this commit's
