@@ -1868,7 +1868,7 @@ export default class VaultPublisherPlugin extends Plugin {
         // them. Without this the next step is hunting the tree for a page
         // that published perfectly well.
         for (const page of result.htmlFiles.publishedPages) say(`  ${page}`);
-        say("  as-is pages are not in the site navigation; link one from a note");
+        say("  these are in the site's file tree; everything else is notes only");
       }
       if (result.htmlFilesNotEnabled) {
         say(
@@ -2199,12 +2199,17 @@ export default class VaultPublisherPlugin extends Plugin {
       if (html.publishedPages.length) {
         lines.push(
           "",
-          "**Where each one went.** These pages are not in the site's navigation:",
-          "no row in the vault panel, no browse entry, no tag page, no graph node.",
-          "They have no frontmatter, no tags and no outline, so there is nothing to",
-          "put in those places -- a note linking to one is how a reader reaches it.",
-          "That is why they are listed here: from the built site, a page that",
-          "published correctly and a page that was never published look the same.",
+          "**Where each one went.** Each of these has a row in the site's file",
+          "tree, under the folder its path puts it in, labelled with the page's own",
+          "`<title>` and marked with the angle-bracket icon -- so the tree is the",
+          "whole published vault, and the site's search finds these pages too.",
+          "",
+          "The rest of the navigation is notes only: no browse entry, no tag page,",
+          "no graph node, and no place in the recently-updated list. Those are all",
+          "claims about a note -- a date the author wrote, tags, an outline, what",
+          "links here -- and an as-is page has none of them. The list below stays",
+          "because the tree shows that a page is published without saying where it",
+          "went, and this is the only place that mapping is written down.",
           "",
         );
         for (const page of html.publishedPages) lines.push(`- ${page}`);

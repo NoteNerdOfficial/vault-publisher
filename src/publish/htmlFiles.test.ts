@@ -15,6 +15,7 @@ import {
   findRootAbsoluteReferences,
   isDirectoryReference,
   mayCarryCompanion,
+  pageTitle,
   planCompanions,
   planHtmlFiles,
   reservedPathReason,
@@ -769,5 +770,69 @@ describe("planHtmlFiles", () => {
     expect(plan.targets).toEqual([
       { sourcePath: "site/index.html", url: "index.html" },
     ]);
+  });
+});
+
+/**
+ * The label the file tree gives one of these pages.
+ *
+ * The filename alone is not enough and that is the whole reason this exists:
+ * every built application in a vault is called `index.html`, so a tree of
+ * them is a tree of rows called "index". The `<title>` is what the author
+ * already decided the page is called.
+ */
+describe("pageTitle", () => {
+  it("takes the page's own title", () => {
+    expect(pageTitle("<html><head><title>AngularApp</title></head></html>", "app/index.html")).toBe(
+      "AngularApp",
+    );
+  });
+
+  it("collapses a title written over several lines", () => {
+    const html = "<title>\n  Revenue\n  trend\n</title>";
+    expect(pageTitle(html, "charts/trend.html")).toBe("Revenue trend");
+  });
+
+  it("decodes the entities a title carries", () => {
+    expect(pageTitle("<title>Sales &amp; Ops &#8212; Q3</title>", "a.html")).toBe(
+      "Sales & Ops — Q3",
+    );
+    expect(pageTitle("<title>Caf&#xe9;</title>", "a.html")).toBe("Café");
+  });
+
+  it("leaves an entity it does not know as written", () => {
+    // Better a visible `&hellip;` in one row than a wrong character, and
+    // better than carrying a full entity table for one line of text.
+    expect(pageTitle("<title>Wait&hellip;</title>", "a.html")).toBe("Wait&hellip;");
+  });
+
+  it("leaves a code point that is not a character as written", () => {
+    // A lone surrogate half: `fromCodePoint` throws on it, so the rule has
+    // to refuse it rather than find out at build time.
+    expect(pageTitle("<title>x&#xd800;</title>", "a.html")).toBe("x&#xd800;");
+  });
+
+  it("drops markup from inside the title", () => {
+    expect(pageTitle("<title>Revenue <b>trend</b></title>", "a.html")).toBe("Revenue trend");
+  });
+
+  it("ignores a title inside a comment", () => {
+    const html = "<!-- <title>Old name</title> --><title>New name</title>";
+    expect(pageTitle(html, "a.html")).toBe("New name");
+  });
+
+  it("takes the first title when a page sets two", () => {
+    expect(pageTitle("<title>First</title><title>Second</title>", "a.html")).toBe("First");
+  });
+
+  it("falls back to the filename without its extension", () => {
+    expect(pageTitle("<html><body>no title</body></html>", "app/dist/index.html")).toBe("index");
+    expect(pageTitle("<title>   </title>", "charts/trend.htm")).toBe("trend");
+  });
+
+  it("falls back for a page with no head at all", () => {
+    // A stock `ng new` src/index.html has a title; a hand-written fragment
+    // may not, and it is still published.
+    expect(pageTitle("<app-root></app-root>", "my-app/src/index.html")).toBe("index");
   });
 });

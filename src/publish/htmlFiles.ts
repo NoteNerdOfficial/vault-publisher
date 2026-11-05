@@ -310,12 +310,16 @@ export interface HtmlFileStats {
   /**
    * Every page published as-is, as "vault/path.html -> published/url.html".
    *
-   * A count was not enough. These pages are deliberately absent from the
-   * navigation -- no vault panel row, no browse entry, no graph node -- so
-   * from the built site a page that published correctly and a page that was
-   * never published look exactly alike. Someone looked for an HTML file in
-   * the file tree, did not find it, and had no way to tell which had
-   * happened. Naming them is the difference.
+   * A count was not enough, and the list outlived the reason it was added.
+   * These pages used to be absent from the navigation entirely, so from the
+   * built site a page that published correctly and a page that was never
+   * published looked exactly alike: someone looked for an HTML file in the
+   * file tree, did not find it, and had no way to tell which had happened.
+   *
+   * They are in the tree now -- see `asIs` on `NavNote` -- which is the
+   * better answer to that, and the list stays regardless. It says where each
+   * page landed, which the tree does not, and it is the only place the
+   * mapping from vault path to published URL is written down.
    */
   publishedPages: string[];
 }
@@ -534,6 +538,80 @@ export function baseHrefHazard(value: string | null): string | null {
     `base href="${base}" resolves every reference somewhere other than ` +
     `beside the page -- build with a base of "./" unless that is meant`
   );
+}
+
+/** The first `<title>`, which is the only one a browser honours. */
+const TITLE_TAG = /<title\b[^>]*>([\s\S]*?)<\/title>/i;
+
+/**
+ * The named entities a page title realistically carries.
+ *
+ * Not a general entity table, and deliberately not: a title is one short
+ * line of text, the five XML names plus a non-breaking space cover what
+ * anybody writes in one, and numeric escapes are handled by rule below. An
+ * entity this does not know is left as it was found, which renders as the
+ * literal `&hellip;` rather than as a wrong character.
+ */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+
+/**
+ * A page's own name for itself, for the row the vault panel gives it.
+ *
+ * The tree needs a label, and the file has one: its `<title>` is what the
+ * author already decided this page is called, and it is what a browser tab
+ * and a search engine will say. Falling straight back to the filename would
+ * fill the tree with rows called "index" -- true of every built application
+ * in a vault, and useless for telling them apart.
+ *
+ * Read with a regex rather than a parse, like every other scan in this
+ * module: we are not editing the file, so there is no tree to need. A title
+ * holding markup is markup the title does not want, so tags inside it are
+ * dropped and the whitespace collapsed -- a `<title>` written across three
+ * indented lines is one line of text to a browser, and has to be one here
+ * too or the row carries the author's indentation.
+ *
+ * The result is plain text, so it is escaped on the way into the markup like
+ * any other title. Decoding here and escaping there is not a round trip
+ * through nothing: without the decode a title written `Sales &amp; Ops`
+ * would reach the page as `Sales &amp;amp; Ops`.
+ */
+export function pageTitle(html: string, sourcePath: string): string {
+  const match = TITLE_TAG.exec(html.replace(/<!--[\s\S]*?-->/g, " "));
+  const text = (match?.[1] ?? "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const title = text ? decodeEntities(text) : "";
+  if (title) return title;
+
+  // No title, or an empty one. The filename is what Obsidian's own explorer
+  // would show for the file, which is the least surprising fallback.
+  const name = sourcePath.slice(sourcePath.lastIndexOf("/") + 1);
+  return name.replace(HTML_EXTENSION, "") || name;
+}
+
+/** Entity references in a page title, resolved to the text they stand for. */
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
+    const named = NAMED_ENTITIES[body.toLowerCase()];
+    if (named) return named;
+    if (!body.startsWith("#")) return whole;
+
+    const hex = body[1] === "x" || body[1] === "X";
+    const code = Number.parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
+    // A code point outside Unicode, or a surrogate half, is not a character
+    // `fromCodePoint` will give back -- it throws. Left as written.
+    if (!Number.isInteger(code) || code <= 0 || code > 0x10ffff) return whole;
+    if (code >= 0xd800 && code <= 0xdfff) return whole;
+    return String.fromCodePoint(code);
+  });
 }
 
 /**

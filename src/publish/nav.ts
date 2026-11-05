@@ -32,6 +32,23 @@ export interface NavNote {
    */
   updated: string | null;
   pinned: boolean;
+  /**
+   * True for one of the vault's own HTML files, published as it was written.
+   *
+   * The tree is the one place these pages appear, and it is why this flag
+   * exists rather than a second kind of node: a reader looking for a file
+   * wants the whole vault in one list, in folder order, and an HTML page
+   * sitting beside the notes is exactly what the file tree is *for*.
+   *
+   * What it changes is the row's icon and nothing else. Everything the rest
+   * of the navigation does is a claim about a note -- a date the author
+   * wrote, tags, an outline, what links here -- and an as-is page has none
+   * of them, so it is kept out of the recency list, the pinned list, the
+   * tag pages, the graph and the note count. `updated` is null and `pinned`
+   * is false here for the same reason: the fields are not knowable, rather
+   * than knowable and empty.
+   */
+  asIs?: boolean;
 }
 
 export type NavNode =

@@ -775,7 +775,11 @@ function treeMarkup(nodes: NavNode[], input: ShellInput, depth: number): string 
   return nodes
     .map((node) => {
       if (node.kind === "note") {
-        return `<li class="osp-file${node.note.url === input.url ? " osp-current-file" : ""}">${noteRow(node.note, input)}</li>`;
+        // The angle brackets for one of the vault's own HTML files: the row
+        // opens a page the site did not render, and the icon is the only
+        // warning a reader gets that the shell around it will be gone.
+        const row = noteRow(node.note, input, node.note.asIs ? { icon: "code" } : {});
+        return `<li class="osp-file${node.note.url === input.url ? " osp-current-file" : ""}">${row}</li>`;
       }
       // A folder holding the page being read starts open, so a reader never
       // arrives at a tree that does not show where they are.

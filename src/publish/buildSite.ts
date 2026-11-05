@@ -94,6 +94,7 @@ import {
   countHtmlFilesAvailable,
   emptyHtmlFileStats,
   hasLocalResourceUrl,
+  pageTitle,
   planCompanions,
   planHtmlFiles,
   selectHtmlFiles,
@@ -646,6 +647,61 @@ export async function buildSite(
   const htmlPlan = planHtmlFiles(htmlSelected, config.folder, targets.map((t) => t.url));
   const htmlByPath = new Map(htmlSelected.map((file) => [file.path, file]));
 
+  /**
+   * Each as-is page's text, read before anything needs it.
+   *
+   * Read here rather than in the publishing loop further down, for two
+   * reasons that both come back to the vault panel. The tree is built before
+   * that loop runs and it needs every row's label, which for one of these
+   * pages is its own `<title>`. And a page that cannot be read must not get
+   * a row: the loop reports the failure and publishes nothing, so a row
+   * written in advance would point at a file that was never written -- a
+   * dead link in the one place that is meant to prove the page is there.
+   *
+   * So the read happens once, up front, and a page that fails it is out of
+   * both the tree and the site. `cachedRead` means the text is the vault's
+   * own copy rather than a fresh read per use.
+   */
+  const htmlContent = new Map<string, string>();
+  // Held separately only because `skipped` is declared below this: folded
+  // into it where it is built, so a read failure is reported identically to
+  // one the loop itself would have caught.
+  const skippedHtmlReads: { path: string; reason: string }[] = [];
+  for (const target of htmlPlan.targets) {
+    const file = htmlByPath.get(target.sourcePath);
+    if (!file) continue;
+    try {
+      htmlContent.set(target.sourcePath, await app.vault.cachedRead(file));
+    } catch (error) {
+      skippedHtmlReads.push({
+        path: target.sourcePath,
+        reason: `could not read HTML file: ${error instanceof Error ? error.message : error}`,
+      });
+    }
+  }
+
+  /**
+   * The vault's own pages, as the file tree sees them.
+   *
+   * Only the tree: `navNotes` below stays the rendered notes alone, because
+   * every other thing built from it -- recency, the pinned list, the note
+   * count, the tag pages, the graph -- is a claim about a note. See `asIs`
+   * on `NavNote`.
+   */
+  const htmlNavNotes: NavNote[] = htmlPlan.targets
+    .filter((target) => htmlContent.has(target.sourcePath))
+    .map((target) => {
+      const slash = target.url.lastIndexOf("/");
+      return {
+        url: target.url,
+        title: pageTitle(htmlContent.get(target.sourcePath) ?? "", target.sourcePath),
+        folder: slash === -1 ? "" : target.url.slice(0, slash),
+        updated: null,
+        pinned: false,
+        asIs: true,
+      };
+    });
+
   // Both kinds of page go into the resolver, so `[[chart.html]]` in a note
   // becomes a working link instead of the dead span it used to be. Nothing
   // in `LinkResolver` needed teaching: it strips `.md` and nothing else, so
@@ -667,7 +723,10 @@ export async function buildSite(
 
   const files: PublishFile[] = [];
   const pages: PageResult[] = [];
-  const skipped: { path: string; reason: string }[] = [...htmlPlan.collisions];
+  const skipped: { path: string; reason: string }[] = [
+    ...htmlPlan.collisions,
+    ...skippedHtmlReads,
+  ];
 
   /**
    * Rendered notes, held until the whole site is known.
@@ -834,7 +893,9 @@ export async function buildSite(
   // Every note is rendered, so what links to what is finally knowable. The
   // shell is built once and the pages are assembled around it.
   const navNotes = rendered.map((page) => page.nav);
-  const navTree = buildNavTree(navNotes);
+  // The tree is the whole published vault, notes and the vault's own pages
+  // together. Everything below it is notes alone -- see `htmlNavNotes`.
+  const navTree = buildNavTree([...navNotes, ...htmlNavNotes]);
   const pinned = navNotes.filter((note) => note.pinned);
   const recency = recencyBuckets(navNotes, config.now ?? new Date());
   const titles = new Map(rendered.map((page) => [page.url, page.title]));
@@ -1033,19 +1094,11 @@ export async function buildSite(
   );
 
   for (const target of htmlPlan.targets) {
-    const file = htmlByPath.get(target.sourcePath);
-    if (!file) continue;
-
-    let html: string;
-    try {
-      html = await app.vault.cachedRead(file);
-    } catch (error) {
-      skipped.push({
-        path: target.sourcePath,
-        reason: `could not read HTML file: ${error instanceof Error ? error.message : error}`,
-      });
-      continue;
-    }
+    // Read and reported much earlier, because the file tree needed the
+    // titles: a page missing from `htmlContent` is one whose read failed and
+    // is already in `skipped`.
+    const html = htmlContent.get(target.sourcePath);
+    if (html === undefined) continue;
 
     /**
      * The review overlay, on a page we did not build.

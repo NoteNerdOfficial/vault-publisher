@@ -367,3 +367,77 @@ describe("the in-page menu", () => {
     expect(markup).toContain("&lt;img");
   });
 });
+
+/**
+ * A row for one of the vault's own HTML files.
+ *
+ * The tree is the only part of the navigation these pages appear in, and
+ * they appear in it because the alternative was what someone actually hit:
+ * a page that published perfectly well, absent from the file tree, and no
+ * way from the site to tell that from a page that never published at all.
+ *
+ * What the markup has to carry is that the row is there, that it opens the
+ * page's own URL with its extension intact, and that it is marked as
+ * something other than a note -- which is the icon, since the label is the
+ * author's title and says nothing about how the page was made.
+ */
+describe("an as-is HTML page in the file tree", () => {
+  const tree = () =>
+    vaultPanel(
+      shell({
+        url: "notes/atomic-notes-in-practice.html",
+        nav: [
+          {
+            kind: "folder",
+            name: "charts",
+            path: "charts",
+            notes: 1,
+            children: [
+              {
+                kind: "note",
+                note: {
+                  url: "charts/trend.html",
+                  title: "Revenue trend",
+                  folder: "charts",
+                  updated: null,
+                  pinned: false,
+                  asIs: true,
+                },
+              },
+            ],
+          },
+          {
+            kind: "note",
+            note: {
+              url: "notes/atomic-notes-in-practice.html",
+              title: "Atomic notes in practice",
+              folder: "notes",
+              updated: "2026-10-25T09:00",
+              pinned: false,
+            },
+          },
+        ],
+      }),
+    );
+
+  it("links to the page at its own path", () => {
+    expect(tree()).toContain('href="../charts/trend.html"');
+  });
+
+  it("is labelled with the page's own title", () => {
+    expect(tree()).toContain("Revenue trend");
+  });
+
+  it("carries the code icon rather than the note icon", () => {
+    // `code` is two angle brackets; `file` is the dog-eared page. The row
+    // has to be the first and not the second, which is the whole of how a
+    // reader tells the two kinds of row apart.
+    const row = tree().slice(tree().indexOf("charts/trend.html"));
+    expect(row.slice(0, row.indexOf("</a>"))).toContain('d="m9 17-5-5 5-5"');
+  });
+
+  it("leaves a note's row on the note icon", () => {
+    const row = tree().slice(tree().indexOf("notes/atomic-notes-in-practice.html"));
+    expect(row.slice(0, row.indexOf("</a>"))).toContain('d="M14 3v5h5"');
+  });
+});
