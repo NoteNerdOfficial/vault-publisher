@@ -137,6 +137,50 @@ export function harvestCss(
 }
 
 /**
+ * Reads one harvested font, by whichever request path can reach it.
+ *
+ * Two paths, chosen by scheme, because neither one can do both jobs.
+ *
+ * `requestUrl` is the host's own request function and the right answer for
+ * the network: it is not subject to the page's CORS rules, and the tests can
+ * stand in for it. What it cannot do is a local resource. It is built on
+ * Electron's `ClientRequest`, which refuses every other scheme with
+ * "ClientRequest only supports http: and https: protocols" -- and the fonts
+ * this function exists to copy are at `app://` URLs inside the app's own
+ * origin, as the comment above says. Sending those through `requestUrl`
+ * failed every build in a vault that had any MathJax CSS loaded.
+ *
+ * `fetch` reads them, because Electron registers `app:` as a standard scheme.
+ * Reached as `window.fetch` rather than bare `fetch`: it is the window's, a
+ * read of a local resource is not a network request, and the lint rule that
+ * sends network requests through `requestUrl` is right about the case it is
+ * about.
+ */
+async function readFontBytes(source: string): Promise<ArrayBuffer> {
+  let scheme = "";
+  try {
+    scheme = new URL(source).protocol;
+  } catch {
+    // Not a URL this can classify; the local path is the safer guess, since
+    // a relative or opaque reference is not going out to the network.
+  }
+
+  if (scheme === "http:" || scheme === "https:") {
+    const response = await requestUrl({ url: source, throw: false });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Could not fetch MathJax font ${source}: HTTP ${response.status}`);
+    }
+    return response.arrayBuffer;
+  }
+
+  const response = await window.fetch(source);
+  if (!response.ok) {
+    throw new Error(`Could not fetch MathJax font ${source}: HTTP ${response.status}`);
+  }
+  return response.arrayBuffer();
+}
+
+/**
  * Copies MathJax's built-in fonts into the published tree and rewrites the
  * harvested @font-face rules to point at them. The original `/lib/mathjax`
  * URLs only exist inside Obsidian's app:// origin; they are not available to
@@ -167,14 +211,7 @@ export async function materializeMathJaxFonts(
   });
 
   for (const [source, asset] of bySource) {
-    // `requestUrl` rather than `fetch`: it is the request path the host
-    // offers, it is not subject to the page's CORS rules, and it is the one
-    // the tests can stand in for.
-    const response = await requestUrl({ url: source, throw: false });
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`Could not fetch MathJax font ${source}: HTTP ${response.status}`);
-    }
-    asset.content = response.arrayBuffer;
+    asset.content = await readFontBytes(source);
   }
 
   return { rules: rewritten, assets: Array.from(bySource.values()) };
