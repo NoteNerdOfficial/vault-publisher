@@ -18,6 +18,7 @@ import {
 import { formatBytes } from "./publish/drift";
 import { pruneStale } from "./publish/prune";
 import { DEFAULT_THEME } from "./publish/themes";
+import { normalizeCustomCssPath } from "./publish/customCss";
 import {
   MANIFEST_PATH,
   diffAgainstManifest,
@@ -298,6 +299,9 @@ const DEFAULT_SETTINGS: Settings = {
     // upgrade publishes exactly what the build before it did.
     excludeFolders: [],
     theme: DEFAULT_THEME,
+    // Empty, so a build after an upgrade looks exactly like the build before
+    // it: one of the curated themes and nothing of anybody's own on the end.
+    customCssPath: "",
   },
   commentOverlay: {
     enabled: false,
@@ -2018,6 +2022,17 @@ export default class VaultPublisherPlugin extends Plugin {
     lines.push(`Blocks that would break on reparse: ${result.invalidNesting}`);
     lines.push(`Pages serialized incomplete: ${result.incompletePages}`);
     lines.push(`Blocks still showing a loading placeholder: ${result.loadingPlaceholders}`);
+    // Said whether or not it worked. A stylesheet that did not load looks
+    // from the site exactly like one whose rules do not work, and the
+    // skipped list below carries the reason when there is one.
+    if (result.customCss) {
+      lines.push(
+        `Custom stylesheet: ${result.customCss.path} ` +
+          `(${result.customCss.bytes} bytes), appended to assets/site.css`,
+      );
+    } else if (normalizeCustomCssPath(this.settings.site.customCssPath)) {
+      lines.push("Custom stylesheet: named in settings but not used -- see Skipped below");
+    }
     lines.push(
       `Media files: ${result.assetsPublished} (${Math.round(result.assetBytes / 1024)} KB)` +
         (result.assetsUnresolved.length

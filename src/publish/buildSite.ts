@@ -1,4 +1,4 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, normalizePath } from "obsidian";
 import { createRenderHost, renderFile } from "../render/renderNote";
 import { waitForDataviewIndex } from "../render/settle";
 import { withDataviewRefreshSuspended } from "../render/dataviewRefresh";
@@ -100,6 +100,7 @@ import {
 import { stampBlockIds } from "../overlay/anchor";
 import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
+import { readCustomCss, withCustomCss } from "./customCss";
 import { PublishFile } from "../github/client";
 
 /**
@@ -196,6 +197,22 @@ export interface SiteConfig {
   outputFolders?: string[];
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
+  /**
+   * A stylesheet of the author's own, as a vault path, appended to the
+   * site's.
+   *
+   * Unset means none, which is what every site built before this existed
+   * had. The whole mechanism is one join in `customCss.ts`: the file's
+   * contents go on the end of `assets/site.css`, so a `:root` block in it
+   * redeclaring `--osp-link` or `--osp-font-body` beats the theme's, and no
+   * rule anywhere else has to know the file exists.
+   *
+   * Read through the vault adapter rather than the file index, so a
+   * stylesheet kept in a hidden folder -- `.obsidian/snippets/`, where
+   * somebody who already writes CSS for Obsidian would reasonably put it --
+   * is reachable too.
+   */
+  customCssPath?: string;
   /**
    * Address of the repository the site came from, for a link in the bar.
    *
@@ -429,6 +446,15 @@ export interface BuildResult {
   basesUnhandled: string[];
   /** Every unpublished note whose content reached a page, with where. */
   privacyLeaks: (Leak & { page: string })[];
+  /**
+   * The author's own stylesheet, when one was named and read.
+   *
+   * Null covers both "none configured" and "configured but unreadable", and
+   * the second of those also puts a line in `skipped` -- a stylesheet that
+   * did not load looks exactly like one whose rules do not work, and the
+   * difference is not something anyone should have to guess at.
+   */
+  customCss: { path: string; bytes: number } | null;
   /** Media files copied into the site. */
   assetsPublished: number;
   /** Total bytes of media, so a publish can say what it is uploading. */
@@ -1120,7 +1146,24 @@ export async function buildSite(
     path: "assets/obsidian.css",
     content: harvestToStylesheet(harvested.rules),
   });
-  files.push({ path: "assets/site.css", content: siteCss(config.theme) });
+  // The author's own rules go last of all, which is the whole of how they
+  // win: the theme's tokens are declared above them, inside a cascade layer.
+  const authored = await readCustomCss(
+    app.vault.adapter,
+    config.customCssPath,
+    config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS,
+    isBuildOutput,
+  );
+  let customCss: BuildResult["customCss"] = null;
+  let siteStylesheet = siteCss(config.theme);
+  if (authored.css !== null && authored.path) {
+    siteStylesheet = withCustomCss(siteStylesheet, authored.css);
+    customCss = { path: authored.path, bytes: authored.css.length };
+  }
+  if (authored.problem && authored.path) {
+    skipped.push({ path: authored.path, reason: authored.problem });
+  }
+  files.push({ path: "assets/site.css", content: siteStylesheet });
 
   // One copy for the site, linked by every page, rather than a copy inside
   // each one. See `SITE_SCRIPT_PATH`.
@@ -1245,6 +1288,7 @@ export async function buildSite(
     privacyLeaks: pages.flatMap((p) =>
       p.privacy.leaks.map((leak) => ({ ...leak, page: p.url })),
     ),
+    customCss,
     assetsPublished: wantedAssets.size,
     assetBytes,
     assetsUnresolved: Array.from(

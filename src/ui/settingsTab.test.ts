@@ -105,17 +105,30 @@ function host(over: {
  * Enough of an app for the one question the panel asks of the vault: which
  * note the front page resolves to. An empty vault answers it honestly.
  */
-function app(): App {
+function app(files: string[] = []): App {
   return {
-    vault: { getMarkdownFiles: () => [] },
+    vault: {
+      getMarkdownFiles: () => [],
+      // The custom stylesheet is looked for through the adapter, so that one
+      // kept in a hidden folder is found as readily as one beside the notes.
+      adapter: { exists: async (path: string) => files.includes(path) },
+    },
     metadataCache: { getFileCache: () => null },
   } as unknown as App;
 }
 
-function render(over: Parameters<typeof host>[0] = {}): HTMLElement {
-  const tab = new VaultPublisherSettingsTab(app(), host(over));
+function render(
+  over: Parameters<typeof host>[0] = {},
+  files: string[] = [],
+): HTMLElement {
+  const tab = new VaultPublisherSettingsTab(app(files), host(over));
   tab.display();
   return tab.containerEl;
+}
+
+/** Lets a row that asks the vault a question finish asking it. */
+function settle(): Promise<void> {
+  return new Promise((done) => setTimeout(done, 0));
 }
 
 /** The section headings, in the order they are drawn. */
@@ -699,5 +712,63 @@ describe("redrawing the panel", () => {
     tab.containerEl.empty();
 
     expect(box.at()).toBe(0);
+  });
+});
+
+/**
+ * The escape hatch from the curated themes.
+ *
+ * Worth testing for the same reason the excluded-folders warning is: every
+ * part of it is a path somebody typed, and a typo in a path whose only job
+ * is to be read produces a site that looks exactly as it did before, with
+ * nothing on screen to say why.
+ */
+describe("the custom stylesheet", () => {
+  it("is offered without explaining itself at everyone", () => {
+    const root = render();
+    expect(row(root, "Custom stylesheet")).not.toBeNull();
+    // The example belongs to the person who has named a file, not to the
+    // person scrolling past on their way to GitHub.
+    expect(root.textContent).not.toContain("--osp-link");
+  });
+
+  it("shows what to write in the file once one is named", async () => {
+    const root = render({ site: { customCssPath: "design/site.css" } }, [
+      "design/site.css",
+    ]);
+    await settle();
+
+    expect(root.textContent).toContain("--osp-link");
+    expect(root.textContent).toContain("Found design/site.css");
+  });
+
+  // The failure this whole row exists to make visible.
+  it("says so when the named file is not in the vault", async () => {
+    const root = render({ site: { customCssPath: "design/typo.css" } });
+    await settle();
+
+    expect(root.textContent).toContain("No file at design/typo.css");
+    expect(root.querySelector(".osp-settings-warning")).not.toBeNull();
+  });
+
+  /*
+   * The obvious mistake after reading the built stylesheet to find the token
+   * names: point at that file. The build refuses it, because appended to
+   * itself it would double on every build, and the panel says so first.
+   */
+  it("refuses a path inside the folders the plugin writes", () => {
+    const root = render({ site: { customCssPath: "_site-preview/assets/site.css" } });
+
+    expect(root.textContent).toContain("writes rather than reads");
+    expect(root.textContent).not.toContain("--osp-link");
+  });
+
+  it("reads a path typed with a leading slash as the vault path it means", async () => {
+    const root = render({ site: { customCssPath: "/design/site.css" } }, [
+      "design/site.css",
+    ]);
+    await settle();
+
+    expect(root.textContent).toContain("Found design/site.css");
   });
 });

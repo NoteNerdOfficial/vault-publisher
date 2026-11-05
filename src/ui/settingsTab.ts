@@ -9,6 +9,8 @@ import {
 } from "../platform/secrets";
 import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
 import { parseExcludeFolders, swallowsScope } from "../publish/excludeFolders";
+import { normalizeCustomCssPath } from "../publish/customCss";
+import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "../publish/outputFolders";
 import {
   SourceLinkSettings,
   resolveSourceUrl,
@@ -185,6 +187,8 @@ export interface SettingsHost {
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
       customDomain?: string;
+      /** Vault path of a stylesheet of the author's own, or unset. */
+      customCssPath?: string;
     };
     publishPassword: string;
     commentOverlay: {
@@ -1223,7 +1227,129 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     describe(chosen);
     this.renderThemePreview(preview, chosen);
 
+    this.renderCustomCss(root);
     this.renderSourceLink(root);
+  }
+
+  /**
+   * A stylesheet of the author's own, named by path.
+   *
+   * The curated themes are the answer for most vaults and are deliberately
+   * not a theme API -- but "nearly, with our own blue" has no answer among
+   * five fixed looks, and the stylesheet has been written against custom
+   * properties from the start. So this is the whole of the escape hatch: name
+   * a CSS file, and its rules go on the end of the site's own stylesheet.
+   *
+   * The example is only drawn once a path is named. A six-line CSS snippet
+   * sitting under the theme dropdown for everyone who will never use it is a
+   * worse trade than one line of description for the person who will.
+   */
+  private renderCustomCss(root: HTMLElement): void {
+    const site = this.host.settings.site;
+    const path = normalizeCustomCssPath(site.customCssPath);
+
+    new Setting(root)
+      .setName("Custom stylesheet")
+      .setDesc(
+        "A CSS file in the vault, added to the end of the site's own " +
+          "stylesheet on every build -- for your own colours and fonts. " +
+          "Leave it empty for none.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("design/site.css")
+          .setValue(site.customCssPath ?? "")
+          .onChange(async (value) => {
+            site.customCssPath = value.trim();
+            await this.host.saveSettings();
+          }),
+      )
+      .addExtraButton((button) =>
+        button
+          .setIcon("refresh-cw")
+          .setTooltip("Check this path")
+          .onClick(() => this.display()),
+      );
+
+    if (!path) return;
+
+    // Pointing at the preview's own stylesheet is the obvious mistake after
+    // reading one, and the build refuses it: appended to itself it would
+    // double on every build.
+    if (isBuildOutput(path, DEFAULT_OUTPUT_FOLDERS)) {
+      this.warning(
+        root,
+        `${path} is inside a folder this plugin writes rather than reads, so ` +
+          "the build will leave it out. Keep your stylesheet somewhere else " +
+          "in the vault.",
+      );
+      return;
+    }
+
+    const example = this.note(root);
+    example.setText(
+      "Redeclare any of the theme's custom properties and yours win, in both " +
+        "light and dark. Every name the theme sets is listed at the top of the " +
+        "built assets/site.css, where you can read the values you are replacing.",
+    );
+    const code = example.createEl("pre");
+    code.style.cssText =
+      "margin:0.6em 0 0;padding:0.6em 0.8em;overflow-x:auto;" +
+      "border-radius:6px;background:var(--background-secondary);" +
+      "font-size:var(--font-smaller)";
+    code.setText(
+      [
+        ":root {",
+        "  --osp-link: #b4531f;",
+        "  --osp-accent: #b4531f;",
+        '  --osp-font-body: "Iowan Old Style", Georgia, serif;',
+        "  --osp-measure: 72ch;",
+        "}",
+      ].join("\n"),
+    );
+
+    // Whether the file is actually there. Asynchronous, so it is drawn into a
+    // slot kept for it rather than appended whenever the answer arrives --
+    // otherwise it lands under whatever section finished rendering last.
+    const verdict = root.createDiv();
+    void this.reportCustomCss(verdict, path);
+  }
+
+  /**
+   * Says whether the named stylesheet exists.
+   *
+   * Through the adapter rather than the file index, matching the build: a
+   * stylesheet in `.obsidian/snippets/` is hidden from Obsidian's own
+   * explorer and perfectly readable, and somebody who already writes CSS for
+   * Obsidian may well keep it there.
+   *
+   * A vault that cannot answer draws nothing. The alternative -- warning that
+   * a file is missing because the check itself failed -- would send someone
+   * to fix a path that was right.
+   */
+  private async reportCustomCss(host: HTMLElement, path: string): Promise<void> {
+    const adapter = this.app.vault.adapter as {
+      exists?: (path: string) => Promise<boolean>;
+    } | undefined;
+    if (typeof adapter?.exists !== "function") return;
+
+    let found: boolean;
+    try {
+      found = await adapter.exists(path);
+    } catch {
+      return;
+    }
+
+    if (found) {
+      this.note(host, `Found ${path}. Its rules are added after the theme's.`);
+      return;
+    }
+    this.warning(
+      host,
+      `No file at ${path}, so the site builds without it. Create it, or ` +
+        "correct the path -- a build says so too, in the skipped list of its " +
+        "report.",
+    );
   }
 
   /**

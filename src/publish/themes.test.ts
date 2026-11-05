@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import { DEFAULT_THEME, THEMES, getTheme, themeTokensCss } from "./themes";
+import { THEME_LAYER, siteCss } from "./theme";
 
 /** Relative luminance, per WCAG 2.1. */
 function luminance(hex: string): number {
@@ -129,5 +130,62 @@ describe("getTheme", () => {
 
   it("finds every theme by its own name", () => {
     for (const theme of THEMES) expect(getTheme(theme.name)).toBe(theme);
+  });
+});
+
+/**
+ * What makes an author's own stylesheet able to win.
+ *
+ * The tokens are declared inside a cascade layer and nothing else is, so an
+ * unlayered `:root { --osp-link: ... }` appended to the end of the file beats
+ * them in both colour schemes without a word of selector ceremony. The two
+ * halves of that arrangement are load-bearing in opposite directions, which
+ * is what these hold.
+ */
+describe("the theme layer", () => {
+  /** The at-rule and its contents, found by counting braces. */
+  function layerBlock(css: string, name: string): string {
+    const open = css.indexOf(`@layer ${name} {`);
+    expect(open).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let at = css.indexOf("{", open); at < css.length; at++) {
+      if (css[at] === "{") depth++;
+      else if (css[at] === "}" && --depth === 0) return css.slice(open, at + 1);
+    }
+    throw new Error("the theme layer is never closed");
+  }
+
+  const css = siteCss(DEFAULT_THEME);
+  const inLayer = layerBlock(css, THEME_LAYER);
+  const outside = css.replace(inLayer, "");
+
+  it("declares the tokens inside the layer", () => {
+    expect(css).toContain(`@layer ${THEME_LAYER} {`);
+    expect(inLayer).toContain("--osp-link:");
+    expect(inLayer).toContain("--osp-font-body:");
+  });
+
+  // The other half: the structural rules have to stay out of any layer,
+  // because they are what beats the harvested `assets/obsidian.css`, which
+  // is unlayered and loaded first. Layer them and Obsidian's own rules win
+  // every disagreement about the site's typography.
+  it("leaves the structural rules unlayered", () => {
+    expect(outside).toContain(".osp-article");
+    expect(outside).not.toContain("@layer");
+  });
+
+  /*
+   * And the reason the split is safe. Layered and unlayered declarations of
+   * the same property no longer resolve by specificity, so a token declared
+   * in both halves would silently change which one wins. None is, and this
+   * is what notices if one ever is.
+   */
+  it("declares no custom property in both halves", () => {
+    const declared = (text: string) =>
+      new Set(
+        Array.from(text.matchAll(/^\s*(--osp-[a-z0-9-]+):/gm)).map((hit) => hit[1]),
+      );
+    const both = [...declared(inLayer)].filter((name) => declared(outside).has(name));
+    expect(both).toEqual([]);
   });
 });
