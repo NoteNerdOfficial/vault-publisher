@@ -1,10 +1,20 @@
 #!/bin/sh
 #
-# Enforces the rules in CLAUDE.md that can be checked mechanically.
+# Keeps commits free of secrets and personal data, and commits them under an
+# address that is not anyone's personal mailbox.
 #
-# A rule in a document is advisory: it works only for an agent that read the
+# A rule in a document is advisory: it works only for someone who read the
 # document and chose to follow it. This hook applies to every commit in this
-# clone, by any agent or any human, whether or not they have read anything.
+# clone, by any human or any tool, whether or not they have read anything.
+#
+# The three checks:
+#   1. Author and committer use a github.com noreply address. Yours is on
+#      https://github.com/settings/emails -- turn on "Keep my email address
+#      private" and git will be told the address to use.
+#   2. No GitHub token or keychain ciphertext in the added lines.
+#   3. No personal email address and no absolute home path in them either.
+#      A published repository is a published home directory otherwise: an
+#      absolute path names the account it was written on.
 #
 # Install: git config core.hooksPath .githooks
 # Bypass:  git commit --no-verify   <- do not. If a check is wrong, fix the
@@ -59,6 +69,6 @@ if [ -n "$added" ]; then
 fi
 
 if [ "$fail" -ne 0 ]; then
-  printf '\nSee CLAUDE.md. Fix the above rather than passing --no-verify.\n' >&2
+  printf '\nFix the above rather than passing --no-verify.\n' >&2
   exit 1
 fi

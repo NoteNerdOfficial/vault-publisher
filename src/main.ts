@@ -102,8 +102,8 @@ import {
 import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
 
 /**
- * Spike plugin: renders a vault through Obsidian, builds a static site from
- * the result, and commits it to GitHub.
+ * Renders a vault through Obsidian, builds a static site from the result,
+ * and commits it to GitHub.
  *
  * `autoRun` runs one thing when the plugin loads. Its two useful settings,
  * a preview build and a publish, are in the settings panel; the rest exist
@@ -113,7 +113,6 @@ import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
  * would make the measurements no one can reproduce.
  */
 
-const INPUT_FOLDER = "spike-notes";
 const OUTPUT_FOLDER = "_vault-publisher";
 const PREVIEW_FOLDER = "_site-preview";
 /**
@@ -393,9 +392,9 @@ export default class VaultPublisherPlugin extends Plugin {
     await this.loadSettings();
 
     this.addCommand({
-      id: "run-render-spike",
-      name: "Run render spike",
-      callback: () => void this.runSpike(),
+      id: "report-render-timings",
+      name: "Report render timings",
+      callback: () => void this.runRenderReport(),
     });
     this.addCommand({
       id: "build-site",
@@ -467,7 +466,7 @@ export default class VaultPublisherPlugin extends Plugin {
     await this.appendRunLog(`start ${mode} (Obsidian ${apiVersion})`);
     const started = performance.now();
     try {
-      if (mode === "spike") await this.runSpike();
+      if (mode === "spike") await this.runRenderReport();
       if (mode === "build") await this.buildToPreview();
       if (mode === "publish") await this.publish();
       if (mode === "diagnose") await this.diagnose();
@@ -862,7 +861,18 @@ export default class VaultPublisherPlugin extends Plugin {
   // -- diagnose ------------------------------------------------------------
 
   private async diagnose(): Promise<void> {
-    const path = this.settings.diagnosePath ?? "spike-notes/02-dataview-table.md";
+    // No default. The note worth sampling is whichever one renders wrongly in
+    // the vault at hand, so a built-in fallback could only ever name a file
+    // from the machine it was written on.
+    const path = this.settings.diagnosePath;
+    if (!path) {
+      new Notice(
+        "Vault Publisher: set `diagnosePath` in data.json to the note to diagnose.",
+        6000,
+      );
+      return;
+    }
+
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       new Notice(`Vault Publisher: no note at ${path}`);
@@ -2231,22 +2241,44 @@ export default class VaultPublisherPlugin extends Plugin {
     await adapter.write(normalizePath(`${OUTPUT_FOLDER}/build-report.md`), lines.join("\n"));
   }
 
-  // -- render spike --------------------------------------------------------
+  // -- render timings ------------------------------------------------------
 
-  private async runSpike(): Promise<void> {
+  /**
+   * Renders every note in the publish scope and reports what each step cost.
+   *
+   * The scope is the one already chosen in settings rather than a folder of
+   * its own. A diagnostic that reads somewhere else measures a vault nobody
+   * is publishing, and the question this answers -- why is my publish slow,
+   * or why did that note come out hollow -- is only ever about the notes
+   * that actually go out.
+   */
+  private async runRenderReport(): Promise<void> {
+    if (!isScopeChosen(this.settings.site)) {
+      new Notice(
+        "Vault Publisher: choose what to publish in settings first.",
+        6000,
+      );
+      return;
+    }
+
     const app = this.app as App & { plugins?: { plugins?: Record<string, unknown> } };
     const started = performance.now();
+    const scope = this.settings.site.folder ?? "";
 
     new Notice("Vault Publisher: starting");
 
     const dataviewReady = await waitForDataviewIndex(app as never);
     const files = this.app.vault
       .getMarkdownFiles()
-      .filter((f) => f.path.startsWith(`${INPUT_FOLDER}/`))
+      .filter((f) => scope === "" || f.path.startsWith(`${scope}/`))
       .sort((a, b) => a.path.localeCompare(b.path));
 
     if (!files.length) {
-      new Notice(`Vault Publisher: no notes under ${INPUT_FOLDER}/`);
+      new Notice(
+        scope === ""
+          ? "Vault Publisher: no notes in this vault"
+          : `Vault Publisher: no notes under ${scope}/`,
+      );
       return;
     }
 
@@ -2327,7 +2359,7 @@ function buildReport(
   },
 ): string {
   const lines: string[] = [];
-  lines.push("# Render spike report", "");
+  lines.push("# Render timings report", "");
   lines.push(`Generated: ${new Date().toISOString()}`);
   lines.push(`Obsidian API version: ${meta.obsidianVersion}`);
   lines.push(`Dataview index ready before rendering: ${meta.dataviewReady}`);

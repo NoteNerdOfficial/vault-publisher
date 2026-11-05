@@ -4,7 +4,7 @@
  * "It rendered" is not one question. A Dataview block can produce a correct
  * table, an explicit error, or an empty result that looks like success, and
  * only the first is publishable. Each probe therefore names the markup it
- * expects *and* what counts as hollow output, so the spike report can tell
+ * expects *and* what counts as hollow output, so the render report can tell
  * "worked", "failed" and "silently produced nothing" apart.
  */
 
@@ -206,7 +206,7 @@ export function probeHtml(html: string, only?: string[]): ProbeResult[] {
 
 /**
  * Markup that survives serialization but cannot work in a static page. Each
- * of these is a decision the design has to make, so the spike counts them
+ * of these is a decision the design has to make, so the report counts them
  * rather than stripping them silently.
  */
 export interface StaticHazards {

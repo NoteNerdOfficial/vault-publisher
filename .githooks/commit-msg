@@ -1,7 +1,15 @@
 #!/bin/sh
 #
-# Keeps tool attribution out of commit messages. See CLAUDE.md: the
-# repository owner is the sole author of every commit.
+# Keeps tool attribution out of commit messages.
+#
+# A commit here is authored by the person who made it. A trailer crediting
+# the editor, the assistant or the generator that helped is noise in a log
+# that is read to find out who to ask about a change.
+#
+# This is a house rule, not a judgement about anyone else's: credit a human
+# collaborator in the message body in prose, or relax the check in your own
+# fork. It is a check rather than a note in a file because a note only
+# reaches whoever read it.
 
 set -e
 msg_file="$1"
@@ -18,6 +26,6 @@ printf '%s' "$body" | grep -qiE 'generated with|co-?authored (by|with) (claude|a
   && say "message credits a tool"
 
 if [ "$fail" -ne 0 ]; then
-  printf '\nThe owner is the sole author. Remove the attribution line.\n' >&2
+  printf '\nRemove the attribution line.\n' >&2
   exit 1
 fi

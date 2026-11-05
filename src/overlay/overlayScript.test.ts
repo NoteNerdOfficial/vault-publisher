@@ -1318,7 +1318,7 @@ describe("which page a comment is on", () => {
   it("leaves a filename that decides on its own unqualified", () => {
     localStorage.setItem(
       STORE_KEY,
-      JSON.stringify([onPage("library/Atomic notes.md"), onPage("spike-notes/Scope.md")]),
+      JSON.stringify([onPage("library/Atomic notes.md"), onPage("method/Scope.md")]),
     );
 
     expect(groupNames(openPanel())).toEqual(

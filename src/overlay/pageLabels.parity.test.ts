@@ -35,7 +35,7 @@ const STORE_KEY = "osp-overlay-comments";
 const REVIEWS: Record<string, string[]> = {
   "names that decide on their own": [
     "library/Atomic notes.md",
-    "spike-notes/Scope.md",
+    "method/Scope.md",
     "html-as-is/charts/trend.html",
   ],
   "names that collide one folder up": [

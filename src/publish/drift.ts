@@ -2,8 +2,8 @@
  * Detecting a build that degrades as it runs.
  *
  * A publish of several hundred notes is a long-lived session doing the same
- * thing over and over, and the spike already produced one environment that
- * got dramatically slower the longer it was used: in the Demo vault a plain
+ * thing over and over, and development already produced one environment that
+ * got dramatically slower the longer it was used: in one test vault a plain
  * prose note's render climbed from 886ms to 6,989ms with no change to the
  * note. That turned out to be caused by repeated plugin reloads rather than
  * by the renderer, but the shape of the failure is exactly what a leaking
@@ -52,7 +52,7 @@ export interface DriftReport {
  * tens-of-milliseconds scale a plain note occupies, and a machine doing other
  * work will wobble well beyond a few percent. Half again as slow is far
  * outside that noise while still catching a leak long before it reaches the
- * 8x the Demo vault managed.
+ * 8x measured above.
  */
 const DEGRADED_RATIO = 1.5;
 

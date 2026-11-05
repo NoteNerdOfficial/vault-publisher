@@ -19,8 +19,6 @@ GitHub Pages path are all verified against a real repository, and the settings
 screen, the five site themes and the review overlay are built. What is still
 open is scale — see **Known issues** — and the design pass on the themes.
 
-The working plan lives in `docs/PLAN.md` (local only, not tracked).
-
 ## Why it renders in Obsidian
 
 Dataview, Datacore, Bases and Mermaid output exists only inside a running Obsidian. Any publisher that converts Markdown outside the app has to reimplement them, which is why most alternatives either skip those features or hand you a static-site generator and leave it to you.
@@ -30,6 +28,8 @@ So the plugin renders each note through Obsidian's own renderer, waits for the a
 ## Why there is no GitHub Actions workflow
 
 Two reasons. A CI build cannot render Dataview, so it would have nothing to do. And Actions is frequently blocked on corporate networks, which is one of the places this is meant to be useful.
+
+This is about *publishing*. The tests do run in CI, in `.github/workflows/test.yml`, because they never needed a running Obsidian: `test/obsidian-stub.ts` stands in for the package.
 
 The plugin commits the *built* site through the Git Data API and points GitHub Pages at the branch. No git binary, no workflow file, no `workflow` token scope.
 
@@ -226,10 +226,28 @@ src/platform/   things only a desktop Electron host can do
   backgroundThrottling.ts
 src/ui/
   settingsTab.ts  the settings screen
+examples/       folders to copy into a vault to try a feature out
 media/          the screenshots and the recording in this README
-research/       findings, including the competitive scan and spike results
-docs/           the working plan
+scripts/        deploying a build into a vault, and generating a vault to
+                measure against
 ```
+
+## Examples
+
+Two folders in `examples/` are meant to be copied into a vault and published,
+each demonstrating one feature and explaining what to look for:
+
+- **`examples/note-header.md`** — the three frontmatter keys a published
+  page's header is built from (`updated`, `tags`, `pinned`), what each one
+  does, and what the header leaves out.
+- **`examples/html-as-is/`** — a folder of hand-written HTML published byte
+  for byte, with the stylesheet, script and images beside it carried along.
+  Turn on **Publish HTML files as-is** first. Keep the folder together: the
+  point of the feature is that a page and the files it references stay
+  next to each other.
+
+Read `examples/html-as-is/about-this-demo.md` before building that one. It is
+published as an ordinary note and it is the tour.
 
 ## Development
 
@@ -249,7 +267,7 @@ The test vault lives outside this repo, so plugin source is never mixed up with 
 
 The plugin id is `vault-publisher`; it shipped during development as `site-publisher-spike`, and the first run under the new id imports the old settings and offers to delete the folder they came from.
 
-The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking, which is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and the deploy is enough on its own: the script writes the `.hotreload` marker the watcher looks for, and the reload fires on the change to `main.js`. It reports whether anything is actually watching, because a copy into an unwatched folder looks exactly like a successful deploy.
+The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking. `spike` reports render timings for the publish scope — the same thing the **Report render timings** command does — and `diagnose` samples one note over time and needs a `diagnosePath` beside it, since the note worth sampling is whichever one is rendering wrongly. Driving a run from the deploy rather than from a click is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and the deploy is enough on its own: the script writes the `.hotreload` marker the watcher looks for, and the reload fires on the change to `main.js`. It reports whether anything is actually watching, because a copy into an unwatched folder looks exactly like a successful deploy.
 
 Nothing in `media/` is anyone's vault. The site in those images is the
 fixture one `shell.preview.test.ts` builds — "A Vault, Published", twenty-five

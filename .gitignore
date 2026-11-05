@@ -14,13 +14,15 @@ CLAUDE.md
 AGENTS.md
 
 # Test vaults live outside the repo, so the plugin source is never confused
-# with the content used to exercise it. See docs/PLAN.md for the path.
-**/_spike-output/
+# with the content used to exercise it. Which vault is yours is local to your
+# clone: see .vault-path below. A build written into a vault folder that was
+# opened here by mistake lands in one of these.
 **/_site-preview/
+**/_vault-publisher/
 
 # Which vault `npm run deploy` copies into. One line, a path, local to this
-# clone: the vault's name is the owner's business and does not belong in
-# committed source. Created by hand; see CLAUDE.md.
+# clone: which vault you publish into is nobody else's business and does not
+# belong in committed source. Created by hand; see the README.
 .vault-path
 
 # A vault folder opened by mistake leaves one of these behind.

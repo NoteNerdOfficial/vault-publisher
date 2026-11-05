@@ -1,0 +1,27 @@
+name: test
+
+# The tests and the type check, on every push and pull request.
+#
+# This is not a site build. The README explains why there is no workflow that
+# publishes a site: CI has no running Obsidian, so it cannot render Dataview
+# or Bases and would have nothing to publish. The unit tests have no such
+# problem -- `test/obsidian-stub.ts` stands in for the package -- so there is
+# no reason for a pull request to go unchecked.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc -noEmit -skipLibCheck

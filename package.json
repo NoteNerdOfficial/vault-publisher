@@ -1,6 +1,6 @@
 {
   "name": "vault-publisher",
-  "version": "0.0.1",
+  "version": "0.0.97",
   "description": "Publish an Obsidian vault as a static website, rendered by Obsidian itself.",
   "main": "main.js",
   "scripts": {
@@ -9,7 +9,14 @@
     "build": "vitest run && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "deploy": "node scripts/deploy.mjs"
   },
-  "keywords": [],
+  "keywords": [
+    "obsidian",
+    "obsidian-plugin",
+    "static-site",
+    "publishing",
+    "dataview",
+    "bases"
+  ],
   "author": "NoteNerd",
   "license": "MIT",
   "devDependencies": {
@@ -20,5 +27,9 @@
     "tslib": "2.8.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.12"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NoteNerdOfficial/vault-publisher.git"
   }
 }

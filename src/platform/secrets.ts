@@ -1,7 +1,7 @@
 /**
  * Keeping the GitHub token out of plaintext.
  *
- * The spike stored it in the plugin's `data.json`, which is a file inside the
+ * An early version stored it in the plugin's `data.json`, a file inside the
  * vault: synced to every device, backed up, and in a team repo potentially
  * committed. That is fine for a throwaway test vault and wrong for anything
  * else.

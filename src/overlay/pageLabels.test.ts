@@ -10,9 +10,9 @@ describe("naming the pages in a review", () => {
   // A filename that decides on its own is left alone, or every list would be
   // a column of folders nobody needed.
   it("uses the filename where the filename decides", () => {
-    expect(labels(["library/Atomic notes.md", "spike-notes/Scope.md"])).toEqual({
+    expect(labels(["library/Atomic notes.md", "method/Scope.md"])).toEqual({
       "library/Atomic notes.md": "Atomic notes",
-      "spike-notes/Scope.md": "Scope",
+      "method/Scope.md": "Scope",
     });
   });
 

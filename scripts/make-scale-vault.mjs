@@ -3,9 +3,9 @@
  *
  * The question this vault exists to answer is not "can we render 300 notes"
  * but "does rendering 300 notes get slower as it goes". A long publish is a
- * long session, and a long session is exactly what degraded the Demo vault
- * during the spike: a plain prose note's render climbed from 886ms to 6,989ms
- * with no change to the note.
+ * long session, and a long session is exactly what degraded one test vault
+ * during development: a plain prose note's render climbed from 886ms to
+ * 6,989ms with no change to the note.
  *
  * So the mix matters less than the control. Every tenth note is an identical
  * copy of the same plain prose note, with no plugin content at all. If those
