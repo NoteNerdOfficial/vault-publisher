@@ -44,6 +44,42 @@ rendered page for content a Dataview query pulled in from a note that is *not*
 being published — the failure mode that makes a publisher dangerous rather than
 merely buggy.
 
+## Bringing your own colours and fonts
+
+A theme here is a set of custom properties rather than a fork of the
+stylesheet: every rule in `theme.ts` is written against the `--osp-*` names
+`themes.ts` declares, so a sixth look is a palette and a type pairing instead
+of a second copy of the layout to maintain.
+
+That also makes the escape hatch cheap, for the vault that wants one of the
+five with its own blue. Name a CSS file in the vault — **Appearance → Custom
+stylesheet** — and its rules are appended to the end of `assets/site.css` on
+every build, so redeclaring a token is the whole of it:
+
+```css
+:root {
+  --osp-link: #a8431a;
+  --osp-font-body: "Iowan Old Style", Georgia, serif;
+  --osp-measure: 64ch;
+}
+```
+
+The theme's tokens are declared inside a cascade layer and an author's rules
+are not, which is what makes that block hold in dark mode as well as light. A
+dark value sits under a selector that outranks a bare `:root`, so without the
+layer an override written the obvious way worked in light and quietly stopped
+working when a reader's system went dark.
+
+Two failures are reported rather than silent, because both produce a site that
+looks exactly like the one before it: a path that is not in the vault is
+flagged in the settings panel and lands in the build report's skipped list,
+and a path inside the plugin's own output folders is refused before it is read
+— appended to itself the stylesheet would double on every build.
+
+The file's own vault path never reaches the output. `assets/site.css` is
+published, so a banner naming the source would hand every reader of the site a
+piece of the vault's folder structure.
+
 ## Locking a site behind a password
 
 A site on GitHub Pages is public, and a password prompt over a document that
@@ -92,7 +128,11 @@ review file, so an imported review links back to the writing rather than to the
 HTML.
 
 An open comment can be filed as an issue in GitHub, Jira or Asana and synced
-back, which is what `src/tracker/` is for.
+back, which is what `src/tracker/` is for. Filing goes through the plugin's
+own local server, so the Send action exists in a preview opened in a browser
+and in no published page: a static host has nothing to file through. Reviewing
+a published site means exporting the comments, importing them, and filing from
+a preview.
 
 ## Layout
 
@@ -124,6 +164,7 @@ src/publish/    turning rendered HTML into a site
   landing.ts      the pages no note wrote: homepage, browse, a page per tag
   themes.ts       the themes a site can be built with, as custom properties
   theme.ts        the site's own stylesheet, written against those names
+  customCss.ts    a stylesheet of the author's own, added to the end of it
   harvestCss.ts   lifts layout-critical rules from the running app
   bases.ts        re-emits Bases views as semantic tables and cards
   clientScript.ts the one script a published page carries
