@@ -91,6 +91,7 @@ import {
   baseHref,
   baseHrefHazard,
   countHtmlFilesBlockedByFlag,
+  countHtmlFilesAvailable,
   emptyHtmlFileStats,
   hasLocalResourceUrl,
   planCompanions,
@@ -471,6 +472,13 @@ export interface BuildResult {
    * difference between a rule and a bug.
    */
   htmlFilesBlockedByFlag: number;
+  /**
+   * HTML files the scope holds while `publishHtmlFiles` is off.
+   *
+   * Zero when the toggle is on. Non-zero means the vault has pages that
+   * would publish and a setting is the only reason they did not.
+   */
+  htmlFilesNotEnabled: number;
   /**
    * What each excluded folder kept out of this build, in the order written.
    *
@@ -1079,6 +1087,7 @@ export async function buildSite(
     // that a preview added to it.
     files.push({ path: target.url, content });
     htmlStats.published++;
+    htmlStats.publishedPages.push(`${target.sourcePath} -> ${target.url}`);
 
     // An `app://` URL carries the vault's absolute path, so the author's
     // home directory. The note pipeline strips those; this one may not touch
@@ -1294,6 +1303,7 @@ export async function buildSite(
       new Set(pages.flatMap((p) => p.assets.unresolved)),
     ),
     htmlFiles: htmlStats,
+    htmlFilesNotEnabled: countHtmlFilesAvailable(app, config),
     htmlFilesBlockedByFlag: countHtmlFilesBlockedByFlag(app, config),
     excluded: excludedTally(app, config),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,

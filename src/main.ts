@@ -1864,6 +1864,17 @@ export default class VaultPublisherPlugin extends Plugin {
               ? `, with ${result.htmlFiles.companions} referenced file(s)`
               : ""),
         );
+        // Where they went, and that the file tree is not where to look for
+        // them. Without this the next step is hunting the tree for a page
+        // that published perfectly well.
+        for (const page of result.htmlFiles.publishedPages) say(`  ${page}`);
+        say("  as-is pages are not in the site navigation; link one from a note");
+      }
+      if (result.htmlFilesNotEnabled) {
+        say(
+          `${result.htmlFilesNotEnabled} HTML file(s) in scope were not published: ` +
+            "turn on 'Publish HTML files as-is' in settings",
+        );
       }
       if (result.htmlFiles.baseHrefs.length) {
         say(
@@ -2172,7 +2183,7 @@ export default class VaultPublisherPlugin extends Plugin {
     }
 
     const html = result.htmlFiles;
-    if (html.published || result.htmlFilesBlockedByFlag) {
+    if (html.published || result.htmlFilesBlockedByFlag || result.htmlFilesNotEnabled) {
       lines.push("", "## HTML files published as-is", "");
       lines.push(
         `Pages: ${html.published}, referenced files carried: ${html.companions} ` +
@@ -2185,6 +2196,28 @@ export default class VaultPublisherPlugin extends Plugin {
         "them: they are not rendered, not wrapped in the site's shell, not scanned",
         "for content from unpublished notes, and not styled by the site's CSS.",
       );
+      if (html.publishedPages.length) {
+        lines.push(
+          "",
+          "**Where each one went.** These pages are not in the site's navigation:",
+          "no row in the vault panel, no browse entry, no tag page, no graph node.",
+          "They have no frontmatter, no tags and no outline, so there is nothing to",
+          "put in those places -- a note linking to one is how a reader reaches it.",
+          "That is why they are listed here: from the built site, a page that",
+          "published correctly and a page that was never published look the same.",
+          "",
+        );
+        for (const page of html.publishedPages) lines.push(`- ${page}`);
+      }
+      if (result.htmlFilesNotEnabled) {
+        lines.push(
+          "",
+          `**${result.htmlFilesNotEnabled} HTML file(s) in scope were not published.** ` +
+            "**Publish HTML files as-is** is off, which is its default: a vault " +
+            "scoped whole usually holds HTML nobody wrote as a web page. Turn it " +
+            "on in settings to publish these.",
+        );
+      }
       if (result.htmlFilesBlockedByFlag) {
         lines.push(
           "",

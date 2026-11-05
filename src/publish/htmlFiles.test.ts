@@ -4,6 +4,7 @@ import { DEFAULT_OUTPUT_FOLDERS } from "./outputFolders";
 import {
   CompanionContext,
   companionVaultPath,
+  countHtmlFilesAvailable,
   countHtmlFilesBlockedByFlag,
   findLocalReferences,
   hasLocalResourceUrl,
@@ -147,6 +148,25 @@ describe("selectHtmlFiles", () => {
       config({ folder: "", requireFrontmatterFlag: "publish" }),
     );
     expect(selected).toEqual([]);
+  });
+
+  // The other configuration that publishes nothing. Someone turned the
+  // toggle on, published a page, then looked for it in the site's file tree
+  // and could not tell whether it had published or whether a setting had
+  // stopped it. The count is what lets the report answer that.
+  it("counts what the toggle being off left out", () => {
+    const app = stubApp(VAULT);
+    expect(countHtmlFilesAvailable(app, config({ folder: "", publishHtmlFiles: false }))).toBe(3);
+    // Nothing to report when the toggle is on: those files are in `published`.
+    expect(countHtmlFilesAvailable(app, config({ folder: "" }))).toBe(0);
+    // Counted even with a flag set, because the toggle is the nearer cause
+    // and the flag message would send the reader to the wrong setting.
+    expect(
+      countHtmlFilesAvailable(
+        app,
+        config({ folder: "", publishHtmlFiles: false, requireFrontmatterFlag: "publish" }),
+      ),
+    ).toBe(3);
   });
 
   it("counts what the flag excluded, so the setting can say so", () => {

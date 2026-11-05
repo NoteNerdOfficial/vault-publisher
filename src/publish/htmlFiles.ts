@@ -307,6 +307,17 @@ export interface HtmlFileStats {
    * attribute that moves every other reference on the page at once.
    */
   baseHrefs: string[];
+  /**
+   * Every page published as-is, as "vault/path.html -> published/url.html".
+   *
+   * A count was not enough. These pages are deliberately absent from the
+   * navigation -- no vault panel row, no browse entry, no graph node -- so
+   * from the built site a page that published correctly and a page that was
+   * never published look exactly alike. Someone looked for an HTML file in
+   * the file tree, did not find it, and had no way to tell which had
+   * happened. Naming them is the difference.
+   */
+  publishedPages: string[];
 }
 
 export function emptyHtmlFileStats(): HtmlFileStats {
@@ -317,6 +328,7 @@ export function emptyHtmlFileStats(): HtmlFileStats {
     unresolved: [],
     localResourceUrls: [],
     baseHrefs: [],
+    publishedPages: [],
   };
 }
 
@@ -406,6 +418,33 @@ export function selectHtmlFiles(
  * is on published nothing, which is the one thing the user cannot work out
  * from the result.
  */
+/**
+ * How many HTML files the scope holds while the toggle is off.
+ *
+ * The mirror of the function below, for the other configuration that
+ * publishes nothing: `selectHtmlFiles` returns an empty list the moment
+ * `publishHtmlFiles` is false, so a vault full of pages and a vault with
+ * none are the same answer. The report says which, because "my HTML file is
+ * not on the site" has two causes and only one of them is a setting.
+ */
+export function countHtmlFilesAvailable(
+  app: App,
+  config: {
+    folder: string | null;
+    requireFrontmatterFlag: string | null;
+    publishHtmlFiles?: boolean;
+    outputFolders?: string[];
+    excludeFolders?: string[];
+  },
+): number {
+  if (config.publishHtmlFiles) return 0;
+  return selectHtmlFiles(app, {
+    ...config,
+    publishHtmlFiles: true,
+    requireFrontmatterFlag: null,
+  }).length;
+}
+
 export function countHtmlFilesBlockedByFlag(
   app: App,
   config: {
