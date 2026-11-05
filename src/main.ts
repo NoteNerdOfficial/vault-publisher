@@ -2325,7 +2325,7 @@ export default class VaultPublisherPlugin extends Plugin {
     if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
 
     for (const { render } of reports) {
-      const name = render.path.replace(/[\/\\]/g, "__").replace(/\.md$/, "");
+      const name = render.path.replace(/[/\\]/g, "__").replace(/\.md$/, "");
       await adapter.write(normalizePath(`${dir}/${name}.html`), render.html);
     }
 

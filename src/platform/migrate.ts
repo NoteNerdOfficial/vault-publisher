@@ -30,7 +30,8 @@ export const LEGACY_PLUGIN_IDS = ["site-publisher-spike"];
 export interface MigrationResult {
   /** The id the settings came from, or null when nothing was imported. */
   from: string | null;
-  data: unknown | null;
+  /** `unknown` already admits null, so the union was saying it twice. */
+  data: unknown;
   /** Folder the old plugin still occupies, for telling the user about it. */
   staleFolder: string | null;
 }

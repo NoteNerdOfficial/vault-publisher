@@ -161,8 +161,14 @@ export async function lockSite(
     }
 
     if (isPage(file.path)) {
+      // Decoded rather than String()-ed: a page whose content arrived as a
+      // buffer would otherwise be locked as the text "[object ArrayBuffer]".
+      const html =
+        typeof file.content === "string"
+          ? file.content
+          : new TextDecoder().decode(file.content);
       const payload = await lockText(
-        JSON.stringify({ html: String(file.content), assets }),
+        JSON.stringify({ html, assets }),
         key,
         salt,
         iterations,

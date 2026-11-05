@@ -51,3 +51,81 @@
   height: 20px;
   stroke-width: 2.25;
 }
+
+/* --- settings: the build readout ----------------------------------------
+   Hidden until the first report arrives, by a class rather than an inline
+   `display`, so the panel's own stylesheet owns whether it is visible. The
+   bar's width is still set from script: it is a measurement, not a style,
+   and there is no class for "37 per cent". */
+
+.osp-progress {
+  margin: 0.2em 0 1.25em;
+}
+
+.osp-progress.osp-hidden {
+  display: none;
+}
+
+.osp-progress-label {
+  margin: 0 0 0.5em;
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
+.osp-progress-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+}
+
+.osp-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--interactive-accent);
+  transition: width 120ms linear;
+}
+
+/* --- settings: the first-run checklist ----------------------------------
+   A finished step is struck through and faded, both from one class, because
+   they are one idea: this one is behind you. */
+
+.osp-checklist {
+  margin: 0 0 0.6em;
+  padding-left: 1.4em;
+  line-height: 1.8;
+}
+
+.osp-checklist-item.osp-done {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+/* --- settings: assorted hooks -------------------------------------------
+   These classes were already being added in `settingsTab.ts` and carried no
+   rules; the rules lived in inline styles beside them. They are here now, so
+   the element says what it is and the stylesheet says what that looks like. */
+
+.osp-settings-status {
+  min-height: 1.2em;
+}
+
+.osp-theme-specimen {
+  margin: 0.4em 0 1.5em;
+}
+
+.osp-theme-swatches {
+  display: flex;
+  gap: 6px;
+  margin-top: 0.9rem;
+}
+
+.osp-warning-note {
+  padding-left: 0.75em;
+  color: var(--text-normal);
+  border-left: 1px solid var(--text-warning);
+}
+
+.osp-warning-text {
+  color: var(--text-warning);
+}

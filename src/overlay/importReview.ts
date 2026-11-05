@@ -31,6 +31,7 @@ import {
   OverlayReply,
 } from "./types";
 import { labelPaths } from "./pageLabels";
+import { describeValue } from "../text";
 
 /**
  * The Tasks plugin's own priority signifiers.
@@ -82,7 +83,7 @@ export function parseExport(raw: string): OverlayExport {
   const version = data.version ?? OVERLAY_SCHEMA_VERSION;
   if (typeof version !== "number" || version > OVERLAY_SCHEMA_VERSION) {
     return fail(
-      `it was written by a newer version (${String(version)}; this one reads ${OVERLAY_SCHEMA_VERSION})`,
+      `it was written by a newer version (${describeValue(version)}; this one reads ${OVERLAY_SCHEMA_VERSION})`,
     );
   }
 

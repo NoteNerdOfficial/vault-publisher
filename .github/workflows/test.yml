@@ -25,3 +25,6 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npx tsc -noEmit -skipLibCheck
+      # The same lint the plugin review runs. It is clean of errors, so a
+      # regression shows up here rather than in a review comment.
+      - run: npm run lint

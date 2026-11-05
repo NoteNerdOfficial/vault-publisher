@@ -474,25 +474,16 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
      * is not. So the whole readout is hidden until the first report arrives
      * and stays up afterwards, holding whatever it last said.
      */
-    const readout = root.createDiv();
-    readout.style.cssText = "display:none;margin:0.2em 0 1.25em;";
-
-    this.progressEl = readout.createDiv();
-    this.progressEl.style.cssText =
-      "font-size:0.9em;margin:0 0 0.5em;color:var(--text-muted);";
-
-    const track = readout.createDiv();
-    track.style.cssText =
-      "height:4px;border-radius:2px;background:var(--background-modifier-border);overflow:hidden;";
-    this.progressBar = track.createDiv();
-    this.progressBar.style.cssText =
-      "height:100%;width:0;background:var(--interactive-accent);transition:width 120ms linear;";
+    const readout = root.createDiv({ cls: "osp-progress osp-hidden" });
+    this.progressEl = readout.createDiv({ cls: "osp-progress-label" });
+    const track = readout.createDiv({ cls: "osp-progress-track" });
+    this.progressBar = track.createDiv({ cls: "osp-progress-bar" });
 
     // The sink stays registered for the life of the tab: a publish started
     // from here keeps reporting even if the user scrolls away, and a publish
     // started from the command palette fills this in if the tab is open.
     this.host.progress = (step, done, total) => {
-      readout.style.display = "block";
+      readout.removeClass("osp-hidden");
       if (this.progressEl) this.progressEl.setText(step);
       if (this.progressBar) {
         const pct =
@@ -523,13 +514,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // and as two they were two outdented paragraphs instead of one.
     const body = this.note(root);
 
-    const list = body.createEl("ol");
-    list.style.cssText = "margin:0 0 0.6em;padding-left:1.4em;line-height:1.8;";
+    const list = body.createEl("ol", { cls: "osp-checklist" });
     for (const step of steps) {
-      const item = list.createEl("li");
+      const item = list.createEl("li", { cls: "osp-checklist-item" });
       item.setText(step.done ? `${step.text} — done` : step.text);
-      item.style.opacity = step.done ? "0.5" : "1";
-      if (step.done) item.style.textDecoration = "line-through";
+      item.toggleClass("osp-done", step.done);
     }
 
     // The useful half of the list is that it has a halfway point. Someone who
@@ -801,7 +790,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     this.statusEl = this.note(root, "");
     this.statusEl.addClass("osp-settings-status");
-    this.statusEl.style.minHeight = "1.2em";
 
     new Setting(root)
       .setName("Repository")
@@ -1208,7 +1196,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // with the edges of the rows around it and not with the text inside
     // them. The one block in the panel that is right to leave full width.
     const preview = root.createDiv({ cls: "osp-theme-specimen" });
-    preview.style.cssText = "margin:0.4em 0 1.5em;";
 
     new Setting(root)
       .setName("Style")
@@ -1497,27 +1484,37 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     ].join(";");
 
     const body = card.createDiv();
-    body.innerHTML =
-      'Water finds the cheapest path downhill, and so does a note that has been ' +
-      'rewritten often enough. <span class="osp-preview-link">A link looks like this</span>.';
+    // Built as nodes. The sentence is ours and carries no input, but a
+    // specimen is exactly the kind of string someone later makes
+    // configurable, and then the markup would be the vault's.
+    body.appendText(
+      "Water finds the cheapest path downhill, and so does a note that has been " +
+        "rewritten often enough. ",
+    );
+    body.createSpan({ cls: "osp-preview-link", text: "A link looks like this" });
+    body.appendText(".");
     body.style.cssText = [
       `font-family:${v("--osp-font-body")}`,
       `line-height:${v("--osp-line-height")}`,
       "font-size:0.9rem",
     ].join(";");
 
-    const link = body.querySelector(".osp-preview-link") as HTMLElement | null;
+    const link = body.querySelector<HTMLElement>(".osp-preview-link");
     if (link) {
-      link.style.cssText = [
-        `color:${v("--osp-link")}`,
-        "text-decoration:underline",
-        `text-decoration-thickness:${v("--osp-link-underline")}`,
-        "text-underline-offset:3px",
-      ].join(";");
+      // Values read from the theme being previewed, so these are data rather
+      // than styling and there is no class that could carry them. `cssText`
+      // became `setCssStyles` for the same reason the readout above lost its
+      // inline block: one assignment of a whole declaration list hides which
+      // properties are actually being set.
+      link.setCssStyles({
+        color: v("--osp-link"),
+        textDecoration: "underline",
+        textDecorationThickness: v("--osp-link-underline"),
+        textUnderlineOffset: "3px",
+      });
     }
 
-    const swatches = card.createDiv();
-    swatches.style.cssText = "display:flex;gap:6px;margin-top:0.9rem;";
+    const swatches = card.createDiv({ cls: "osp-theme-swatches" });
     for (const token of ["--osp-accent", "--osp-link", "--osp-surface", "--osp-border"]) {
       const dot = swatches.createDiv();
       dot.style.cssText = [
@@ -2246,8 +2243,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   private warning(root: HTMLElement, text: string): HTMLElement {
     const body = this.note(root, text);
     body.parentElement?.parentElement?.addClass("osp-settings-warning");
-    body.style.cssText =
-      "border-left:1px solid var(--text-warning);padding-left:0.75em;color:var(--text-normal);";
+    body.addClass("osp-warning-note");
     return body;
   }
 
@@ -2310,7 +2306,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       });
 
     if (mode === "publish") {
-      what.descEl.style.color = "var(--text-warning)";
+      what.descEl.addClass("osp-warning-text");
     }
   }
 

@@ -275,7 +275,11 @@ export function jiraLabels(labels: string[]): string[] {
 function basic(user: string, secret: string): string {
   const pair = `${user}:${secret}`;
   // btoa is byte-oriented. An email address is ASCII, but a password need not
-  // be; encodeURIComponent and back is the standard way to stop a non-ASCII
-  // character throwing here.
-  return btoa(unescape(encodeURIComponent(pair)));
+  // be, so the pair is encoded to UTF-8 bytes first. TextEncoder in place of
+  // the old `unescape(encodeURIComponent(...))`, which did the same thing
+  // through two deprecated functions.
+  const bytes = new TextEncoder().encode(pair);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }

@@ -186,6 +186,27 @@ function languageLabel(token: string): string {
   return CODE_LANGUAGE_LABELS[token] ?? token;
 }
 
+/**
+ * Appends trusted markup to an element as nodes rather than as a string.
+ *
+ * The markup is our own: `icon()` in `shell.ts` builds it from a closed table
+ * of paths, and nothing from the vault reaches it. `innerHTML` would still be
+ * the wrong tool, and the plugin review is right to reject it on sight -- a
+ * reviewer cannot tell a safe assignment from an unsafe one by looking, and
+ * neither can the next person to add an argument to this function.
+ *
+ * Parsed as `text/html` rather than `image/svg+xml`: the HTML parser is
+ * lenient about a fragment with no single root and no namespace declared,
+ * which is what an icon string is, and the XML parser is not.
+ */
+function appendMarkup(doc: Document, parent: Element, markup: string): void {
+  if (!markup) return;
+  const parsed = new DOMParser().parseFromString(`<body>${markup}</body>`, "text/html");
+  for (const node of Array.from(parsed.body.childNodes)) {
+    parent.appendChild(doc.importNode(node, true));
+  }
+}
+
 function toolButton(
   doc: Document,
   options: { action: string; label: string; icons: string; attrs?: Record<string, string> },
@@ -197,8 +218,14 @@ function toolButton(
   for (const [name, value] of Object.entries(options.attrs ?? {})) {
     button.setAttribute(name, value);
   }
-  button.innerHTML =
-    options.icons + `<span class="osp-code-btn-label">${escapeHtml(options.label)}</span>`;
+  appendMarkup(doc, button, options.icons);
+  // `textContent` rather than an escaped string: the escaping and the markup
+  // were the same step before, so a label was only safe because someone
+  // remembered to wrap it.
+  const label = doc.createElement("span");
+  label.className = "osp-code-btn-label";
+  label.textContent = options.label;
+  button.appendChild(label);
   return button;
 }
 
@@ -469,7 +496,7 @@ export function prepareTables(root: HTMLElement): number {
       if (!filled.length) continue;
       if (!filled.every((cell) => NUMERIC_CELL.test((cell.textContent ?? "").trim()))) continue;
 
-      const header = headRows.map((row) => cells(row)[column]).filter(Boolean) as Element[];
+      const header = headRows.map((row) => cells(row)[column]).filter(Boolean);
       if ([...column_cells, ...header].some(explicitlyAligned)) continue;
       for (const cell of [...column_cells, ...header]) cell.setAttribute("data-osp-num", "");
     }

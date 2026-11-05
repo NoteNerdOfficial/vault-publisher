@@ -72,8 +72,20 @@ export interface LockedPayload {
  * All three have WebCrypto; they do not all reach it by the same name, and
  * a secure context is not something this can assume on `app://`.
  */
+/**
+ * WebCrypto, by the one name all three hosts agree on.
+ *
+ * `crypto` is a global in a browser, in an Electron renderer and in Node 18
+ * and later, so naming it directly reaches every host this runs in without
+ * `globalThis` -- which the plugin review rejects, because a popout window
+ * has its own and `globalThis` is not it.
+ */
+function webCrypto(): Crypto | undefined {
+  return typeof crypto === "undefined" ? undefined : crypto;
+}
+
 function subtle(): SubtleCrypto {
-  const web = (globalThis as { crypto?: Crypto }).crypto;
+  const web = webCrypto();
   if (web?.subtle) return web.subtle;
   throw new Error(
     "This build cannot encrypt: no WebCrypto in this environment.",
@@ -81,7 +93,7 @@ function subtle(): SubtleCrypto {
 }
 
 function randomBytes(length: number): Uint8Array {
-  const web = (globalThis as { crypto?: Crypto }).crypto;
+  const web = webCrypto();
   if (!web?.getRandomValues) {
     throw new Error("This build cannot encrypt: no secure random source.");
   }

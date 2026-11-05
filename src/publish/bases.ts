@@ -450,11 +450,11 @@ function moveValue(source: Element, target: Element, stats: BasesStats): void {
 }
 
 function controlValue(control: Element): string {
-  if (control instanceof HTMLInputElement) {
+  if (control.instanceOf(HTMLInputElement)) {
     if (control.type === "checkbox") return control.checked ? "Yes" : "No";
     return control.value;
   }
-  if (control instanceof HTMLTextAreaElement) return control.value;
-  if (control instanceof HTMLSelectElement) return control.value;
+  if (control.instanceOf(HTMLTextAreaElement)) return control.value;
+  if (control.instanceOf(HTMLSelectElement)) return control.value;
   return "";
 }

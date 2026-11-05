@@ -164,11 +164,11 @@ export function normalizeStaticPluginOutput(root: HTMLElement): number {
 }
 
 function staticControlText(control: Element): string {
-  if (control instanceof HTMLInputElement) {
+  if (control.instanceOf(HTMLInputElement)) {
     if (control.type === "checkbox") return control.checked ? "☑" : "☐";
     return control.value || control.getAttribute("placeholder") || "";
   }
-  if (control instanceof HTMLTextAreaElement) return control.value;
-  if (control instanceof HTMLSelectElement) return control.value;
+  if (control.instanceOf(HTMLTextAreaElement)) return control.value;
+  if (control.instanceOf(HTMLSelectElement)) return control.value;
   return control.textContent?.trim() || "";
 }

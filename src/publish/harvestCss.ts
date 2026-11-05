@@ -16,6 +16,8 @@
  * our own. Everything else stays ours.
  */
 
+import { requestUrl } from "obsidian";
+
 export interface HarvestRule {
   /** Where it came from, for the generated file's comments. */
   origin: string;
@@ -148,7 +150,7 @@ export async function materializeMathJaxFonts(
     if (!rule.cssText.startsWith("@font-face")) return rule;
 
     const cssText = rule.cssText.replace(
-      /url\((['"]?)([^'"\)]+)\1\)/g,
+      /url\((['"]?)([^'")]+)\1\)/g,
       (_match, quote: string, source: string) => {
         const absolute = new URL(source, document.baseURI).href;
         let asset = bySource.get(absolute);
@@ -165,11 +167,14 @@ export async function materializeMathJaxFonts(
   });
 
   for (const [source, asset] of bySource) {
-    const response = await fetch(source);
-    if (!response.ok) {
+    // `requestUrl` rather than `fetch`: it is the request path the host
+    // offers, it is not subject to the page's CORS rules, and it is the one
+    // the tests can stand in for.
+    const response = await requestUrl({ url: source, throw: false });
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(`Could not fetch MathJax font ${source}: HTTP ${response.status}`);
     }
-    asset.content = await response.arrayBuffer();
+    asset.content = response.arrayBuffer;
   }
 
   return { rules: rewritten, assets: Array.from(bySource.values()) };

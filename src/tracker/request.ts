@@ -14,6 +14,7 @@
 
 import { requestUrl, RequestUrlResponse } from "obsidian";
 import { bodyText, describeNotJson, hostOf, jsonBody } from "../platform/response";
+import { scalarText } from "../text";
 
 /** An issue or task that now exists in a tracker. */
 export interface FiledIssue {
@@ -141,7 +142,7 @@ export function describeFailure(json: unknown, status: number): string {
     const said = body.errors
       .map((row) =>
         row && typeof row === "object"
-          ? String((row as { message?: unknown }).message ?? "")
+          ? scalarText((row as { message?: unknown }).message)
           : "",
       )
       .filter(Boolean);

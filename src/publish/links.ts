@@ -210,7 +210,9 @@ export function relativeUrl(fromUrl: string, toUrl: string): string {
   }
 
   const up = from.length - shared;
-  const segments = [...Array(up).fill(".."), ...to.slice(shared), file];
+  // Array.from rather than Array(up).fill(".."), which is typed `any[]` and
+  // takes the whole array with it.
+  const segments = [...Array.from({ length: up }, () => ".."), ...to.slice(shared), file];
   // Encoded here because this is the last point before the value becomes an
   // href: a note named "Draft #2" otherwise produces a link to nowhere.
   const joined = encodeUrlPath(segments.join("/"));

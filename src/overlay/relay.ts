@@ -39,6 +39,7 @@
  * without a network.
  */
 
+import { scalarText } from "../text";
 import {
   OverlayComment,
   OverlayExternalIssue,
@@ -880,7 +881,7 @@ export function applySync(raw: string, results: SyncResults): string | null {
     document.withdrawn = document.withdrawn.filter((row) => {
       if (!row || typeof row !== "object") return false;
       const entry = row as { external?: { provider?: unknown; key?: unknown } };
-      const key = `${String(entry.external?.provider ?? "")}:${String(entry.external?.key ?? "")}`;
+      const key = `${scalarText(entry.external?.provider)}:${scalarText(entry.external?.key)}`;
       return !results.settled.has(key);
     });
   }

@@ -24,7 +24,17 @@
  * internal API moved is worse than a slow publish.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import {
+  asString,
+  callMethod,
+  hasMethod,
+  isRecord,
+  nodeProcess,
+  nodeRequire,
+  prop,
+  propPath,
+  requireModule,
+} from "./dynamic";
 
 export interface ProbeFinding {
   path: string;
@@ -37,19 +47,6 @@ export interface ThrottlingProbe {
   /** True when some path reached a usable setBackgroundThrottling. */
   reachable: boolean;
   electronVersion: string | null;
-}
-
-/** `require` as the renderer exposes it. Obsidian runs with node integration. */
-function nodeRequire(): ((id: string) => any) | null {
-  // Dynamic import() does not work in this environment; require() does.
-  const candidates = [
-    (globalThis as any).require,
-    (window as any).require,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "function") return candidate;
-  }
-  return null;
 }
 
 /** Describes a value without assuming anything about its shape. */
@@ -66,6 +63,12 @@ function describe(value: unknown): string {
   }
 }
 
+/** The reason a lookup failed, short enough for a table cell. */
+function reason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(0, 120);
+}
+
 export function probeBackgroundThrottling(): ThrottlingProbe {
   const findings: ProbeFinding[] = [];
   const add = (path: string, available: boolean, detail: string) =>
@@ -74,61 +77,55 @@ export function probeBackgroundThrottling(): ThrottlingProbe {
   const req = nodeRequire();
   add("require()", req !== null, req ? "function" : "not exposed");
 
-  let electronVersion: string | null = null;
-  try {
-    electronVersion = (process as any)?.versions?.electron ?? null;
-  } catch {
-    electronVersion = null;
-  }
+  const electronVersion = asString(propPath(nodeProcess(), "versions", "electron"));
   add("process.versions.electron", electronVersion !== null, electronVersion ?? "unknown");
 
   if (!req) return { findings, reachable: false, electronVersion };
 
-  let electron: any = null;
+  let electron: unknown = null;
   try {
     electron = req("electron");
     add("require('electron')", true, describe(electron));
   } catch (error) {
-    add("require('electron')", false, String(error).slice(0, 120));
+    add("require('electron')", false, reason(error));
   }
 
   // The candidate routes to a BrowserWindow, in rough order of likelihood.
-  const routes: { path: string; get: () => any }[] = [
+  const routes: { path: string; get: () => unknown }[] = [
     {
       path: "require('electron').remote.getCurrentWindow()",
-      get: () => electron?.remote?.getCurrentWindow?.(),
+      get: () => callMethod(prop(electron, "remote"), "getCurrentWindow"),
     },
     {
       path: "require('@electron/remote').getCurrentWindow()",
-      get: () => req("@electron/remote")?.getCurrentWindow?.(),
+      get: () => callMethod(requireModule("@electron/remote"), "getCurrentWindow"),
     },
     {
       path: "electron.getCurrentWindow()",
-      get: () => electron?.getCurrentWindow?.(),
+      get: () => callMethod(electron, "getCurrentWindow"),
     },
     {
       path: "electron.webFrame (not a window)",
-      get: () => electron?.webFrame,
+      get: () => prop(electron, "webFrame"),
     },
   ];
 
   let reachable = false;
   for (const route of routes) {
-    let value: any;
+    let value: unknown;
     try {
       value = route.get();
     } catch (error) {
-      add(route.path, false, String(error).slice(0, 120));
+      add(route.path, false, reason(error));
       continue;
     }
 
-    if (!value) {
-      add(route.path, false, "undefined");
+    if (!isRecord(value)) {
+      add(route.path, false, describe(value));
       continue;
     }
 
-    const setter = value?.webContents?.setBackgroundThrottling;
-    if (typeof setter === "function") {
+    if (hasMethod(prop(value, "webContents"), "setBackgroundThrottling")) {
       reachable = true;
       add(route.path, true, "HAS webContents.setBackgroundThrottling");
     } else {
@@ -147,37 +144,32 @@ export function probeBackgroundThrottling(): ThrottlingProbe {
  * worth wiring into publish at all.
  */
 export function suspendBackgroundThrottling(): () => void {
+  const noop = () => {};
   const req = nodeRequire();
-  if (!req) return () => {};
+  if (!req) return noop;
 
-  let contents: any = null;
+  let contents: unknown = null;
   try {
-    const electron = req("electron");
+    const electron = requireModule("electron");
     const win =
-      electron?.remote?.getCurrentWindow?.() ??
-      (() => {
-        try {
-          return req("@electron/remote")?.getCurrentWindow?.();
-        } catch {
-          return null;
-        }
-      })();
-    contents = win?.webContents ?? null;
+      callMethod(prop(electron, "remote"), "getCurrentWindow") ??
+      callMethod(requireModule("@electron/remote"), "getCurrentWindow");
+    contents = prop(win, "webContents") ?? null;
   } catch {
-    return () => {};
+    return noop;
   }
 
-  if (typeof contents?.setBackgroundThrottling !== "function") return () => {};
+  if (!hasMethod(contents, "setBackgroundThrottling")) return noop;
 
   try {
-    contents.setBackgroundThrottling(false);
+    callMethod(contents, "setBackgroundThrottling", false);
   } catch {
-    return () => {};
+    return noop;
   }
 
   return () => {
     try {
-      contents.setBackgroundThrottling(true);
+      callMethod(contents, "setBackgroundThrottling", true);
     } catch {
       // Restoring is best effort. Leaving throttling off costs battery, not
       // correctness, and throwing here would mask whatever the publish did.

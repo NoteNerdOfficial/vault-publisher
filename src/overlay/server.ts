@@ -30,6 +30,7 @@
 
 import { createServer, IncomingMessage, Server, ServerResponse } from "http";
 import { OVERLAY_SCHEMA_VERSION, OverlayExternalIssue } from "./types";
+import { scalarText } from "../text";
 
 /** Everything the server is allowed to touch, so it can touch nothing else. */
 export interface ReviewStore {
@@ -182,7 +183,7 @@ export function carryWithdrawn(incoming: unknown, saved: string | null): unknown
       if (!row || typeof row !== "object") continue;
       const entry = row as { external?: { provider?: unknown; key?: unknown } };
       if (!entry.external || typeof entry.external !== "object") continue;
-      const key = `${String(entry.external.provider ?? "")}:${String(entry.external.key ?? "")}`;
+      const key = `${scalarText(entry.external.provider)}:${scalarText(entry.external.key)}`;
       if (key === ":" || seen.has(key)) continue;
       seen.add(key);
       out.push(row);

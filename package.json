@@ -1,11 +1,12 @@
 {
   "name": "vault-publisher",
-  "version": "0.0.97",
+  "version": "0.0.98",
   "description": "Publish an Obsidian vault as a static website, rendered by Obsidian itself.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "test": "vitest run",
+    "lint": "eslint src",
     "build": "vitest run && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "deploy": "node scripts/deploy.mjs"
   },
@@ -22,10 +23,13 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
+    "eslint": "^9.39.1",
+    "eslint-plugin-obsidianmd": "^0.4.2",
     "jsdom": "^29.1.1",
     "obsidian": "^1.14.4",
     "tslib": "2.8.1",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.46.2",
     "vitest": "^4.1.12"
   },
   "repository": {

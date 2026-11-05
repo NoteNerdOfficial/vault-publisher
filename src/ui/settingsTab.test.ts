@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { installObsidianDom } from "../../test/obsidian-stub";
 import { RELATED_PLUGINS, SettingsHost, VaultPublisherSettingsTab } from "./settingsTab";
@@ -408,14 +410,16 @@ describe("the checklist", () => {
   });
 
   // A finished step stays on the list struck through, so the list says how
-  // far along you are and not only how much is left.
+  // far along you are and not only how much is left. The strike itself is a
+  // rule in styles.css now; what the panel decides is which items carry the
+  // class, and that is what this asserts.
   it("keeps the steps already done, marked", () => {
     const root = render({ github: { token: "", owner: "", repo: "" } });
     const items = Array.from(root.querySelectorAll("ol li")) as HTMLElement[];
     expect(items[0].textContent).toBe("Give the site a name — done");
-    expect(items[0].style.textDecoration).toBe("line-through");
+    expect(items[0].classList.contains("osp-done")).toBe(true);
     expect(items[2].textContent).toBe("Add a GitHub token");
-    expect(items[2].style.textDecoration).toBe("");
+    expect(items[2].classList.contains("osp-done")).toBe(false);
   });
 });
 
@@ -576,7 +580,20 @@ describe("the spacing between rows", () => {
     ) as HTMLElement;
 
     expect(warning).not.toBeNull();
-    expect(warning.style.borderLeft).toBe("1px solid var(--text-warning)");
+    expect(warning.classList.contains("osp-warning-note")).toBe(true);
+  });
+
+  // The width the test above used to assert, where it lives now. Worth
+  // keeping as its own check: the class moving to styles.css is what stopped
+  // the panel being able to state its own border, so without this the "not a
+  // bar" decision is recorded nowhere that fails.
+  it("declares that hairline as 1px in the stylesheet", () => {
+    // process.cwd() rather than import.meta.url: Vitest serves transformed
+    // modules, so a module-relative URL here is not a file: one.
+    const css = readFileSync(join(process.cwd(), "styles.css"), "utf8");
+    const rule = /\.osp-warning-note\s*\{([^}]*)\}/.exec(css);
+    expect(rule).not.toBeNull();
+    expect(rule?.[1]).toContain("border-left: 1px solid var(--text-warning)");
   });
 
   // An empty progress line and an empty 4px track, drawn under the heading
@@ -587,15 +604,13 @@ describe("the spacing between rows", () => {
     const tab = new VaultPublisherSettingsTab(app(), fake);
     tab.display();
 
-    const bar = tab.containerEl.querySelector(
-      "[style*='background: var(--interactive-accent)']",
-    ) as HTMLElement;
+    const bar = tab.containerEl.querySelector(".osp-progress-bar") as HTMLElement;
     expect(bar).not.toBeNull();
     const readout = bar.parentElement?.parentElement as HTMLElement;
-    expect(readout.style.display).toBe("none");
+    expect(readout.classList.contains("osp-hidden")).toBe(true);
 
     fake.progress?.("Rendering 3 of 40", 3, 40);
-    expect(readout.style.display).toBe("block");
+    expect(readout.classList.contains("osp-hidden")).toBe(false);
     expect(readout.textContent).toContain("Rendering 3 of 40");
     expect(bar.style.width).toBe("8%");
   });

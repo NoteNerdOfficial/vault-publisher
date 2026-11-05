@@ -1,3 +1,5 @@
+import { asString, callMethod, prop, propPath, requireModule } from "./dynamic";
+
 /**
  * Keeping the GitHub token out of plaintext.
  *
@@ -19,36 +21,31 @@
  * held in plaintext.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 /** Marks a value as ciphertext, so a stored token is never mistaken for one. */
 const ENCRYPTED_PREFIX = "enc:v1:";
 
-function nodeRequire(): ((id: string) => any) | null {
-  const candidates = [(globalThis as any).require, (window as any).require];
-  for (const candidate of candidates) {
-    if (typeof candidate === "function") return candidate;
-  }
-  return null;
-}
-
-function safeStorage(): any | null {
-  const req = nodeRequire();
-  if (!req) return null;
+/**
+ * Electron's `safeStorage`, but only when it will actually encrypt.
+ *
+ * `isEncryptionAvailable()` is the whole question. On a Linux box with no
+ * keyring the object is present and `encryptString` returns something that
+ * looks like ciphertext and is not, so the check is what stops a token being
+ * written out in a form that claims to be protected. A `false` here is why
+ * `storageMode` can answer "plaintext" and the settings screen can say so.
+ *
+ * Returned as `unknown`: see `dynamic.ts` for why nothing on this path is
+ * typed as `any`.
+ */
+function safeStorage(): unknown {
+  const electron = requireModule("electron");
+  if (!electron) return null;
   try {
-    const electron = req("electron");
     const storage =
-      electron?.safeStorage ??
-      electron?.remote?.safeStorage ??
-      (() => {
-        try {
-          return req("@electron/remote")?.safeStorage;
-        } catch {
-          return null;
-        }
-      })();
+      prop(electron, "safeStorage") ??
+      propPath(electron, "remote", "safeStorage") ??
+      prop(requireModule("@electron/remote"), "safeStorage");
     if (!storage) return null;
-    return storage.isEncryptionAvailable?.() ? storage : null;
+    return callMethod(storage, "isEncryptionAvailable") === true ? storage : null;
   } catch {
     return null;
   }
@@ -76,8 +73,9 @@ export function protectToken(token: string): string {
   const storage = safeStorage();
   if (!storage) return token;
   try {
-    const buffer = storage.encryptString(token);
-    return ENCRYPTED_PREFIX + buffer.toString("base64");
+    const buffer = callMethod(storage, "encryptString", token);
+    const base64 = asString(callMethod(buffer, "toString", "base64"));
+    return base64 ? ENCRYPTED_PREFIX + base64 : token;
   } catch {
     return token;
   }
@@ -129,9 +127,17 @@ export function revealToken(stored: string): RevealedToken {
   if (!storage) return { state: "locked", token: "", sealed: stored };
 
   try {
-    const req = nodeRequire();
-    const Buffer = req ? req("buffer").Buffer : (globalThis as any).Buffer;
-    const token = storage.decryptString(Buffer.from(payload, "base64"));
+    // `buffer` through `require` rather than the global, so this works in a
+    // renderer that does not put Buffer on the window.
+    const bufferCtor =
+      prop(requireModule("buffer"), "Buffer") ??
+      (typeof Buffer === "undefined" ? null : Buffer);
+    const bytes = callMethod(bufferCtor, "from", payload, "base64");
+    const token = callMethod(storage, "decryptString", bytes);
+    // A non-string here means the bridge answered with something unexpected,
+    // which is `lost` rather than a token: returning it would write whatever
+    // it stringified to over the ciphertext on the next save.
+    if (typeof token !== "string") return { state: "lost", token: "", sealed: stored };
     return { state: "ready", token, sealed: stored };
   } catch {
     return { state: "lost", token: "", sealed: stored };

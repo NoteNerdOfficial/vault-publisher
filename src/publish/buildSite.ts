@@ -1,4 +1,4 @@
-import { App, TFile, normalizePath } from "obsidian";
+import { App, TFile } from "obsidian";
 import { createRenderHost, renderFile } from "../render/renderNote";
 import { waitForDataviewIndex } from "../render/settle";
 import { withDataviewRefreshSuspended } from "../render/dataviewRefresh";
@@ -98,7 +98,6 @@ import {
   selectHtmlFiles,
 } from "./htmlFiles";
 import { stampBlockIds } from "../overlay/anchor";
-import { encodeUrlPath } from "./urls";
 import { siteCss } from "./theme";
 import { readCustomCss, withCustomCss } from "./customCss";
 import { PublishFile } from "../github/client";
@@ -1361,7 +1360,9 @@ export function selectNotes(app: App, config: SiteConfig): TFile[] {
 /** Frontmatter title wins over the filename, matching Obsidian's own habit. */
 function titleFor(app: App, file: TFile): string {
   const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
-  const title = frontmatter?.title;
+  // Obsidian types frontmatter as `any`, so this is the boundary where that
+  // stops: `unknown` forces the check below to be the thing that decides.
+  const title: unknown = frontmatter?.title;
   return typeof title === "string" && title.trim()
     ? title.trim()
     : file.basename;
@@ -1408,7 +1409,7 @@ function stampFor(value: unknown, file: TFile): string | null {
 function tagsFor(app: App, file: TFile): string[] {
   const cache = app.metadataCache.getFileCache(file);
   const inline = (cache?.tags ?? []).map((tag) => tag.tag.replace(/^#/, ""));
-  const front = cache?.frontmatter?.tags;
+  const front: unknown = cache?.frontmatter?.tags;
   const declared = Array.isArray(front)
     ? front.map(String)
     : typeof front === "string"

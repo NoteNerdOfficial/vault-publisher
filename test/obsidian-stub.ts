@@ -205,8 +205,43 @@ export function installObsidianDom(): void {
   proto.removeClass = function (this: HTMLElement, ...names: string[]) {
     this.classList.remove(...names);
   };
+  proto.toggleClass = function (this: HTMLElement, names: string | string[], on: boolean) {
+    for (const name of typeof names === "string" ? [names] : names) {
+      this.classList.toggle(name, on);
+    }
+  };
+  // The two Obsidian offers in place of writing to `style` directly, which
+  // the plugin review rejects. `setCssStyles` takes camelCase CSS properties
+  // as they are named on the style object; `setCssProps` takes custom
+  // properties, which have to go through setProperty to be set at all.
+  proto.setCssStyles = function (this: HTMLElement, styles: Record<string, string>) {
+    for (const [name, value] of Object.entries(styles)) {
+      (this.style as unknown as Record<string, string>)[name] = value;
+    }
+  };
+  proto.setCssProps = function (this: HTMLElement, props: Record<string, string>) {
+    for (const [name, value] of Object.entries(props)) {
+      this.style.setProperty(name, value);
+    }
+  };
   proto.empty = function (this: HTMLElement) {
     while (this.firstChild) this.removeChild(this.firstChild);
+  };
+  proto.appendText = function (this: HTMLElement, text: string) {
+    this.appendChild(this.ownerDocument.createTextNode(text));
+  };
+
+  // `instanceOf` goes on Node, not HTMLElement: Obsidian declares it there,
+  // and the callers use it on an `Element` that came out of a DOMParser.
+  //
+  // It exists because `instanceof` compares against the constructor of one
+  // particular window, and a node parsed into another document fails the
+  // check even when it is exactly the type being asked about. The real
+  // implementation walks the node's own window; comparing against this
+  // realm's constructor is enough for a test, where there is one realm.
+  const nodeProto = Node.prototype as unknown as Record<string, unknown>;
+  nodeProto.instanceOf = function (this: Node, type: unknown) {
+    return typeof type === "function" && this instanceof (type as new () => unknown);
   };
 
   // Obsidian also exposes `createDiv` as a global, which makes a detached

@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { installObsidianDom } from "../../test/obsidian-stub";
 import { normalizeStaticPluginOutput } from "./normalize";
+
+// `normalize.ts` asks nodes what they are with Obsidian's `instanceOf`, which
+// is the cross-window-safe form of `instanceof`: the render host is its own
+// document, and a plain `instanceof` compares against one window's
+// constructors. The stub supplies it here the way the app supplies it there.
+beforeAll(installObsidianDom);
 
 function render(html: string): HTMLElement {
   const root = document.createElement("div");

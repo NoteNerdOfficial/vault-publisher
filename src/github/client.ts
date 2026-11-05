@@ -448,7 +448,11 @@ export class GitHubClient {
       );
       if (!response.content) return null;
       const cleaned = response.content.replace(/\n/g, "");
-      return decodeURIComponent(escape(atob(cleaned)));
+      // `decodeURIComponent(escape(...))` was the old way to get UTF-8 out of
+      // a byte string; `escape` is deprecated and TextDecoder says what this
+      // is actually doing.
+      const bytes = Uint8Array.from(atob(cleaned), (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
     } catch {
       return null;
     }
