@@ -2,6 +2,18 @@
 
 Publishes an Obsidian vault as a static website, rendered by Obsidian itself.
 
+![A published note: the command bar and search across the top, the vault tree
+on the left, the note in the middle, and a rail on the right carrying the
+outline, what links here and what the note is near.](media/site-note.png)
+
+![The front page the build writes when no note claims it, in dark: the note
+count and tag count, a Start here list from pinned notes, and Most linked
+ordered by how much of the vault points at
+each.](media/site-home-dark.png)
+
+Every page is static HTML with one stylesheet and one script. Light and dark
+are both built, and a reader can pin either.
+
 Status: **working end to end.** Render, build, incremental publish and the
 GitHub Pages path are all verified against a real repository, and the settings
 screen, the five site themes and the review overlay are built. What is still
@@ -121,6 +133,21 @@ It runs over a local preview by default and can be shipped into the published
 site as well, which is a separate switch — as is letting a reader of that site
 write rather than only read.
 
+![Leaving a comment on a built page: switching to comment mode, clicking a
+paragraph, which outlines it and opens a draft box with a priority chooser,
+typing, sending, and the comment appearing in the review
+panel.](media/review-flow.gif)
+
+A pin remembers the point it was dropped on twice — in document coordinates,
+and as a fraction across the block it landed on — so it survives a rebuild
+that reflows the page. The panel sorts by time or by priority, filters open
+from resolved, and steps through a review one comment at a time:
+
+![A review in progress: three comments in the panel with priority badges and
+one marked resolved, and an open pin showing the block it is about, the
+comment, a reply box, a Resolve and next button, and the issue it was filed
+as.](media/review-overlay.png)
+
 A published page keys its comments on its own URL and never on the vault path
 behind it, so no folder names reach a reader. `pageMap.ts` is the other half:
 a publish records which note produced which page, in the vault beside the
@@ -199,6 +226,7 @@ src/platform/   things only a desktop Electron host can do
   backgroundThrottling.ts
 src/ui/
   settingsTab.ts  the settings screen
+media/          the screenshots and the recording in this README
 research/       findings, including the competitive scan and spike results
 docs/           the working plan
 ```
@@ -222,6 +250,20 @@ The test vault lives outside this repo, so plugin source is never mixed up with 
 The plugin id is `vault-publisher`; it shipped during development as `site-publisher-spike`, and the first run under the new id imports the old settings and offers to delete the folder they came from.
 
 The plugin's `data.json` has an `autoRun` key (`spike`, `build`, `publish`, `diagnose`) so a run can be triggered by deploying rather than by clicking, which is what makes iteration measurable. Install [hot-reload](https://github.com/pjeby/hot-reload) in the test vault and the deploy is enough on its own: the script writes the `.hotreload` marker the watcher looks for, and the reload fires on the change to `main.js`. It reports whether anything is actually watching, because a copy into an unwatched folder looks exactly like a successful deploy.
+
+Nothing in `media/` is anyone's vault. The site in those images is the
+fixture one `shell.preview.test.ts` builds — "A Vault, Published", twenty-five
+invented notes — which is also how to regenerate them:
+
+```sh
+OSP_PREVIEW=/tmp/preview npx vitest run shell.preview
+```
+
+That writes a browsable copy of the fixture site, rendered through the same
+`buildPage`, `shell.ts` and `siteCss` a real build uses. Serve it and
+photograph it. No real note, vault path, repository name or comment appears in
+any of them, which is the point: a screenshot is published the moment it is
+committed.
 
 `scripts/make-scale-vault.mjs` generates a large vault for the scale work. It
 deletes the directory it is given, so it has no default and refuses to run
