@@ -23,7 +23,7 @@
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "jsdom": "^29.1.1",
-    "obsidian": "latest",
+    "obsidian": "^1.14.4",
     "tslib": "2.8.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.12"
