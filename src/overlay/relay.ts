@@ -404,6 +404,10 @@ export function issueDraft(
   // what the reviewer was looking at: every screen in it shares one file.
   // Whoever picks the issue up needs the screen, not only the file.
   if (comment.route) footer.push({ lead: "Screen", text: comment.route, code: true });
+  // A deck in one file has pages the address bar never saw, so the route
+  // above is the same line for all of them and this is what separates two
+  // issues filed from two slides.
+  if (comment.view) footer.push({ lead: "View", text: comment.view, code: true });
   // Only where it has nowhere else to go. On a tracker with labels the
   // priority is one, which is something a board can filter on; saying it
   // twice would only be a line to read past.

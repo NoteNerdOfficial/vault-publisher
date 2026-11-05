@@ -119,7 +119,7 @@ export const OVERLAY_SCRIPT = `(function () {
   var DEEP_PARAM = "osp-comment";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 8;
+  var SCHEMA = 9;
   /*
    * Whether this page's blocks are ours to mark, and keep marking.
    *
@@ -286,6 +286,433 @@ export const OVERLAY_SCRIPT = `(function () {
     return comment.route === currentRoute();
   }
 
+  /* --- which page of a deck that is one file ------------------------- */
+
+  /*
+   * A deck or a prototype whose pages are not URLs.
+   *
+   * \`currentRoute\` above covers the applications that route through the
+   * address bar, and misses the commonest single-file deck entirely: every
+   * slide is in the document at once and one of them is shown, by a class,
+   * a \`hidden\` attribute or a style. The address bar never moves, so every
+   * comment in the file carried the same route, \`onThisRoute\` said yes to
+   * all of them, and every pin in the deck drew at once -- over whichever
+   * slide was up, and at the top-left corner for all the ones whose blocks
+   * were hidden, since a \`display:none\` block measures as a zero box at the
+   * document origin. That is the pile-up on the first page.
+   *
+   * What tells the pages apart is the thing the deck is already doing:
+   * exactly one of a run of siblings is laid out and the rest are not. That
+   * is a structural signature rather than a convention, so it reads a deck
+   * built by hand, by a generator or by a framework without knowing which --
+   * the same reason \`currentRoute\` reads \`location\` instead of asking a
+   * router. Where the signature does not hold, nothing here fires and the
+   * overlay behaves exactly as it did.
+   */
+
+  /*
+   * A node's element children, as an array, without our own.
+   *
+   * The exclusion belongs here rather than at the two call sites, which is
+   * the lesson of getting it wrong once: the scan skipped the host and the
+   * naming did not, so a deck was found and then named \`div:0/3\` for two
+   * slides. Both questions are asked of the same list, so there is one list.
+   *
+   * What it excludes is the overlay's host, a \`div\` appended to the body. On
+   * a deck whose slides are also \`div\`s at the top level it would otherwise
+   * sit in their group as a second shown member and one-of-many would never
+   * hold -- the overlay would have hidden the pins by being there.
+   */
+  function childElements(node) {
+    var kids = node && node.children ? node.children : [];
+    var out = [];
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].id === "osp-overlay-host") continue;
+      out.push(kids[i]);
+    }
+    return out;
+  }
+
+  /*
+   * Whether there is any layout here to measure.
+   *
+   * A box of no size is a good second opinion about a hidden element in a
+   * browser and a wrong answer everywhere else: a document without a layout
+   * engine reports no boxes for anything, so measuring would call every
+   * element on the page hidden and suppress every pin. So the measurement
+   * is only consulted where a measurement means something.
+   *
+   * Latched on rather than sampled each time, because the answer only ever
+   * goes one way: a document that has been laid out once does not stop
+   * being laid out, and an element that genuinely has no box would
+   * otherwise keep the question open forever.
+   */
+  var sawLayout = false;
+  function hasLayout() {
+    if (sawLayout) return true;
+    var body = document.body;
+    sawLayout = !!(
+      body &&
+      (body.offsetWidth || body.offsetHeight || body.getClientRects().length)
+    );
+    return sawLayout;
+  }
+
+  /*
+   * Whether this element itself is shown, saying nothing about its parents.
+   *
+   * A deck hides a page in several ways that do not answer each other --
+   * \`display:none\`, the \`hidden\` attribute, \`aria-hidden\`, a page faded out
+   * with \`visibility\` or \`opacity\` -- and the faded one is why the computed
+   * style has to be read at all: it has boxes in exactly the usual place and
+   * would otherwise read as the page on screen.
+   *
+   * Self only, because the one caller that walks over many elements already
+   * knows the parent is shown: it only ever descends into shown children.
+   * An ancestor walk per element would multiply the whole scan by the depth
+   * of the document for an answer already in hand.
+   */
+  function shownSelf(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hasAttribute("hidden")) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+
+    if (window.getComputedStyle) {
+      var style = window.getComputedStyle(el);
+      if (style) {
+        if (style.display === "none") return false;
+        if (style.visibility === "hidden" || style.visibility === "collapse") {
+          return false;
+        }
+        if (style.opacity === "0") return false;
+      }
+    }
+
+    if (hasLayout()) {
+      if (!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /*
+   * Whether this element is shown, parents included.
+   *
+   * For the one place that asks about a single element out of context -- a
+   * pin's own block, which may be anywhere -- where a slide hidden three
+   * levels up is exactly the case that matters.
+   */
+  function showing(el) {
+    for (var node = el; node && node.nodeType === 1; node = node.parentNode) {
+      if (!shownSelf(node)) return false;
+    }
+    return true;
+  }
+
+  /*
+   * What a page of a deck is called, preferring whatever the author wrote.
+   *
+   * An \`id\` first, because that is what a deck gives its slides and what a
+   * link to one uses, so it survives the edits a hash of the slide's own
+   * words would not -- a pin should not be lost because a typo on the slide
+   * got fixed. Then the attributes generators write.
+   *
+   * The position is the last resort and the only positional thing in here,
+   * which the rest of this file is at some pains to avoid. It carries the
+   * tag and the sibling count beside it so that inserting a slide above
+   * changes every key below rather than quietly handing one slide's name to
+   * the next: a lost pin is reported, and a pin moved onto somebody else's
+   * slide is not.
+   */
+  var VIEW_ATTRS = [
+    "data-osp-view",
+    "data-slide",
+    "data-page",
+    "data-view",
+    "data-step",
+    "data-index",
+    "name",
+    "aria-label",
+  ];
+
+  function viewKeyOf(el) {
+    if (el.id) return "#" + el.id;
+    for (var i = 0; i < VIEW_ATTRS.length; i++) {
+      var value = el.getAttribute(VIEW_ATTRS[i]);
+      if (value) return VIEW_ATTRS[i] + "=" + value;
+    }
+    var kids = childElements(el.parentNode);
+    var at = 0;
+    for (var k = 0; k < kids.length; k++) if (kids[k] === el) at = k;
+    return el.tagName.toLowerCase() + ":" + at + "/" + kids.length;
+  }
+
+  /*
+   * How much of somebody else's document this will walk before giving up.
+   *
+   * It runs on a timer over a page nobody here wrote, so it has to have a
+   * ceiling. Breadth first, so the ceiling costs the right thing: a deck's
+   * pages are siblings a level or two down and are always reached, and what
+   * a budget runs out on is the depths of the one page that is open, where
+   * there is nothing left to find.
+   */
+  var VIEW_SCAN_LIMIT = 600;
+
+  /*
+   * The page showing now, as a key, or "" when this document is not a deck.
+   *
+   * Every level with one child shown and at least one hidden contributes its
+   * shown child's name, so a deck inside a tab panel reads as both and the
+   * two are told apart. Anything less clear-cut than one-of-many is not a
+   * deck: a list with one hidden row is a list, and guessing at it would
+   * hide pins on an ordinary page, which is a worse bug than the one this
+   * fixes.
+   */
+  /*
+   * Every run of siblings in the document that behaves like a deck.
+   *
+   * Returns \`{ members, shown }\` per run: the pages, and the one of them
+   * that is up. Both questions the overlay asks about pages are answered
+   * from this one walk -- which page is showing, and which element is a
+   * given page -- so the two cannot disagree about what a deck is.
+   */
+  function deckGroups() {
+    if (!STAMP_AT_RUNTIME) return [];
+
+    var found = [];
+    var queue = [document.body];
+    var seen = 0;
+
+    while (queue.length && seen < VIEW_SCAN_LIMIT) {
+      var kids = childElements(queue.shift());
+
+      /*
+       * Grouped by tag name before anything is decided.
+       *
+       * A deck's pages are alike -- a run of \`section\`s, a run of \`div\`s --
+       * and what sits beside them is not: the footer that stays put, the
+       * nav, the progress bar. Asking the question of a whole level failed
+       * exactly there, because two shown children is not one-of-many, so a
+       * deck with a persistent footer read as no deck at all. Asking it of
+       * each run of same-tag siblings separately puts the footer in a group
+       * of its own, where it is ignored for being alone.
+       */
+      var groups = Object.create(null);
+      var order = [];
+      var shown = [];
+
+      for (var i = 0; i < kids.length; i++) {
+        seen++;
+        // Self only: this level's parent is already known to be shown,
+        // since the walk never descends into one that is not.
+        var up = shownSelf(kids[i]);
+        if (up) shown.push(kids[i]);
+
+        var tag = "t" + kids[i].tagName.toLowerCase();
+        if (!groups[tag]) {
+          groups[tag] = { shown: [], members: [] };
+          order.push(tag);
+        }
+        groups[tag].members.push(kids[i]);
+        if (up) groups[tag].shown.push(kids[i]);
+      }
+
+      for (var g = 0; g < order.length; g++) {
+        var group = groups[order[g]];
+        var hidden = group.members.length - group.shown.length;
+        if (group.shown.length === 1 && hidden >= 1) {
+          found.push({ members: group.members, shown: group.shown[0] });
+        }
+      }
+
+      for (var j = 0; j < shown.length; j++) queue.push(shown[j]);
+    }
+
+    return found;
+  }
+
+  function currentViewKey() {
+    if (!STAMP_AT_RUNTIME) return "";
+
+    var groups = deckGroups();
+    var parts = [];
+    for (var i = 0; i < groups.length; i++) parts.push(viewKeyOf(groups[i].shown));
+
+    // Sorted, so the key is about which pages are open and not about the
+    // order a walk happened to meet them in.
+    parts.sort();
+    return parts.join(">");
+  }
+
+  /** The key as of the last check. Read by everything; written by \`checkView\`. */
+  var viewKey = currentViewKey();
+
+  /** True when the page on screen changed, having recorded that it did. */
+  function checkView() {
+    var next = currentViewKey();
+    if (next === viewKey) return false;
+    viewKey = next;
+    return true;
+  }
+
+  /*
+   * A comment belongs to the page of the deck that was showing when it was
+   * dropped -- not to the page its block happens to sit in. The two differ
+   * for a block the deck shows on every page, a footer or a slide number,
+   * and the page that was on screen is the honest answer there: the comment
+   * was about the footer *on slide three*.
+   *
+   * No view means a document that was not a deck when the pin was dropped,
+   * or a review written before this existed. Both are shown wherever their
+   * page is shown, which is what they meant at the time.
+   */
+  function onThisView(comment) {
+    if (!comment.view) return true;
+    return comment.view === viewKey;
+  }
+
+  /*
+   * Turning the deck to one of its pages.
+   *
+   * The overlay cannot ask the deck to do this. A deck is somebody else's
+   * script with its own idea of which slide is up, and there is no method
+   * to call: the only thing it ever does is change an attribute on the
+   * pages themselves. So that is what this does -- it reproduces the change
+   * rather than inventing one.
+   *
+   * The state is **swapped** rather than written. Whatever makes the page
+   * that is up shown becomes the target's, and whatever makes the target
+   * hidden becomes the old one's, across the handful of attributes a deck
+   * carries it on. Two things follow from doing it that way and neither
+   * holds if the overlay writes its own \`display\` instead. The vocabulary
+   * is the deck's own, so nothing here has to know whether this deck hides
+   * a page with a class, a style, an attribute or \`aria-hidden\`. And the
+   * result is a state the deck itself could have produced, so the deck is
+   * not broken by having been moved: its own counter is now out of step,
+   * and the reviewer's next Prev or Next rewrites every page and puts it
+   * back in step. An inline \`display\` of ours would outrank a class the
+   * deck toggles and break its navigation for good.
+   *
+   * What it costs: where two pages differ in some *other* way carried on
+   * one of these attributes -- a theme class on the same \`class\` attribute
+   * -- that swaps too. A deck that does this is rare, the effect is visible
+   * rather than silent, and the next page turn clears it.
+   */
+  var VIEW_STATE_ATTRS = [
+    "class",
+    "style",
+    "hidden",
+    "open",
+    "aria-hidden",
+    "aria-selected",
+    "aria-current",
+    "aria-expanded",
+    "data-active",
+    "data-state",
+    "data-current",
+    "data-visible",
+  ];
+
+  function swapAttr(a, b, name) {
+    var from = a.getAttribute(name);
+    var to = b.getAttribute(name);
+    if (from === to) return;
+    if (to === null) a.removeAttribute(name);
+    else a.setAttribute(name, to);
+    if (from === null) b.removeAttribute(name);
+    else b.setAttribute(name, from);
+  }
+
+  function swapViewState(from, to) {
+    for (var i = 0; i < VIEW_STATE_ATTRS.length; i++) {
+      swapAttr(from, to, VIEW_STATE_ATTRS[i]);
+    }
+  }
+
+  /*
+   * Shows the page a key names, and says whether it got there.
+   *
+   * A round per level, because a page nested inside another deck cannot be
+   * reached until the deck holding it is on the right page: showing the
+   * outer one is what puts the inner group in the document's shown tree,
+   * where the next round finds it. Four is more levels of deck than anyone
+   * builds, and the loop stops early the moment a round changes nothing.
+   */
+  function turnToView(target) {
+    if (!target) return true;
+    checkView();
+    if (viewKey === target) return true;
+
+    var wanted = String(target).split(">");
+
+    for (var round = 0; round < 4; round++) {
+      var groups = deckGroups();
+      var moved = false;
+
+      for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        // Already showing one of the pages asked for: this level is done.
+        if (wanted.indexOf(viewKeyOf(group.shown)) !== -1) continue;
+
+        for (var m = 0; m < group.members.length; m++) {
+          var member = group.members[m];
+          if (member === group.shown) continue;
+          if (wanted.indexOf(viewKeyOf(member)) === -1) continue;
+          swapViewState(group.shown, member);
+          moved = true;
+          break;
+        }
+      }
+
+      if (!moved) break;
+      checkView();
+      if (viewKey === target) return true;
+    }
+
+    checkView();
+    return viewKey === target;
+  }
+
+  /*
+   * A deck's page, in as few characters as name it.
+   *
+   * The key is built to be compared, not read: \`#slide-3\` where the author
+   * named the slide, \`section:2/7\` where nobody did. Both have a readable
+   * form and the second one is the reason this exists -- "3 of 7" is a page
+   * of a deck, and "section:2/7" is a bug report.
+   */
+  function viewLabel(key) {
+    var parts = String(key).split(">");
+    var out = [];
+
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (part.charAt(0) === "#") {
+        out.push(part.slice(1));
+        continue;
+      }
+      var eq = part.indexOf("=");
+      if (eq !== -1) {
+        out.push(part.slice(eq + 1));
+        continue;
+      }
+      var colon = part.indexOf(":");
+      var slash = part.indexOf("/");
+      if (colon !== -1 && slash > colon) {
+        var at = parseInt(part.slice(colon + 1, slash), 10);
+        if (!isNaN(at)) {
+          out.push(at + 1 + " of " + part.slice(slash + 1));
+          continue;
+        }
+      }
+      out.push(part);
+    }
+
+    return out.join(" / ");
+  }
+
   /*
    * The mark: a tag with three rounded corners and one sharp one, and the
    * sharp corner is the point being marked. It sits at (5, 27) in a 32 unit
@@ -356,6 +783,9 @@ export const OVERLAY_SCRIPT = `(function () {
     row.block = typeof row.block === "string" ? row.block : null;
     // Which screen of an application this was left on, when it was one.
     row.route = typeof row.route === "string" && row.route ? row.route : null;
+    // Which page of a single-file deck, for the screens the address bar
+    // does not tell apart.
+    row.view = typeof row.view === "string" && row.view ? row.view : null;
     row.blockText = typeof row.blockText === "string" ? row.blockText : "";
     row.resolved = row.resolved === true;
     row.priority = priOf(row.priority);
@@ -1389,6 +1819,16 @@ export const OVERLAY_SCRIPT = `(function () {
     var base = host.getBoundingClientRect();
     var target = comment.block ? blocks[comment.block] : null;
 
+    /*
+     * The block is in the document but not on the page being shown: it is
+     * on another slide of the deck, or inside something collapsed on this
+     * one. A hidden element measures as a zero box, so drawing this would
+     * put the pin at the document's top-left corner -- which is precisely
+     * how a deck's pins came to pile up on the first page. The panel still
+     * lists it, under its own page.
+     */
+    if (target && !showing(target)) return null;
+
     if (target) {
       var box = target.getBoundingClientRect();
       var rx = typeof comment.rx === "number" ? comment.rx : 0;
@@ -1416,6 +1856,19 @@ export const OVERLAY_SCRIPT = `(function () {
      * says the text it was about has changed.
      */
     if (comment.block && !STAMP_AT_RUNTIME) return null;
+
+    /*
+     * The same reasoning, for a deck that mounts one page at a time rather
+     * than hiding the others: the block is not in the document at all, and
+     * the point stored beside it is a point on a page that is not the one
+     * on screen. Falling back to it is what put slide five's pin on slide
+     * one. A comment with no view predates this and keeps the old
+     * behaviour, which is the right one for the application that case was
+     * written for -- a pin that stays put while a counter it was left on
+     * ticks.
+     */
+    if (comment.view && comment.view !== viewKey) return null;
+
     return { left: comment.x, top: comment.y };
   }
 
@@ -1610,15 +2063,39 @@ export const OVERLAY_SCRIPT = `(function () {
    * screen to be told apart from.
    */
   function screenName(comment) {
-    var route = comment.route;
-    if (!route) return "";
-    var at = String(route).search(/[?#]/);
-    if (at !== -1) return String(route).slice(at);
-    var parts = String(route).split("/");
-    var last = parts[parts.length - 1];
-    var file = String(pageKey(comment)).split("/").pop();
-    if (!last || last === file) return "";
-    return "/" + last;
+    var route = comment.route ? String(comment.route) : "";
+
+    /*
+     * The deck's page first, where there is one.
+     *
+     * It beats the address bar because it cannot be wrong: a view is only
+     * ever recorded for a document that really was a deck, and it names the
+     * page that really was on screen. What is in the address bar may be a
+     * router's answer or may be noise -- a cache-busting query, a tracking
+     * parameter, the fragment of a heading somebody linked -- and nothing
+     * here can tell those apart. Tried the other way round first, and a
+     * deck opened with a \`?\` on the end of its URL labelled every comment
+     * in it with that query instead of the slide it was left on.
+     */
+    if (comment.view) return viewLabel(comment.view);
+
+    // A router's own address, which for a page that is not a deck is the
+    // one thing that separates two threads on it.
+    if (route) {
+      var at = route.search(/[?#]/);
+      if (at !== -1) return route.slice(at);
+    }
+
+    // Routing done on the path, where the last segment is the screen and
+    // the file it sits in is already named beside this.
+    if (route) {
+      var parts = route.split("/");
+      var last = parts[parts.length - 1];
+      var file = String(pageKey(comment)).split("/").pop();
+      if (last && last !== file) return "/" + last;
+    }
+
+    return "";
   }
 
   /*
@@ -1651,6 +2128,8 @@ export const OVERLAY_SCRIPT = `(function () {
       // belongs over there, and drawing it here would put it over whatever
       // happens to be in the same place now.
       if (!onThisRoute(comment)) continue;
+      // And the same for a deck, whose pages one URL cannot tell apart.
+      if (!onThisView(comment)) continue;
       var at = spot(comment);
       if (!at) continue;
 
@@ -1939,7 +2418,17 @@ export const OVERLAY_SCRIPT = `(function () {
       }
       if (screen) {
         var at = el("span", "co-row-screen", screen);
-        at.setAttribute("title", "Left on this screen: " + comment.route);
+        // A deck's page is not in the route -- the route is the same line
+        // for the whole file -- so repeating it here would answer a
+        // different question than the label asks.
+        // Mirrors whichever of the two the label came from, so the
+        // tooltip cannot describe a different thing than the row shows.
+        at.setAttribute(
+          "title",
+          comment.view && screen === viewLabel(comment.view)
+            ? "Left on this page of the deck: " + viewLabel(comment.view)
+            : "Left on this screen: " + comment.route,
+        );
         where.appendChild(at);
       }
       body.appendChild(where);
@@ -2054,10 +2543,12 @@ export const OVERLAY_SCRIPT = `(function () {
     // Only this page's rows get a handler. The others are links, and the
     // overlay on the page they land on opens the comment they named.
     if (!away) {
+      // Through \`goToMark\`, not straight to the card. These three lines
+      // were the whole of what a row did, which is why a row for a comment
+      // on another page of a deck opened its card over the page being read:
+      // the one thing it never did was go there.
       row.addEventListener("click", function () {
-        glide();
-        openPopup(comment.id);
-        revealMark(comment);
+        goToMark(comment);
       });
     }
     return row;
@@ -2548,6 +3039,23 @@ export const OVERLAY_SCRIPT = `(function () {
       leaveFor(next);
       return;
     }
+
+    /*
+     * Another page of a deck, which is this document and not a navigation.
+     *
+     * Asked before the route, and that order matters as much as the one
+     * above. Every comment in a deck carries the same route -- the deck's
+     * pages were never in the address bar -- so \`onThisRoute\` says yes to
+     * all of them and this used to fall straight into the branch below: the
+     * card opened over whichever page happened to be up, \`revealMark\` found
+     * no pin to scroll to, and nothing turned the deck. The pin the
+     * reviewer had just clicked was on another page the whole time.
+     */
+    if (next.view && next.view !== viewKey) {
+      turnToDeckPage(next);
+      return;
+    }
+
     if (onThisRoute(next)) {
       glide();
       openPopup(next.id);
@@ -2555,6 +3063,31 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
     crossTo(next);
+  }
+
+  /*
+   * Off to a mark on another page of this deck.
+   *
+   * The turn, then the redraw, then the card. \`viewTurned\` is what moves
+   * the pins onto the page now showing, and it has to run here rather than
+   * being waited for: the attribute watcher would get to it, in its own
+   * time, and the reviewer would watch the card arrive over a page with no
+   * pin on it and then the pin appear underneath a tenth of a second later.
+   *
+   * \`chaseMark\` afterwards for the deck that animates its turn. The pages
+   * swap state immediately, so the pin is there to be scrolled to -- but a
+   * deck mid-transition moves it again as the slide settles, and chasing is
+   * already how the overlay waits out a screen drawing itself.
+   */
+  function turnToDeckPage(next) {
+    var arrived = turnToView(next.view);
+    // Unconditionally, not through \`viewTurned\`: the turn above has
+    // already recorded the key it moved to, so the change detection would
+    // find nothing changed and skip the one redraw this exists to cause.
+    redrawForView();
+    glide();
+    openPopup(next.id);
+    if (!revealMark(next) || !arrived) chaseMark(next);
   }
 
   /*
@@ -2626,6 +3159,9 @@ export const OVERLAY_SCRIPT = `(function () {
       // The reviewer moved on, or the card was closed while the screen was
       // still drawing. Either way nothing here is wanted any more.
       if (popup.hidden || selected !== comment.id || !byId(comment.id)) return;
+      // A deck mid-transition may only settle on its new page after a frame
+      // or two, so which page is up is re-asked on every look.
+      checkView();
       blocks = blockIndex();
       renderPins();
       if (selected === comment.id) placePopup(comment);
@@ -2907,6 +3443,10 @@ export const OVERLAY_SCRIPT = `(function () {
   function commit(text) {
     if (!draftPoint) return;
     var point = draftPoint;
+    // Read fresh rather than trusted from the last check: the pin is about
+    // to be filtered by this value, and a stale one would hide the comment
+    // the moment it was written.
+    checkView();
 
     all.push({
       id: uid(),
@@ -2915,6 +3455,7 @@ export const OVERLAY_SCRIPT = `(function () {
       block: point.block,
       blockText: point.text,
       route: currentRoute(),
+      view: viewKey || null,
       x: point.x,
       y: point.y,
       rx: point.rx,
@@ -3740,15 +4281,61 @@ export const OVERLAY_SCRIPT = `(function () {
   if (window.ospStampWatcher) window.ospStampWatcher.stop();
   window.ospStampWatcher = null;
 
+  /*
+   * Redrawing when the deck turns a page.
+   *
+   * Both halves of the overlay's idea of a page have to be rechecked here,
+   * and neither used to be. A full \`render\` is deliberately not called: it
+   * rebuilds the popup, and a reviewer reading a comment while the deck
+   * animates should not have the card torn out from under them. The pins
+   * move and the panel regroups, which is the whole of what a page turn
+   * changes.
+   */
+  function redrawForView() {
+    blocks = blockIndex();
+    renderPins();
+    renderPanel();
+  }
+
+  function viewTurned() {
+    if (!checkView()) return false;
+    redrawForView();
+    return true;
+  }
+
+  /*
+   * A router that answers the address bar, noticed when it answers.
+   *
+   * \`onThisRoute\` has filtered by \`location\` since routes existed, but
+   * nothing ever told it to look again: the only way a navigation got
+   * redrawn was the stamping timer below happening to fire because the
+   * router had also changed the DOM. A hash-routed deck that moves by CSS
+   * alone changes no nodes at all, so its pins never re-filtered.
+   */
+  if (STAMP_AT_RUNTIME) {
+    var navigated = function () {
+      checkView();
+      blocks = blockIndex();
+      renderPins();
+      renderPanel();
+    };
+    window.addEventListener("hashchange", navigated);
+    window.addEventListener("popstate", navigated);
+  }
+
   if (STAMP_AT_RUNTIME && window.MutationObserver) {
     var restamp = null;
     var watcher = new MutationObserver(function () {
+      // A record queued before the page was navigated away from, delivered
+      // after it was: there is no window left to arm a timer on.
+      if (typeof window === "undefined" || !window) return;
       if (restamp !== null) return;
       restamp = window.setTimeout(function () {
         restamp = null;
         stampBlocks();
         blocks = blockIndex();
-        reposition();
+        // A page turn that replaced the nodes rather than restyling them.
+        if (!viewTurned()) reposition();
       }, 150);
     });
     watcher.observe(document.body, {
@@ -3756,15 +4343,64 @@ export const OVERLAY_SCRIPT = `(function () {
       subtree: true,
       characterData: true,
     });
+
+    /*
+     * The second watcher, for the page turn that is one class name.
+     *
+     * The watcher above cannot do this job. It must not look at attributes
+     * at all -- it marks blocks, marking sets an attribute, and watching
+     * attributes would have it wake itself forever -- and a deck that shows
+     * one slide at a time turns the page by writing exactly one attribute.
+     *
+     * So this one watches attributes and only the ones a deck toggles, by
+     * name. \`data-osp-block\` is not among them, which is what keeps the two
+     * from feeding each other: our own marking cannot wake either watcher.
+     *
+     * It is also nearly free on a page that does none of this. A turn is
+     * only a turn if the key changed, so a class animating every frame
+     * costs one scan per interval and no redraw at all.
+     */
+    var recheck = null;
+    var viewWatcher = new MutationObserver(function () {
+      if (typeof window === "undefined" || !window) return;
+      if (recheck !== null) return;
+      recheck = window.setTimeout(function () {
+        recheck = null;
+        viewTurned();
+      }, 120);
+    });
+    viewWatcher.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        "class",
+        "style",
+        "hidden",
+        "open",
+        "aria-hidden",
+        "aria-selected",
+        "aria-current",
+        "aria-expanded",
+        "data-active",
+        "data-state",
+        "data-current",
+        "data-visible",
+      ],
+    });
     // Disconnecting is not enough on its own: a pass already armed would
     // still fire afterwards, through this instance's closure, and mark the
     // document for an overlay that had been replaced.
     window.ospStampWatcher = {
       stop: function () {
         watcher.disconnect();
+        viewWatcher.disconnect();
         if (restamp !== null) {
           window.clearTimeout(restamp);
           restamp = null;
+        }
+        if (recheck !== null) {
+          window.clearTimeout(recheck);
+          recheck = null;
         }
       },
     };

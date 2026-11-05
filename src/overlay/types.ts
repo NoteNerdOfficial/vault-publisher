@@ -30,12 +30,12 @@
  * 2 added the drop point (`x`, `y`, `rx`, `ry`) and `replies`. 3 added
  * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
  * `external` and the document's `withdrawn` list. 6 renamed the middle
- * priority from `normal` to `medium`. 7 added `route`. 8 added `imported`.
+ * priority from `normal` to `medium`. 7 added `route`. 8 added `imported`. 9 added `view`.
  * An older file still reads: every added field is optional and defaults to
  * what a comment without it meant, and a `normal` priority is read as
  * `medium` by every reader of one.
  */
-export const OVERLAY_SCHEMA_VERSION = 8;
+export const OVERLAY_SCHEMA_VERSION = 9;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
@@ -147,6 +147,23 @@ export interface OverlayComment {
    * this wherever its page is shown", which is what they meant at the time.
    */
   route: string | null;
+  /**
+   * Which page of a single-file deck the pin was dropped on, or null.
+   *
+   * The other half of `route`, for the pages one URL cannot tell apart. A
+   * deck or a prototype in one file holds every slide in the document at
+   * once and shows one of them, so the address bar never moves and `route`
+   * is the same string for the whole deck. This is derived from the document
+   * instead: the name of the page that was showing, which the overlay reads
+   * off the structure every deck already has -- one of a run of siblings
+   * laid out and the rest not. See the view section of `overlayScript.ts`.
+   *
+   * An opaque key, built to be compared rather than read; the overlay has a
+   * readable form of it for the panel. Null for a document that was not a
+   * deck when the pin was dropped, and null in a review written before this
+   * field existed. Both mean "show this wherever its page is shown".
+   */
+  view: string | null;
   /** Drop point in document space, for a pin with no block to hang from. */
   x: number;
   y: number;

@@ -123,6 +123,9 @@ function readComment(value: unknown, index: number): OverlayComment {
     // page the build rendered and from any review written before the field
     // existed, and null means the same thing in both: not tied to a screen.
     route: typeof row.route === "string" && row.route ? row.route : null,
+    // And which page of a single-file deck, for the screens a URL cannot
+    // tell apart. Same rule, same meaning when it is absent.
+    view: typeof row.view === "string" && row.view ? row.view : null,
     blockText:
       typeof row.blockText === "string"
         ? row.blockText.slice(0, BLOCK_TEXT_LIMIT)

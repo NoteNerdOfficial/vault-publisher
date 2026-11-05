@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OVERLAY_SCRIPT, overlayBundle } from "./overlayScript";
-import { stampBlockIds } from "./anchor";
+import { blockId, stampBlockIds } from "./anchor";
 import { OVERLAY_SCHEMA_VERSION, type OverlayComment } from "./types";
 
 /**
@@ -3755,5 +3755,469 @@ describe("stepping across pages", () => {
     const back = navigation();
     click(arrows(other)[1]);
     expect(back.to).toBe("../notes/plan.html?osp-comment=here");
+  });
+});
+
+/**
+ * A deck or a prototype that is one file, whose pages are not URLs.
+ *
+ * The case these are here for: every slide is in the document at once and
+ * one of them is shown, so the address bar never moves. `route` is the same
+ * string for the whole deck, which used to mean every pin in the file drew
+ * at once -- and the ones whose blocks were hidden drew at the document's
+ * top-left corner, because a `display:none` block measures as a zero box.
+ * That is the pile-up on the first page.
+ *
+ * jsdom reports no layout boxes for anything, which is why the overlay only
+ * consults a measurement where there is one to consult: the tests below hide
+ * a slide the way a deck does, with a style, and the computed style is what
+ * answers.
+ */
+describe("a deck that is one file", () => {
+  function mountDeck(slides?: string): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML =
+      `<div id="deck">` +
+      (slides ??
+        `<section id="cover"><h2>Cover</h2><p>The first slide.</p></section>` +
+          `<section id="middle" style="display:none"><h2>Middle</h2><p>The second slide.</p></section>` +
+          `<section id="end" style="display:none"><h2>End</h2><p>The third slide.</p></section>`) +
+      `</div>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "decks/review.html",
+        page: "decks/review.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      }),
+    );
+    document.head.appendChild(meta);
+    // The page's own address, so a seeded comment's route matches the one
+    // the overlay reads -- the route filter runs before the view filter.
+    search("/decks/review.html");
+  }
+
+  /** Turns the deck to one page, the way a deck does: one style each. */
+  function turnTo(index: number): void {
+    const slides = Array.from(document.querySelectorAll("#deck > section"));
+    slides.forEach((slide, at) => {
+      (slide as HTMLElement).style.display = at === index ? "block" : "none";
+    });
+  }
+
+  /** A comment left on this deck, so only the page of it differs. */
+  function onDeck(over: Partial<OverlayComment>): OverlayComment {
+    return row({
+      page: "decks/review.html",
+      sourcePath: "decks/review.html",
+      route: "/decks/review.html",
+      ...over,
+    });
+  }
+
+  function seed(rows: OverlayComment[]): void {
+    localStorage.setItem(STORE_KEY, JSON.stringify(rows));
+  }
+
+  /** Long enough for the view watcher's own interval to have passed. */
+  const settle = () => new Promise((done) => setTimeout(done, 220));
+
+  it("records which page of the deck a pin was dropped on", () => {
+    mountDeck();
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector("#cover p");
+    leaveComment(shadow, { x: 40, y: 40 }, "The title is too long.");
+
+    // The id the author gave the slide, which is what a link to it uses and
+    // what survives the slide's words being edited.
+    expect(stored()[0].view).toBe("#cover");
+  });
+
+  it("records the page that was showing, not the page the block sits on", () => {
+    // A block the deck shows on every page -- a footer, a slide number --
+    // belongs to the page the reviewer was looking at.
+    mountDeck(
+      `<p id="footer">Confidential draft.</p>` +
+        `<section id="cover"><p>The first slide.</p></section>` +
+        `<section id="middle" style="display:none"><p>The second slide.</p></section>`,
+    );
+    const shadow = run();
+    turnTo(1);
+    document.elementFromPoint = () => document.querySelector("#footer");
+    leaveComment(shadow, { x: 10, y: 600 }, "Drop this footer.");
+
+    expect(stored()[0].view).toBe("#middle");
+  });
+
+  it("draws only the pins left on the page being shown", () => {
+    mountDeck();
+    seed([
+      onDeck({ id: "a", view: "#cover", text: "On the cover." }),
+      onDeck({ id: "b", view: "#middle", text: "On the middle." }),
+    ]);
+    const shadow = run();
+
+    const pins = shadow.querySelectorAll(".co-pin");
+    expect(pins).toHaveLength(1);
+    expect(pins[0].getAttribute("data-comment")).toBe("a");
+  });
+
+  it("moves the pins when the deck turns a page", async () => {
+    mountDeck();
+    seed([
+      onDeck({ id: "a", view: "#cover", text: "On the cover." }),
+      onDeck({ id: "b", view: "#middle", text: "On the middle." }),
+    ]);
+    const shadow = run();
+    expect(shadow.querySelector(".co-pin")?.getAttribute("data-comment")).toBe("a");
+
+    // One style per slide and nothing else: no node added, no text changed,
+    // no URL touched. The stamping watcher cannot see this, which is why
+    // there is a second one that watches the attributes a deck toggles.
+    turnTo(1);
+    await settle();
+
+    const pins = shadow.querySelectorAll(".co-pin");
+    expect(pins).toHaveLength(1);
+    expect(pins[0].getAttribute("data-comment")).toBe("b");
+  });
+
+  /*
+   * The bug itself. The block is in the document and carries the right
+   * anchor, so the pin used to be drawn -- over a zero box, at the origin,
+   * on top of whatever slide was up.
+   */
+  it("leaves a pin off the page while its block is on another slide", async () => {
+    mountDeck();
+    seed([
+      onDeck({
+        id: "deep",
+        view: "#middle",
+        block: blockId("p", "The second slide."),
+        blockText: "The second slide.",
+        x: 220,
+        y: 480,
+        text: "This line is wrong.",
+      }),
+    ]);
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(0);
+
+    turnTo(1);
+    await settle();
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+  });
+
+  it("still lists a pin from another page in the panel", () => {
+    mountDeck();
+    seed([onDeck({ id: "b", view: "#middle", text: "On the middle." })]);
+    const shadow = run();
+    mode(shadow, "review");
+
+    // Nothing is drawn on the page, and the comment is not lost: the panel
+    // is where a reviewer sees what is open on the pages they are not on.
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(0);
+    expect(shadow.querySelector(".co-row-body")?.textContent).toContain("On the middle.");
+  });
+
+  it("names the deck's page beside the comment", () => {
+    mountDeck();
+    seed([onDeck({ id: "b", view: "#middle", text: "On the middle." })]);
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toBe("middle");
+  });
+
+  it("counts an unnamed slide, since a bare tag name is no name at all", () => {
+    mountDeck(
+      `<section><p>The first slide.</p></section>` +
+        `<section style="display:none"><p>The second slide.</p></section>` +
+        `<section style="display:none"><p>The third slide.</p></section>`,
+    );
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector("#deck > section p");
+    leaveComment(shadow, { x: 40, y: 40 }, "Still too long.");
+
+    // Positional, which this file otherwise avoids -- but the sibling count
+    // travels with it, so inserting a slide above loses the pin rather than
+    // handing it to the next slide.
+    expect(stored()[0].view).toBe("section:0/3");
+
+    mode(shadow, "review");
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toBe("1 of 3");
+  });
+
+  it("is not a deck when nothing is hidden", () => {
+    // Three slides, all showing: a document, not a deck. Guessing otherwise
+    // would hide pins on an ordinary page, which is worse than this bug.
+    mountDeck(
+      `<section id="one"><p>The first slide.</p></section>` +
+        `<section id="two"><p>The second slide.</p></section>`,
+    );
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector("#one p");
+    leaveComment(shadow, { x: 40, y: 40 }, "A note.");
+
+    expect(stored()[0].view).toBeNull();
+  });
+
+  /*
+   * The overlay's own host is a div appended to the body. A deck whose
+   * slides are divs at the top level would find it in their own group, as a
+   * second shown member, and one-of-many would never hold -- the overlay
+   * would have broken the detection by being present.
+   */
+  it("does not count its own host among a deck's pages", () => {
+    document.head.innerHTML = "";
+    document.body.innerHTML =
+      `<div class="slide"><p>The first slide.</p></div>` +
+      `<div class="slide" style="display:none"><p>The second slide.</p></div>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "decks/flat.html",
+        page: "decks/flat.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      }),
+    );
+    document.head.appendChild(meta);
+    search("/decks/flat.html");
+
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector(".slide p");
+    leaveComment(shadow, { x: 20, y: 20 }, "On the first slide.");
+
+    // Unnamed slides, so the key is positional -- and it is a key at all,
+    // which is the point: with the host counted there would be none.
+    expect(stored()[0].view).toBe("div:0/2");
+  });
+
+  /*
+   * A deck served under a name other than its published one -- opened off
+   * disk, or behind a different path -- used to label every row with the
+   * file it was in, which is true and not the question.
+   */
+  it("names the deck's page even when the path differs from the published one", () => {
+    mountDeck();
+    search("/somewhere/else.html");
+    seed([
+      onDeck({ id: "b", view: "#middle", route: "/somewhere/else.html", text: "On the middle." }),
+    ]);
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toBe("middle");
+  });
+
+  /*
+   * The deck's page beats the address bar, because it cannot be wrong and
+   * the address bar can: a query on the end of a URL is as likely to be
+   * cache-busting as it is to be a router's answer, and a deck opened with
+   * one used to have every comment in it labelled with the query.
+   */
+  it("prefers the deck's page to whatever is in the address bar", () => {
+    mountDeck();
+    search("/decks/review.html?fresh");
+    seed([
+      onDeck({
+        id: "b",
+        view: "#middle",
+        route: "/decks/review.html?fresh",
+        text: "On the middle.",
+      }),
+    ]);
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toBe("middle");
+  });
+
+  // And a page that is not a deck still names its router's address, which
+  // is what that branch has always been for.
+  it("still names a router's address where there is no deck page", () => {
+    mountDeck(
+      `<section id="one"><p>The first slide.</p></section>` +
+        `<section id="two"><p>The second slide.</p></section>`,
+    );
+    search("/decks/review.html#/settings");
+    seed([
+      onDeck({ id: "b", view: null, route: "/decks/review.html#/settings", text: "On settings." }),
+    ]);
+    const shadow = run();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toBe("#/settings");
+  });
+
+  /*
+   * Going to a mark on another page of the deck.
+   *
+   * The half that was missing: the filter knew which page a pin was on and
+   * nothing could turn to it. Both ways of asking -- the arrows in the card
+   * and a row in the panel -- opened the card over the page being read,
+   * found no pin to scroll to, and left the reviewer looking at the wrong
+   * slide. `goToMark` asked whether the comment was on another *file* and
+   * whether its route matched, and a deck is one file at one route.
+   */
+  describe("going to a mark on another page", () => {
+    function seeded(): ShadowRoot {
+      mountDeck();
+      seed([
+        onDeck({ id: "a", view: "#cover", text: "On the cover." }),
+        onDeck({ id: "b", view: "#middle", text: "On the middle." }),
+      ]);
+      return run();
+    }
+
+    /** Which page the deck is showing, by what is laid out. */
+    function showing(): string | null {
+      const up = Array.from(document.querySelectorAll("#deck > section")).find(
+        (s) => (s as HTMLElement).style.display !== "none",
+      );
+      return up ? up.id : null;
+    }
+
+    function pinIds(shadow: ShadowRoot): string[] {
+      return Array.from(shadow.querySelectorAll(".co-pin")).map(
+        (p) => p.getAttribute("data-comment") ?? "",
+      );
+    }
+
+    it("turns the deck when a panel row names another page", () => {
+      const shadow = seeded();
+      mode(shadow, "review");
+      expect(showing()).toBe("cover");
+
+      const row = Array.from(shadow.querySelectorAll(".co-row")).find((r) =>
+        r.textContent?.includes("On the middle."),
+      );
+      click(row ?? null);
+
+      expect(showing()).toBe("middle");
+      expect(pinIds(shadow)).toEqual(["b"]);
+    });
+
+    it("turns the deck when the card's arrow steps across", () => {
+      const shadow = seeded();
+      click(shadow.querySelector(".co-pin"));
+      expect(shadow.querySelector(".co-pop-pos")?.textContent).toBe("1 of 2");
+
+      click(shadow.querySelector('.co-pop-btn[title^="Next mark"]'));
+
+      expect(showing()).toBe("middle");
+      expect(shadow.querySelector(".co-pop-body")?.textContent).toBe("On the middle.");
+      expect(pinIds(shadow)).toEqual(["b"]);
+    });
+
+    it("steps back to the page it came from", () => {
+      const shadow = seeded();
+      click(shadow.querySelector(".co-pin"));
+      click(shadow.querySelector('.co-pop-btn[title^="Next mark"]'));
+      expect(showing()).toBe("middle");
+
+      click(shadow.querySelector('.co-pop-btn[title^="Previous mark"]'));
+      expect(showing()).toBe("cover");
+      expect(pinIds(shadow)).toEqual(["a"]);
+    });
+
+    /*
+     * The swap is what makes the deck survive being moved by us: the state
+     * the pages carry is exchanged, so the document is left in something
+     * the deck itself could have produced rather than overridden by an
+     * inline style of ours that its own class toggling could never clear.
+     */
+    it("leaves the deck's own state intact, swapped rather than overridden", () => {
+      const shadow = seeded();
+      mode(shadow, "review");
+      const row = Array.from(shadow.querySelectorAll(".co-row")).find((r) =>
+        r.textContent?.includes("On the middle."),
+      );
+      click(row ?? null);
+
+      const cover = document.getElementById("cover") as HTMLElement;
+      const middle = document.getElementById("middle") as HTMLElement;
+      // Exactly what the deck had, the other way round.
+      expect(middle.style.display).toBe("");
+      expect(cover.style.display).toBe("none");
+    });
+
+    it("turns the deck for a class-toggled page too", () => {
+      // The same swap, over the attribute a deck more often uses. Nothing
+      // here knows which of the two this deck chose.
+      document.head.innerHTML = "";
+      document.body.innerHTML =
+        `<div id="deck">` +
+        `<section id="cover" class="slide on"><p>The first slide.</p></section>` +
+        `<section id="middle" class="slide" style="display:none"><p>The second slide.</p></section>` +
+        `</div>`;
+      const meta = document.createElement("meta");
+      meta.setAttribute("name", "osp-review");
+      meta.setAttribute(
+        "content",
+        JSON.stringify({
+          sourcePath: "decks/review.html",
+          page: "decks/review.html",
+          site: "Prototype",
+          reviewer: "Reviewer",
+          stamp: true,
+        }),
+      );
+      document.head.appendChild(meta);
+      search("/decks/review.html");
+      seed([onDeck({ id: "b", view: "#middle", text: "On the middle." })]);
+
+      const shadow = run();
+      mode(shadow, "review");
+      click(shadow.querySelector(".co-row"));
+
+      expect(document.getElementById("middle")?.className).toBe("slide on");
+      expect(document.getElementById("cover")?.className).toBe("slide");
+      expect(pinIds(shadow)).toEqual(["b"]);
+    });
+
+    it("does not turn anything for a mark on the page already showing", () => {
+      const shadow = seeded();
+      mode(shadow, "review");
+      const row = Array.from(shadow.querySelectorAll(".co-row")).find((r) =>
+        r.textContent?.includes("On the cover."),
+      );
+      click(row ?? null);
+
+      expect(showing()).toBe("cover");
+      expect(pinIds(shadow)).toEqual(["a"]);
+    });
+  });
+
+  it("records no page on a document the build rendered", () => {
+    mountPage();
+    const shadow = run();
+    leaveComment(shadow, { x: 10, y: 10 }, "A note on a note.");
+
+    // `stamp` is off for a rendered page: it is one document, and a view
+    // recorded for it would hide the pin when the same file was opened a
+    // different way.
+    expect(stored()[0].view).toBeNull();
+  });
+
+  it("shows a comment with no page anywhere in the deck", async () => {
+    // A review written before views existed. It meant "wherever its page is
+    // shown", and it still does -- on every page, as it always has.
+    mountDeck();
+    seed([onDeck({ id: "old", view: null, text: "From an older review." })]);
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+
+    turnTo(1);
+    await settle();
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
   });
 });

@@ -65,6 +65,7 @@ function comment(sourcePath: string, index: number): OverlayComment {
     block: null,
     blockText: "",
     route: null,
+    view: null,
     x: 0,
     y: 0,
     rx: null,

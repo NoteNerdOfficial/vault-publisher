@@ -21,6 +21,7 @@ function comment(over: Partial<OverlayComment> = {}): OverlayComment {
     block: "abc123",
     blockText: "The second paragraph.",
     route: null,
+    view: null,
     x: 300,
     y: 230,
     rx: 0.5,
