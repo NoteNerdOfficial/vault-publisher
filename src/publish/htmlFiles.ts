@@ -216,6 +216,118 @@ export function planCompanions(
   context: CompanionContext,
 ): CompanionPlan {
   const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
+  collectReferences(
+    page,
+    { local: findLocalReferences(html), rootAbsolute: findRootAbsoluteReferences(html) },
+    context,
+    plan,
+  );
+  return plan;
+}
+
+/**
+ * The same table again, for a stylesheet that has already been carried.
+ *
+ * A page's references are read out of its markup, which is every file the
+ * *page* asks for and no further. A stylesheet asks for files of its own --
+ * `@font-face` points at a `.woff2`, `background-image` at a `.png`,
+ * `@import` at another sheet -- and those references are inside the CSS,
+ * where nothing scanning HTML will ever see them.
+ *
+ * What that cost is worth stating, because the failure is quiet. A built
+ * application's stylesheet travelled, applied, and laid the page out
+ * correctly; its webfont did not travel, so the text fell back to the
+ * system font, and its background images did not, so they were simply
+ * missing. Neither was reported, because a reference nothing reads cannot
+ * be found unresolved.
+ *
+ * Resolved against the stylesheet's own vault path rather than the page's,
+ * which is what a browser does: a `url()` in a sheet is relative to the
+ * sheet. That is the whole reason this cannot be folded into the page's
+ * scan by concatenating the text -- `../fonts/a.woff2` means two different
+ * files depending on which file said it.
+ */
+export function planStylesheetCompanions(
+  sheet: CompanionRef,
+  css: string,
+  context: CompanionContext,
+): CompanionPlan {
+  const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
+  collectReferences(sheet, findStylesheetReferences(css), context, plan);
+  return plan;
+}
+
+/**
+ * Every file the carried stylesheets ask for, following `@import`.
+ *
+ * A worklist rather than a recursion, because a sheet reached by `@import`
+ * has imports of its own, and because two sheets importing each other is
+ * legal CSS and would not terminate. `carried` seeds the visited set, so a
+ * file already travelling is never queued twice and a cycle costs one pass
+ * over each sheet in it. There is no depth limit for the same reason: the
+ * visited set is the bound.
+ *
+ * `carry` holds only what is *new* -- the caller already has the files it
+ * passed in -- so the result can be merged without checking for duplicates.
+ *
+ * `readStylesheet` returns null for a file that cannot be read, which is
+ * not reported here: the pass that carries a file is the one that reports
+ * failing to read it, and a second entry about the same file would say the
+ * same thing twice.
+ */
+export async function planStylesheetTree(
+  carried: readonly CompanionRef[],
+  context: CompanionContext,
+  readStylesheet: (path: string) => Promise<string | null>,
+): Promise<CompanionPlan> {
+  const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
+  const known = new Set(carried.map((companion) => companion.sourcePath));
+  const queue = carried.filter((companion) => isStylesheet(companion.sourcePath));
+
+  while (queue.length) {
+    const sheet = queue.shift();
+    if (!sheet) break;
+
+    const css = await readStylesheet(sheet.sourcePath);
+    if (css === null) continue;
+
+    const nested = planStylesheetCompanions(sheet, css, context);
+    plan.broken.push(...nested.broken);
+    plan.refused.push(...nested.refused);
+    for (const companion of nested.carry) {
+      if (known.has(companion.sourcePath)) continue;
+      known.add(companion.sourcePath);
+      plan.carry.push(companion);
+      if (isStylesheet(companion.sourcePath)) queue.push(companion);
+    }
+  }
+
+  return plan;
+}
+
+/** What one file points at, split by whether a vault path could hold it. */
+export interface FoundReferences {
+  /** Relative references, which may name a vault file. */
+  local: string[];
+  /** References resolved from the root of the server, which cannot. */
+  rootAbsolute: string[];
+}
+
+/**
+ * Everything one referrer points at, sorted into the plan.
+ *
+ * `referrer` is whatever said so -- a page or a stylesheet -- and is used
+ * for two things: resolving its relative references, and naming it in a
+ * report, so "`assets/index.css` -> `./inter.woff2` (no such file)" says
+ * which file to go and look at.
+ */
+function collectReferences(
+  referrer: { sourcePath: string; url: string },
+  references: FoundReferences,
+  context: CompanionContext,
+  plan: CompanionPlan,
+): void {
+  const page = referrer;
   const seen = new Set<string>();
 
   const note = (reference: string, why: string) =>
@@ -228,7 +340,7 @@ export function planCompanions(
    * what used to happen: a stock bundler build published its HTML, none of
    * its code, and a report that mentioned neither.
    */
-  for (const reference of findRootAbsoluteReferences(html)) {
+  for (const reference of references.rootAbsolute) {
     note(
       reference,
       "resolved from the root of the server, where a site published into a " +
@@ -236,7 +348,7 @@ export function planCompanions(
     );
   }
 
-  for (const reference of findLocalReferences(html)) {
+  for (const reference of references.local) {
     const broken = (why: string) => note(reference, why);
 
     // A folder, which a static host answers with its index. Nothing to
@@ -304,8 +416,6 @@ export function planCompanions(
 
     plan.carry.push({ sourcePath: path, url });
   }
-
-  return plan;
 }
 
 export interface HtmlFileStats {
@@ -536,6 +646,29 @@ const SRCSET = /\bsrcset\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
  */
 const CSS_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)'"\s]+))\s*\)/gi;
 
+/**
+ * `@import "sheet.css"`, the quoted form.
+ *
+ * The `@import url("sheet.css")` form needs nothing: `CSS_URL` already has
+ * it. Only the bare-string form is invisible to that pattern, and both are
+ * legal, so both have to be read.
+ *
+ * Whatever follows the string -- `layer(base)`, a media query,
+ * `supports(...)` -- is a condition on when the sheet applies rather than
+ * part of its path, and is left where it is.
+ */
+const CSS_IMPORT = /@import\s+(?:"([^"]*)"|'([^']*)')/gi;
+
+/**
+ * A CSS comment, removed before a stylesheet is scanned.
+ *
+ * A commented-out `background-image` is a file the author decided not to
+ * use. Carrying it would be harmless; reporting it as a broken reference
+ * when the file has since been deleted would not, because the page is
+ * correct and the report would say otherwise.
+ */
+const CSS_COMMENT = /\/\*[\s\S]*?\*\//g;
+
 /** `app://`, Obsidian's resource scheme, which embeds the vault's own path. */
 const APP_URL = /app:\/\//i;
 
@@ -758,6 +891,49 @@ export function findLocalReferences(html: string): string[] {
  */
 export function findRootAbsoluteReferences(html: string): string[] {
   return everyReference(html).filter(isRootAbsolute);
+}
+
+/**
+ * Every file a stylesheet asks for, split the same way a page's are.
+ *
+ * Only the two things CSS can name a file with: `url(...)`, which covers
+ * fonts, images, masks, cursors and the `url()` form of `@import`; and a
+ * quoted `@import`. Deliberately not a CSS parser -- a reference that is
+ * only reachable by understanding the cascade is not one a browser resolves
+ * either, because a browser resolves the same two spellings.
+ */
+export function findStylesheetReferences(css: string): FoundReferences {
+  const text = css.replace(CSS_COMMENT, " ");
+  const found = new Set<string>();
+
+  const take = (raw: string | undefined) => {
+    const value = (raw ?? "").trim();
+    if (value) found.add(value);
+  };
+
+  for (const match of text.matchAll(CSS_URL)) {
+    take(match[1] ?? match[2] ?? match[3]);
+  }
+  for (const match of text.matchAll(CSS_IMPORT)) {
+    take(match[1] ?? match[2]);
+  }
+
+  const references = Array.from(found);
+  return {
+    local: references.filter(isLocalReference),
+    rootAbsolute: references.filter(isRootAbsolute),
+  };
+}
+
+/**
+ * Whether a carried file is a stylesheet, and so has references of its own.
+ *
+ * By extension, because that is what the reference said and there is no
+ * file content to go on at the point this is asked. A bundler writes `.css`
+ * and so does everything else.
+ */
+export function isStylesheet(path: string): boolean {
+  return /\.css$/i.test(path);
 }
 
 /** Whether a reference is resolved from the root of the server. */

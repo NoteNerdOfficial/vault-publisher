@@ -8,9 +8,11 @@ import {
   countHtmlFilesAvailable,
   countHtmlFilesBlockedByFlag,
   findLocalReferences,
+  findStylesheetReferences,
   hasLocalResourceUrl,
   isHtmlFilePath,
   isLocalReference,
+  isStylesheet,
   baseHref,
   baseHrefHazard,
   findRootAbsoluteReferences,
@@ -19,6 +21,8 @@ import {
   pageTitle,
   planCompanions,
   planHtmlFiles,
+  planStylesheetCompanions,
+  planStylesheetTree,
   reservedPathReason,
   selectHtmlFiles,
   SITE_ASSET_FILES,
@@ -878,6 +882,303 @@ describe("planCompanions", () => {
     expect(plan.carry).toEqual([
       { sourcePath: "shared/outside.css", url: "shared/outside.css" },
     ]);
+  });
+});
+
+describe("findStylesheetReferences", () => {
+  it("finds the files a stylesheet asks for, however they are spelled", () => {
+    const css = `@font-face { src: url("fonts/inter.woff2") format("woff2"); }
+      .hero { background-image: url('pics/hero.png'); }
+      .mask { -webkit-mask-image: url(masks/fade.svg); }
+      @import "reset.css";
+      @import url(tokens.css);`;
+    expect(findStylesheetReferences(css).local).toEqual([
+      "fonts/inter.woff2",
+      "pics/hero.png",
+      "masks/fade.svg",
+      "tokens.css",
+      "reset.css",
+    ]);
+  });
+
+  it("keeps a quoted @import with a layer or a media query after it", () => {
+    const css = `@import "base.css" layer(reset);
+      @import "print.css" print and (min-width: 40em);`;
+    expect(findStylesheetReferences(css).local).toEqual(["base.css", "print.css"]);
+  });
+
+  /**
+   * A commented-out background is a file the author decided not to use.
+   * Carrying it would be harmless, but reporting it as broken once the file
+   * is deleted would say a correct page is wrong.
+   */
+  it("ignores what is inside a comment", () => {
+    const css = `/* .old { background: url(gone.png); } */
+      .new { background: url(here.png); }`;
+    expect(findStylesheetReferences(css).local).toEqual(["here.png"]);
+  });
+
+  it("drops what cannot name a vault file, and splits off server paths", () => {
+    const css = `.a { background: url(data:image/gif;base64,R0lGOD); }
+      .b { background: url(https://cdn.example.com/x.png); }
+      .c { background: url(//cdn.example.com/y.png); }
+      .d { background: url(/assets/absolute.png); }
+      .e { background: url(relative.png); }`;
+    const found = findStylesheetReferences(css);
+    expect(found.local).toEqual(["relative.png"]);
+    expect(found.rootAbsolute).toEqual(["/assets/absolute.png"]);
+  });
+
+  it("finds nothing in a stylesheet that asks for nothing", () => {
+    expect(findStylesheetReferences(".a { color: red; }").local).toEqual([]);
+  });
+});
+
+describe("isStylesheet", () => {
+  it("is true for a stylesheet and false for everything else", () => {
+    expect(isStylesheet("assets/index-abc.css")).toBe(true);
+    expect(isStylesheet("assets/INDEX.CSS")).toBe(true);
+    expect(isStylesheet("assets/index-abc.js")).toBe(false);
+    expect(isStylesheet("assets/inter.woff2")).toBe(false);
+    expect(isStylesheet("css")).toBe(false);
+  });
+});
+
+/**
+ * The second hop: what a carried stylesheet asks for on its own account.
+ *
+ * The case this exists for is a built application. Its stylesheet travelled
+ * and applied, and its webfont did not travel at all -- so the page laid out
+ * correctly in a fallback font, with its background images missing, and
+ * nothing in the report said so because nothing had read the CSS.
+ */
+describe("planStylesheetCompanions", () => {
+  const sheet = { sourcePath: "site/app/assets/index-abc.css", url: "app/assets/index-abc.css" };
+
+  function context(over: Partial<CompanionContext> = {}): CompanionContext {
+    const sizes: Record<string, number> = {
+      "site/app/assets/inter.woff2": 30_000,
+      "site/app/assets/hero.png": 90_000,
+      "site/app/fonts/mono.woff2": 20_000,
+      "site/app/assets/tokens.css": 400,
+      "site/shared/outside.png": 100,
+      "site/app/assets/huge.png": 99 * 1024 * 1024,
+      "outside/sheet.png": 100,
+    };
+    return {
+      folder: "site",
+      statFile: (path) => sizes[path] ?? null,
+      isPublishedPage: () => false,
+      pageRefused: () => null,
+      publishedNoteUrl: () => null,
+      maxBytes: 25 * 1024 * 1024,
+      tooBigReason: (size, limit) => (size > limit ? `too big: ${size} > ${limit}` : null),
+      ...over,
+    };
+  }
+
+  it("carries the font and the image the stylesheet asks for", () => {
+    const css = `@font-face { src: url(./inter.woff2); }
+      .hero { background-image: url("hero.png"); }`;
+    const plan = planStylesheetCompanions(sheet, css, context());
+    expect(plan.carry).toEqual([
+      { sourcePath: "site/app/assets/inter.woff2", url: "app/assets/inter.woff2" },
+      { sourcePath: "site/app/assets/hero.png", url: "app/assets/hero.png" },
+    ]);
+    expect(plan.broken).toEqual([]);
+    expect(plan.refused).toEqual([]);
+  });
+
+  /**
+   * The whole reason this cannot be done by scanning the page's text and the
+   * stylesheet's together: `../fonts/mono.woff2` names a different file
+   * depending on which of them said it, and a browser resolves it against
+   * the sheet.
+   */
+  it("resolves a reference against the stylesheet, not against any page", () => {
+    const plan = planStylesheetCompanions(
+      sheet,
+      `@font-face { src: url(../fonts/mono.woff2); }`,
+      context(),
+    );
+    expect(plan.carry).toEqual([
+      { sourcePath: "site/app/fonts/mono.woff2", url: "app/fonts/mono.woff2" },
+    ]);
+  });
+
+  it("names the stylesheet when one of its references resolves to nothing", () => {
+    const plan = planStylesheetCompanions(
+      sheet,
+      `@font-face { src: url(./missing.woff2); }`,
+      context(),
+    );
+    expect(plan.carry).toEqual([]);
+    expect(plan.broken).toEqual([
+      "app/assets/index-abc.css -> ./missing.woff2 (no such file in the vault)",
+    ]);
+  });
+
+  it("reports a stylesheet asking for a file from the root of the server", () => {
+    const plan = planStylesheetCompanions(
+      sheet,
+      `@font-face { src: url(/assets/inter.woff2); }`,
+      context(),
+    );
+    expect(plan.carry).toEqual([]);
+    expect(plan.broken[0]).toContain("/assets/inter.woff2");
+    expect(plan.broken[0]).toContain("relative base");
+  });
+
+  it("refuses a file the stylesheet reaches outside the published folder", () => {
+    const plan = planStylesheetCompanions(
+      { sourcePath: "site/sheet.css", url: "sheet.css" },
+      `.a { background: url(../outside/sheet.png); }`,
+      context(),
+    );
+    expect(plan.carry).toEqual([]);
+    expect(plan.refused[0]?.path).toBe("outside/sheet.png");
+    expect(plan.refused[0]?.reason).toContain("outside the published folder");
+  });
+
+  it("applies the size ceiling a page's references get", () => {
+    const plan = planStylesheetCompanions(
+      sheet,
+      `.a { background: url(./huge.png); }`,
+      context(),
+    );
+    expect(plan.carry).toEqual([]);
+    expect(plan.refused[0]?.reason).toContain("too big");
+  });
+
+  it("carries an imported stylesheet, which is then scanned in its turn", () => {
+    const plan = planStylesheetCompanions(sheet, `@import "tokens.css";`, context());
+    expect(plan.carry).toEqual([
+      { sourcePath: "site/app/assets/tokens.css", url: "app/assets/tokens.css" },
+    ]);
+  });
+});
+
+describe("planStylesheetTree", () => {
+  const SHEETS: Record<string, string> = {
+    "site/app/index.css": `@import "theme.css";
+      @font-face { src: url(fonts/inter.woff2); }`,
+    "site/app/theme.css": `@import "tokens.css";
+      .hero { background: url(../pics/hero.png); }`,
+    "site/app/tokens.css": `:root { --a: 1px; }`,
+    // Two sheets importing each other, which is legal and must terminate.
+    "site/loop/a.css": `@import "b.css";`,
+    "site/loop/b.css": `@import "a.css";`,
+    "site/unreadable.css": "",
+  };
+
+  function context(): CompanionContext {
+    const sizes: Record<string, number> = {
+      "site/app/index.css": 500,
+      "site/app/theme.css": 400,
+      "site/app/tokens.css": 100,
+      "site/app/fonts/inter.woff2": 30_000,
+      "site/pics/hero.png": 90_000,
+      "site/loop/a.css": 50,
+      "site/loop/b.css": 50,
+    };
+    return {
+      folder: "site",
+      statFile: (path) => sizes[path] ?? null,
+      isPublishedPage: () => false,
+      pageRefused: () => null,
+      publishedNoteUrl: () => null,
+      maxBytes: 25 * 1024 * 1024,
+      tooBigReason: () => null,
+    };
+  }
+
+  const read = async (path: string) => SHEETS[path] ?? null;
+
+  /**
+   * Breadth first, and within one sheet its `url()` references come before
+   * its `@import`s -- which is the order they are read in rather than a
+   * rule about anything. It only decides the order files appear in the
+   * report, so it is pinned here to notice a change rather than because
+   * anything depends on it.
+   */
+  it("follows an @import chain to the end of it", async () => {
+    const plan = await planStylesheetTree(
+      [{ sourcePath: "site/app/index.css", url: "app/index.css" }],
+      context(),
+      read,
+    );
+    expect(plan.carry.map((companion) => companion.url)).toEqual([
+      "app/fonts/inter.woff2",
+      "app/theme.css",
+      "pics/hero.png",
+      "app/tokens.css",
+    ]);
+    expect(plan.broken).toEqual([]);
+  });
+
+  /**
+   * The reason this is a worklist with a visited set rather than a walk: a
+   * pair of sheets importing each other is legal, happens by accident, and
+   * would otherwise not terminate.
+   */
+  it("terminates on a cycle, carrying each sheet once", async () => {
+    const plan = await planStylesheetTree(
+      [{ sourcePath: "site/loop/a.css", url: "loop/a.css" }],
+      context(),
+      read,
+    );
+    expect(plan.carry.map((companion) => companion.url)).toEqual(["loop/b.css"]);
+  });
+
+  it("returns only what is new, since the caller already has the rest", async () => {
+    const plan = await planStylesheetTree(
+      [
+        { sourcePath: "site/app/index.css", url: "app/index.css" },
+        { sourcePath: "site/app/theme.css", url: "app/theme.css" },
+        { sourcePath: "site/app/tokens.css", url: "app/tokens.css" },
+      ],
+      context(),
+      read,
+    );
+    expect(plan.carry.map((companion) => companion.url)).toEqual([
+      "app/fonts/inter.woff2",
+      "pics/hero.png",
+    ]);
+  });
+
+  it("looks at stylesheets and leaves every other carried file alone", async () => {
+    const seen: string[] = [];
+    const plan = await planStylesheetTree(
+      [
+        { sourcePath: "site/app/index-abc.js", url: "app/index-abc.js" },
+        { sourcePath: "site/app/fonts/inter.woff2", url: "app/fonts/inter.woff2" },
+      ],
+      context(),
+      async (path) => {
+        seen.push(path);
+        return SHEETS[path] ?? null;
+      },
+    );
+    expect(seen).toEqual([]);
+    expect(plan.carry).toEqual([]);
+  });
+
+  /**
+   * Reported by the pass that carries the file, not twice. A sheet that
+   * cannot be read is already in `skipped` with the reason.
+   */
+  it("says nothing extra about a stylesheet it could not read", async () => {
+    const plan = await planStylesheetTree(
+      [{ sourcePath: "site/missing.css", url: "missing.css" }],
+      context(),
+      read,
+    );
+    expect(plan).toEqual({ carry: [], broken: [], refused: [] });
+  });
+
+  it("carries nothing when nothing was carried", async () => {
+    const plan = await planStylesheetTree([], context(), read);
+    expect(plan).toEqual({ carry: [], broken: [], refused: [] });
   });
 });
 

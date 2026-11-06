@@ -2318,8 +2318,9 @@ export default class VaultPublisherPlugin extends Plugin {
       if (html.unresolved.length) {
         lines.push(
           "",
-          "References that will not reach what the page meant by them. Each one",
-          "is published exactly as written, so these are yours to fix:",
+          "References that will not reach what the file meant by them -- from a",
+          "page, or from a stylesheet one of them carries. Each is published",
+          "exactly as written, so these are yours to fix:",
           "",
         );
         for (const reference of html.unresolved.slice(0, 40)) lines.push(`- ${reference}`);

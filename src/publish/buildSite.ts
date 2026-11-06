@@ -92,6 +92,7 @@ import {
   parseExcludeFolders,
 } from "./excludeFolders";
 import {
+  CompanionContext,
   CompanionRef,
   HtmlFileStats,
   appShellWithoutCode,
@@ -104,6 +105,7 @@ import {
   pageTitle,
   planCompanions,
   planHtmlFiles,
+  planStylesheetTree,
   selectHtmlFiles,
 } from "./htmlFiles";
 import { stampBlockIds } from "../overlay/anchor";
@@ -1119,6 +1121,29 @@ export async function buildSite(
     htmlPlan.collisions.map((collision) => [collision.path, collision.reason]),
   );
 
+  /**
+   * What the companion rules have to ask about the vault, built once.
+   *
+   * Page-independent -- every answer is about the vault and the
+   * configuration rather than about one page -- and it has to be, now that
+   * a stylesheet's own references go through the same rules after the page
+   * loop has finished with it.
+   */
+  const companionContext: CompanionContext = {
+    folder: config.folder,
+    statFile: (path) => {
+      const referenced = app.vault.getAbstractFileByPath(path);
+      // `?? 0` publishes when the size is unknown rather than refusing on
+      // a guess, exactly as `collectAssets` does for an attachment.
+      return referenced instanceof TFile ? (referenced.stat?.size ?? 0) : null;
+    },
+    isPublishedPage: (path) => publishedHtml.has(path),
+    pageRefused: (path) => refusedPages.get(path) ?? null,
+    publishedNoteUrl: (path) => (published.has(path) ? urlFor(path) : null),
+    maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
+    tooBigReason: assetSkipReason,
+  };
+
   for (const target of htmlPlan.targets) {
     // Read and reported much earlier, because the file tree needed the
     // titles: a page missing from `htmlContent` is one whose read failed and
@@ -1184,20 +1209,7 @@ export async function buildSite(
     const shell = appShellWithoutCode(html);
     if (shell) htmlStats.appShells.push(`${target.url}: ${shell}`);
 
-    const companions = planCompanions(target, html, {
-      folder: config.folder,
-      statFile: (path) => {
-        const referenced = app.vault.getAbstractFileByPath(path);
-        // `?? 0` publishes when the size is unknown rather than refusing on
-        // a guess, exactly as `collectAssets` does for an attachment.
-        return referenced instanceof TFile ? (referenced.stat?.size ?? 0) : null;
-      },
-      isPublishedPage: (path) => publishedHtml.has(path),
-      pageRefused: (path) => refusedPages.get(path) ?? null,
-      publishedNoteUrl: (path) => (published.has(path) ? urlFor(path) : null),
-      maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
-      tooBigReason: assetSkipReason,
-    });
+    const companions = planCompanions(target, html, companionContext);
 
     htmlStats.unresolved.push(...companions.broken);
     for (const refusal of companions.refused) {
@@ -1210,6 +1222,39 @@ export async function buildSite(
     for (const companion of companions.carry) {
       wantedCompanions.set(companion.sourcePath, companion);
     }
+  }
+
+  /*
+   * And what the carried stylesheets themselves ask for: fonts, background
+   * images, and whatever they `@import`. Those references live inside the
+   * CSS, where the scan over a page's markup never reached them -- so a
+   * built application's stylesheet used to travel and apply while its
+   * webfont silently did not.
+   *
+   * Run after every page is planned, so a sheet shared by forty pages is
+   * read once rather than forty times.
+   */
+  const nested = await planStylesheetTree(
+    [...wantedCompanions.values()],
+    companionContext,
+    async (path) => {
+      const file = app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) return null;
+      try {
+        return await app.vault.read(file);
+      } catch {
+        return null;
+      }
+    },
+  );
+  htmlStats.unresolved.push(...nested.broken);
+  for (const refusal of nested.refused) {
+    if (refusedCompanions.has(refusal.path)) continue;
+    refusedCompanions.add(refusal.path);
+    skipped.push(refusal);
+  }
+  for (const companion of nested.carry) {
+    wantedCompanions.set(companion.sourcePath, companion);
   }
 
   // Deduplicated across every page, like media: one stylesheet shared by
