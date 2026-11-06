@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OVERLAY_SCRIPT, overlayBundle } from "./overlayScript";
-import { blockId, stampBlockIds } from "./anchor";
+import { BLOCK_SELECTOR, blockId, stampBlockIds } from "./anchor";
 import { OVERLAY_SCHEMA_VERSION, type OverlayComment } from "./types";
 
 /**
@@ -268,9 +268,22 @@ describe("stamping anchors in the browser", () => {
     `<table><tr><td>A cell.</td></tr></table>` +
     `<p></p>`;
 
-  it("stamps exactly what the build would have stamped", () => {
-    // The same markup twice: one document stamped by the TypeScript pass the
-    // note path uses, one by the script. Every attribute must match.
+  /*
+   * The contract between the two stamping passes, which is narrower than it
+   * looks and has to be stated exactly.
+   *
+   * It is not "both stamp the same set of elements". The browser side stamps
+   * more, because a prototype is buttons and panels and the build's
+   * vocabulary is prose -- see `UI_BLOCKS`. What has to hold is that the
+   * elements the build *does* stamp get identical ids from either pass,
+   * since an anchor stored by one is resolved by the other.
+   *
+   * Widening cannot break that, and the reason is worth writing down: an id
+   * is a hash of the tag name and the text, so a tag that was not stamped
+   * before cannot collide with one that was, and duplicate numbering counts
+   * per hash, so it cannot renumber one either.
+   */
+  it("gives every block the build stamps the same id the build would", () => {
     const built = document.implementation.createHTMLDocument("built");
     built.body.innerHTML = MARKUP;
     stampBlockIds(built.body);
@@ -280,12 +293,47 @@ describe("stamping anchors in the browser", () => {
 
     mountAsIs(MARKUP);
     run();
-    const actual = Array.from(document.body.querySelectorAll("[data-osp-block]")).map(
-      (el) => `${el.tagName}:${el.getAttribute("data-osp-block")}`,
-    );
+    const actual = Array.from(document.body.querySelectorAll(BLOCK_SELECTOR))
+      .filter((el) => el.hasAttribute("data-osp-block"))
+      .map((el) => `${el.tagName}:${el.getAttribute("data-osp-block")}`);
 
     expect(actual).toEqual(expected);
     expect(actual.length).toBeGreaterThan(6);
+  });
+
+  /*
+   * The widening itself, which is half of why a pin on a prototype used to
+   * have nothing holding it: a dialog is made of buttons, and not one of
+   * them is a `p`.
+   */
+  it("stamps the elements an application is built out of, not only prose", () => {
+    mountAsIs(
+      `<nav><a href="#x">Settings</a></nav>` +
+        `<section id="panel"><button>Save changes</button>` +
+        `<label>Email</label></section>` +
+        `<div class="wrapper">A plain div.</div>`,
+    );
+    run();
+
+    expect(document.querySelector("button")?.hasAttribute("data-osp-block")).toBe(true);
+    expect(document.querySelector("a")?.hasAttribute("data-osp-block")).toBe(true);
+    expect(document.querySelector("label")?.hasAttribute("data-osp-block")).toBe(true);
+    expect(document.querySelector("section")?.hasAttribute("data-osp-block")).toBe(true);
+    expect(document.querySelector("nav")?.hasAttribute("data-osp-block")).toBe(true);
+    // A `div` names nothing and nests without limit, so it is left alone: a
+    // pin on one walks up to whatever does say what it is.
+    expect(document.querySelector(".wrapper")?.hasAttribute("data-osp-block")).toBe(
+      false,
+    );
+  });
+
+  // The guarantee that makes widening safe for a review already written.
+  it("leaves a paragraph's id alone after the vocabulary grew", () => {
+    mountAsIs(`<section id="s"><p>The first paragraph.</p></section>`);
+    run();
+    expect(document.querySelector("p")?.getAttribute("data-osp-block")).toBe(
+      blockId("p", "The first paragraph."),
+    );
   });
 
   // Three identical bullets are the case a content-derived anchor has to
@@ -4219,5 +4267,366 @@ describe("a deck that is one file", () => {
     turnTo(1);
     await settle();
     expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+  });
+});
+
+/**
+ * A prototype whose panels open and close.
+ *
+ * The other half of the deck above, and the half a real prototype is mostly
+ * made of. A deck replaces one page with another; an application opens a
+ * dialog, a side panel or a menu *over* the screen -- so two things are laid
+ * out at once, the deck signature never fires, and the address bar does not
+ * move either. Then it closes, in one of the two ways something closes, and
+ * a pin left inside it has to go with it.
+ */
+describe("a prototype whose panels open and close", () => {
+  /** A screen with a dialog beside it, as a prototype in one file is. */
+  function mountProto(body?: string): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML =
+      body ??
+      `<main id="screen"><h1>Accounts</h1><p>Three accounts.</p></main>` +
+        `<div id="settings" role="dialog" aria-label="Settings">` +
+        `<p id="blurb">Delete this account?</p>` +
+        `<button id="go">Delete</button>` +
+        `</div>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "proto/app.html",
+        page: "proto/app.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      }),
+    );
+    document.head.appendChild(meta);
+    search("/proto/app.html");
+  }
+
+  function onProto(over: Partial<OverlayComment>): OverlayComment {
+    return row({
+      page: "proto/app.html",
+      sourcePath: "proto/app.html",
+      route: "/proto/app.html",
+      ...over,
+    });
+  }
+
+  function seed(rows: OverlayComment[]): void {
+    localStorage.setItem(STORE_KEY, JSON.stringify(rows));
+  }
+
+  function pinsIn(shadow: ShadowRoot): Element[] {
+    return Array.from(shadow.querySelectorAll(".co-pin:not(.co-ghost)"));
+  }
+
+  /** Closes the dialog the way a prototype does: one attribute, in place. */
+  function close(): void {
+    (document.getElementById("settings") as HTMLElement).style.display = "none";
+  }
+
+  function open(): void {
+    (document.getElementById("settings") as HTMLElement).style.display = "block";
+  }
+
+  /** Long enough for the attribute watcher's own interval to have passed. */
+  const settle = () => new Promise((done) => setTimeout(done, 220));
+
+  it("records what a pin was dropped inside", () => {
+    mountProto();
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector("#go");
+    leaveComment(shadow, { x: 40, y: 40 }, "This button is too final.");
+
+    // The button carries no name of its own worth using -- it has an id, so
+    // it is its own context, which is as true and as useful: hiding the
+    // dialog hides it, since the question walks the ancestors.
+    expect(stored()[0].context).toBe("#go");
+    // And anchored to the button, which the prose vocabulary could not do.
+    expect(stored()[0].block).toBeTruthy();
+    expect(stored()[0].blockText).toBe("Delete");
+  });
+
+  it("takes the nearest thing that can be named, not the nearest element", () => {
+    mountProto(
+      `<div id="drawer"><div class="rail"><span>Filters</span>` +
+        `<button>Clear</button></div></div>`,
+    );
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector(".rail span");
+    leaveComment(shadow, { x: 10, y: 10 }, "Nothing says what this does.");
+
+    // `span` and `div.rail` name nothing, so the context is the drawer --
+    // which is the thing that opens and closes.
+    expect(stored()[0].context).toBe("#drawer");
+  });
+
+  it("draws a pin left in a dialog while the dialog is open", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    expect(pinsIn(shadow)).toHaveLength(1);
+  });
+
+  it("takes the pin away when the dialog is hidden where it stands", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    close();
+    mode(shadow, "review");
+    expect(pinsIn(shadow)).toHaveLength(0);
+  });
+
+  it("takes the pin away when the dialog is removed from the document", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    const dialog = document.getElementById("settings") as HTMLElement;
+    dialog.parentNode?.removeChild(dialog);
+    mode(shadow, "review");
+    expect(pinsIn(shadow)).toHaveLength(0);
+  });
+
+  // The case the bug report was about, end to end: the pin was anchored to a
+  // block *inside* the panel, and the panel was unmounted rather than
+  // hidden. A missing block reads exactly like a block whose text changed,
+  // which is a case the overlay deliberately keeps the pin for -- so the
+  // point it was dropped on was drawn, over whatever the panel had covered.
+  it("takes it away even when its own block went with the panel", () => {
+    mountProto();
+    const shadow = run();
+    document.elementFromPoint = () => document.querySelector("#blurb");
+    leaveComment(shadow, { x: 40, y: 40 }, "Say what is deleted.");
+    expect(pinsIn(shadow)).toHaveLength(1);
+
+    const dialog = document.getElementById("settings") as HTMLElement;
+    dialog.parentNode?.removeChild(dialog);
+    mode(shadow, "review");
+    expect(pinsIn(shadow)).toHaveLength(0);
+  });
+
+  it("brings it back when the dialog opens again", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    close();
+    mode(shadow, "review");
+    expect(pinsIn(shadow)).toHaveLength(0);
+
+    open();
+    mode(shadow, "view");
+    expect(pinsIn(shadow)).toHaveLength(1);
+  });
+
+  it("leaves a pin on the screen behind alone while a dialog comes and goes", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#screen", block: null, text: "On the page." })]);
+    const shadow = run();
+    close();
+    mode(shadow, "review");
+    expect(pinsIn(shadow)).toHaveLength(1);
+  });
+
+  // A review written before any of this existed, or on a page where nothing
+  // above the point could be named. Both mean the same thing and must keep
+  // the behaviour they had.
+  it("draws a comment that names no context, as it always did", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: null, block: null, x: 10, y: 10 })]);
+    const shadow = run();
+    close();
+    mode(shadow, "review");
+    expect(pinsIn(shadow)).toHaveLength(1);
+  });
+
+  it("measures from the dialog's own box when the block inside it is gone", () => {
+    mountProto();
+    seed([
+      onProto({
+        id: "a",
+        // An anchor that is not in the document: the panel was re-rendered.
+        block: "gone",
+        context: "#settings",
+        // The point it was dropped at, which is a point on the page rather
+        // than a point in the dialog -- wrong the moment anything scrolls.
+        x: 11,
+        y: 12,
+        cx: 0.5,
+        cy: 0.25,
+      }),
+    ]);
+    const shadow = run();
+    boxed("#settings", { left: 100, top: 200, width: 400, height: 80 });
+    mode(shadow, "review");
+
+    const pin = pinsIn(shadow)[0] as HTMLElement;
+    expect(pin.style.left).toBe("300px");
+    expect(pin.style.top).toBe("220px");
+  });
+
+  it("closes the card when the panel it is about is dismissed", async () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    click(pinsIn(shadow)[0]);
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(false);
+
+    close();
+    await settle();
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(true);
+  });
+
+  // The other way round, which the latch exists for: a comment opened on
+  // purpose from the panel, in something that is already shut. There is no
+  // pin to sit beside and the card is the only way to read it, so it stays.
+  it("keeps the card open when it was opened with the panel already shut", async () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    close();
+    mode(shadow, "review");
+    click(shadow.querySelector('.co-row[data-comment="a"]'));
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(false);
+
+    await settle();
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("says in the panel which shut thing a pinless comment is inside", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    close();
+    mode(shadow, "review");
+
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toBe(
+      "settings (closed)",
+    );
+  });
+
+  // And says nothing while it is open, which is the whole of why the label
+  // is conditional: a context is the nearest ancestor that could be named,
+  // so on most pages that is a wrapper around everything -- true, useless,
+  // and otherwise on every row in the list.
+  it("says nothing about a context that is open", () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    mode(shadow, "review");
+    expect(shadow.querySelector(".co-row-screen")).toBeNull();
+  });
+
+  it("notices on its own that a panel closed, without being clicked", async () => {
+    mountProto();
+    seed([onProto({ id: "a", context: "#settings", block: null, text: "In here." })]);
+    const shadow = run();
+    expect(pinsIn(shadow)).toHaveLength(1);
+
+    close();
+    await settle();
+    expect(pinsIn(shadow)).toHaveLength(0);
+  });
+
+  /*
+   * The defect a browser found and jsdom could not, because it takes a
+   * second panel opening to cause it. Two dialogs as siblings of the screen
+   * are a run of same-tag siblings with one of them shown, so they read as
+   * a deck; open the second one and two are shown, the run stops looking
+   * like a deck, the view key goes empty, and a pin on a panel that is
+   * plainly open in front of the reviewer disappeared.
+   */
+  it("keeps a pin on an open panel when a second panel opens as well", async () => {
+    mountProto(
+      `<main id="screen"><p>The page.</p></main>` +
+        `<div id="left" aria-label="Filters"><p>Filter by date.</p></div>` +
+        `<div id="right" aria-label="Details" style="display:none">` +
+        `<p>Account details.</p></div>`,
+    );
+    seed([
+      onProto({ id: "a", view: "#left", context: "#left", block: null, text: "Here." }),
+    ]);
+    const shadow = run();
+    expect(pinsIn(shadow)).toHaveLength(1);
+
+    // The second panel opens. Nothing about the first one changed.
+    // Awaited rather than forced, so the overlay re-asks which page is up
+    // the way it does on a real page: that is what moved the key.
+    (document.getElementById("right") as HTMLElement).style.display = "block";
+    await settle();
+    expect(pinsIn(shadow)).toHaveLength(1);
+  });
+
+  // And the no stays a no on the evidence that matters: the element the view
+  // names is in the document and is not on screen.
+  it("still hides a pin whose panel is the one that is shut", () => {
+    mountProto(
+      `<main id="screen"><p>The page.</p></main>` +
+        `<div id="left"><p>Filter by date.</p></div>` +
+        `<div id="right" style="display:none"><p>Account details.</p></div>`,
+    );
+    seed([
+      onProto({ id: "a", view: "#right", context: null, block: null, text: "Here." }),
+    ]);
+    const shadow = run();
+    expect(pinsIn(shadow)).toHaveLength(0);
+  });
+
+  /*
+   * A dialog is placed against the window, not the page, so it is the one
+   * thing on a prototype whose document position changes when nothing about
+   * it changes. The pins layer scrolls with the document, which is why
+   * nothing here listened to scroll; a pin on a modal therefore walked off
+   * it by exactly the scroll distance. Measured in a browser first -- jsdom
+   * has no layout to make it happen on its own -- and held here by standing
+   * the dialog's box up and moving it the way a scroll does.
+   */
+  it("re-measures a pin on something fixed as the page scrolls", async () => {
+    mountProto(
+      `<main id="screen"><p>A long page.</p></main>` +
+        `<div id="settings" style="position:fixed">` +
+        `<p id="blurb">In the dialog.</p></div>`,
+    );
+    seed([
+      onProto({ id: "a", context: "#settings", block: null, cx: 0, cy: 0, x: 0, y: 0 }),
+    ]);
+    const shadow = run();
+
+    let top = 0;
+    const dialog = document.getElementById("settings") as HTMLElement;
+    dialog.getBoundingClientRect = () =>
+      ({ left: 0, top, right: 400, bottom: top + 80, width: 400, height: 80 }) as DOMRect;
+
+    mode(shadow, "review");
+    expect((pinsIn(shadow)[0] as HTMLElement).style.top).toBe("0px");
+
+    // The window scrolled down, so the dialog -- which did not move in the
+    // window -- is 500px further down the page than it was.
+    top = 500;
+    window.dispatchEvent(new Event("scroll"));
+    await new Promise((done) => requestAnimationFrame(() => done(null)));
+    await new Promise((done) => requestAnimationFrame(() => done(null)));
+
+    expect((pinsIn(shadow)[0] as HTMLElement).style.top).toBe("500px");
+  });
+
+  it("keeps two comments in two panels apart", () => {
+    mountProto(
+      `<main id="screen"><p>The page.</p></main>` +
+        `<div id="left" aria-label="Filters"><p>Filter by date.</p></div>` +
+        `<div id="right" aria-label="Details" style="display:none">` +
+        `<p>Account details.</p></div>`,
+    );
+    seed([
+      onProto({ id: "a", context: "#left", block: null, text: "In the filters." }),
+      onProto({ id: "b", context: "#right", block: null, text: "In the details." }),
+    ]);
+    const shadow = run();
+
+    const drawn = pinsIn(shadow).map((pin) => pin.getAttribute("data-comment"));
+    expect(drawn).toEqual(["a"]);
   });
 });

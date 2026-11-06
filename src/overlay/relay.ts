@@ -408,6 +408,12 @@ export function issueDraft(
   // above is the same line for all of them and this is what separates two
   // issues filed from two slides.
   if (comment.view) footer.push({ lead: "View", text: comment.view, code: true });
+  // What it was left inside, where that is a different thing from the page
+  // of the deck it was on: whoever picks the issue up has to open the dialog
+  // to see what the comment is about.
+  if (comment.context && comment.context !== comment.view) {
+    footer.push({ lead: "Inside", text: comment.context, code: true });
+  }
   // Only where it has nowhere else to go. On a tracker with labels the
   // priority is one, which is something a board can filter on; saying it
   // twice would only be a line to read past.

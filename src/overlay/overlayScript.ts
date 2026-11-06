@@ -119,7 +119,7 @@ export const OVERLAY_SCRIPT = `(function () {
   var DEEP_PARAM = "osp-comment";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 9;
+  var SCHEMA = 10;
   /*
    * Whether this page's blocks are ours to mark, and keep marking.
    *
@@ -222,9 +222,44 @@ export const OVERLAY_SCRIPT = `(function () {
     return hash.toString(36);
   }
 
+  /*
+   * What a pin may anchor to on a page the build did not render.
+   *
+   * The first line is \`BLOCK_SELECTOR\` from \`anchor.ts\`, character for
+   * character, and has to stay that way: a note's page is stamped by that
+   * copy and this one, and an anchor stored by either must resolve in the
+   * other.
+   *
+   * The second line is the part a prototype needs, and it exists because
+   * the first line is a vocabulary for prose. A hand-written page is
+   * paragraphs and headings; an application prototype is buttons, fields,
+   * cards, a dialog and a nav, and not one of those is a \`p\`. So a pin
+   * dropped on a prototype found no block to hold on to -- \`nearestBlock\`
+   * walked up to the body and gave up -- and the comment was stored as a
+   * pair of document coordinates with nothing attached to it. A point
+   * cannot be hidden with the thing it was about, because a point is not
+   * about anything, which is how a comment on a dialog stayed on screen
+   * after the dialog closed.
+   *
+   * Only ever added to, never reordered, and the runtime side only: a
+   * block's id is a hash of its tag and its text, so a tag that was not
+   * stamped before cannot change the id of one that was, and duplicate
+   * numbering counts per hash, so it cannot renumber one either. That is
+   * what makes widening this safe for reviews already written.
+   *
+   * \`div\` and \`span\` are deliberately absent. They name nothing, they nest
+   * without limit, and stamping them would hash most of the document
+   * several times over for anchors that move whenever a wrapper is added.
+   * \`[role]\` covers the ones that do say what they are.
+   */
+  var PROSE_BLOCKS =
+    "p, h1, h2, h3, h4, h5, h6, li, blockquote, table, figure, pre, .callout";
+  var UI_BLOCKS =
+    "main, header, footer, nav, aside, section, article, dialog, form, " +
+    "fieldset, details, summary, button, a, label, td, th, [role]";
+
   function stampBlocks() {
-    var selector =
-      "p, h1, h2, h3, h4, h5, h6, li, blockquote, table, figure, pre, .callout";
+    var selector = PROSE_BLOCKS + ", " + UI_BLOCKS;
     var nodes = document.querySelectorAll(selector);
     var seen = {};
     for (var i = 0; i < nodes.length; i++) {
@@ -348,6 +383,8 @@ export const OVERLAY_SCRIPT = `(function () {
    * otherwise keep the question open forever.
    */
   var sawLayout = false;
+  /** Latched by \`showing\` when a pin's anchor turns out not to scroll. */
+  var sawFixed = false;
   function hasLayout() {
     if (sawLayout) return true;
     var body = document.body;
@@ -407,8 +444,36 @@ export const OVERLAY_SCRIPT = `(function () {
   function showing(el) {
     for (var node = el; node && node.nodeType === 1; node = node.parentNode) {
       if (!shownSelf(node)) return false;
+      if (!sawFixed && heldToViewport(node)) sawFixed = true;
     }
     return true;
+  }
+
+  /*
+   * Whether anything a pin hangs from is held to the viewport rather than to
+   * the page.
+   *
+   * The pins are drawn in document space, and the comment on the listener
+   * for reflow says positions are "already scroll-invariant" because the
+   * layer scrolls with the document. That is true of a paragraph and false
+   * of a dialog: \`position: fixed\` means the element does not move in the
+   * window and therefore *does* move on the page, so a pin on a modal
+   * stayed where the page said while the modal stayed where the window said,
+   * and the two came apart by exactly the scroll distance. Measured in a
+   * browser: a dialog sitting still at 189px while its two pins went from
+   * 302 and 300 down to -139 and -141.
+   *
+   * Noticed here because this walk is already happening -- \`showing\` reads
+   * the computed style of every ancestor of every pin's anchor -- and
+   * latched, so the question is asked until the answer is yes and never
+   * again. A page with nothing fixed on it never pays for the scroll
+   * listener below, which is most pages the overlay is on.
+   */
+  function heldToViewport(node) {
+    if (!window.getComputedStyle) return false;
+    var style = window.getComputedStyle(node);
+    if (!style) return false;
+    return style.position === "fixed" || style.position === "sticky";
   }
 
   /*
@@ -570,7 +635,209 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function onThisView(comment) {
     if (!comment.view) return true;
-    return comment.view === viewKey;
+    if (comment.view === viewKey) return true;
+    return viewPagesShowing(comment.view);
+  }
+
+  /*
+   * Whether the pages a view key names are on screen, asked of the document
+   * rather than of the key.
+   *
+   * The key is a comparison of *sets*: which pages are up, all of them, in
+   * one string. That is the right thing for turning a deck and the wrong
+   * thing for deciding whether one pin belongs here, and a prototype is
+   * where the difference shows. Two dialogs as siblings of the screen are a
+   * run of same-tag siblings with one of them shown, so they read as a deck
+   * -- and the moment the reviewer opens the second one, two are shown, the
+   * run stops looking like a deck, the key goes empty, and a pin on a panel
+   * that is plainly open in front of them disappears. Found in a browser;
+   * jsdom cannot show it, since it was the second dialog opening that did it.
+   *
+   * So a key that does not match is asked the narrower question: is the
+   * element each part of it names in the document and on screen? Only ever
+   * turning a no into a yes, and only on the evidence of the element itself.
+   *
+   * A positional part -- \`section:1/7\`, a slide nobody named -- cannot be
+   * resolved on its own, which is as it should be: the whole reason that
+   * form carries the tag and the count is that an index is not an identity.
+   * Those keep the comparison they had.
+   */
+  function viewPagesShowing(key) {
+    var parts = String(key).split(">");
+    for (var i = 0; i < parts.length; i++) {
+      if (!contextNode(parts[i])) return false;
+    }
+    return true;
+  }
+
+  /* --- what a comment is inside ------------------------------------- */
+
+  /*
+   * The thing a pin was dropped inside, which is what it shows and hides
+   * with.
+   *
+   * \`view\` above answers this for a deck, where the pages are siblings and
+   * exactly one of them is up. A prototype is not shaped like that. A
+   * dialog, a side panel, a menu, a sheet, a toast: each one is shown *over*
+   * the screen rather than instead of it, so two things are laid out at once
+   * and nothing in the deck signature fires. Then it closes, and it closes
+   * in one of two ways -- hidden where it stands, or taken out of the
+   * document altogether -- and a pin left in it used to survive both:
+   *
+   *   - A pin anchored to a block inside it was already handled for the
+   *     first way, since \`showing\` walks the ancestors. The second way fell
+   *     through to the point the pin was dropped on, because a block that is
+   *     not in the document reads exactly like a block whose text has
+   *     changed, and that is a case we deliberately keep the pin for.
+   *   - A pin on a *control* had no anchor at all, which was the larger
+   *     half: the vocabulary we stamped was prose, and a dialog is buttons.
+   *     \`UI_BLOCKS\` is the other half of this fix.
+   *
+   * So a comment records what it was inside as well as what it was on: the
+   * nearest ancestor that can be named without counting siblings -- an
+   * \`id\`, or one of the attributes a generator writes. Named rather than
+   * positional because a context has to be found again in a document that
+   * has been re-rendered since, where an index is a different element and a
+   * name is the same one.
+   *
+   * The rule that follows is the whole feature, and it is one line in
+   * \`spot\`: **a pin draws only while its context is in the document and on
+   * screen.** Hidden in place, hidden three levels up, or unmounted -- all
+   * three are "not showing" to the same function.
+   *
+   * It is also what makes the stored point meaningful again. A point in
+   * document space is a claim about where the page was, and a dialog is
+   * centred in the viewport rather than placed on the page -- so the
+   * coordinates of a pin in one are wrong as soon as anything scrolls. The
+   * fraction across its context is not, which is \`cx\`/\`cy\`, and it is the
+   * same reasoning as \`rx\`/\`ry\` against a block one level up.
+   *
+   * A comment with no context behaves exactly as it did: either nothing
+   * above it could be named, or it was written before this existed.
+   */
+
+  /*
+   * How far up to look. A context is a dialog or a panel, which is a handful
+   * of levels above whatever was clicked; walking to the root of a deeply
+   * wrapped application would find the outermost frame every time, which
+   * names a context that can never close and is therefore no context at all.
+   */
+  var CONTEXT_LIMIT = 12;
+
+  function contextKeyOf(el) {
+    if (el.id) return "#" + el.id;
+    for (var i = 0; i < VIEW_ATTRS.length; i++) {
+      var value = el.getAttribute(VIEW_ATTRS[i]);
+      if (value) return VIEW_ATTRS[i] + "=" + value;
+    }
+    return "";
+  }
+
+  /*
+   * What a point is inside, as a key, or null for a point inside nothing
+   * that can be named.
+   *
+   * Recorded only on a page stamped at runtime, like \`route\` and \`view\`:
+   * a page the build rendered is one document that is all on screen at once,
+   * and there is nothing in it that opens and closes.
+   */
+  function contextOf(node) {
+    if (!STAMP_AT_RUNTIME) return null;
+    var up = 0;
+    for (var el = node; el && el.nodeType === 1; el = el.parentNode) {
+      if (el === document.body || el === document.documentElement) break;
+      if (++up > CONTEXT_LIMIT) break;
+      var key = contextKeyOf(el);
+      if (key) return key;
+    }
+    return null;
+  }
+
+  /*
+   * The element a context key names and that is on screen now, or null.
+   *
+   * Matched by reading the attribute rather than by building a selector
+   * from the key: a value may hold a quote, a bracket or a space, and
+   * escaping somebody else's attribute value into CSS correctly is a job
+   * with no upside here.
+   *
+   * Where a key names more than one element -- two panels with the same
+   * \`aria-label\`, which is somebody else's bug and not ours to fail on --
+   * the one that is showing wins. Erring that way on purpose: a pin drawn
+   * for a context that is open somewhere is the behaviour this had before,
+   * and a pin wrongly hidden is a comment the reviewer cannot find.
+   */
+  function contextNode(key) {
+    if (!key) return null;
+    var text = String(key);
+    var nodes = [];
+
+    if (text.charAt(0) === "#") {
+      var one = document.getElementById(text.slice(1));
+      if (one) nodes.push(one);
+    } else {
+      var eq = text.indexOf("=");
+      if (eq === -1) return null;
+      var name = text.slice(0, eq);
+      var value = text.slice(eq + 1);
+      var found = document.querySelectorAll("[" + name + "]");
+      for (var i = 0; i < found.length; i++) {
+        if (found[i].getAttribute(name) === value) nodes.push(found[i]);
+      }
+    }
+
+    for (var j = 0; j < nodes.length; j++) if (showing(nodes[j])) return nodes[j];
+    return null;
+  }
+
+  /** Whether a comment's context is on screen, or it has none to be in. */
+  function contextOpen(comment) {
+    if (!comment.context) return true;
+    return !!contextNode(comment.context);
+  }
+
+  /** The one case a reviewer needs told: it is in something, and it is shut. */
+  function contextClosed(comment) {
+    return !!comment.context && !contextOpen(comment);
+  }
+
+  /*
+   * Which contexts are open, as a key, so a change can be noticed.
+   *
+   * The same shape as \`viewKey\` and for the same reason: a dialog opening
+   * is a change to what the overlay should be drawing, and nothing in the
+   * document tells us so directly. Only the contexts comments were actually
+   * left in are asked about, so a page with no comments in anything costs
+   * nothing per check.
+   */
+  function contextSignature() {
+    var rows = mine();
+    var keys = [];
+    var seenKey = Object.create(null);
+
+    for (var i = 0; i < rows.length; i++) {
+      var key = rows[i].context;
+      if (!key || seenKey[key]) continue;
+      seenKey[key] = true;
+      keys.push(key);
+    }
+
+    keys.sort();
+    var out = [];
+    for (var k = 0; k < keys.length; k++) {
+      out.push(keys[k] + (contextNode(keys[k]) ? "+" : "-"));
+    }
+    return out.join(">");
+  }
+
+  var contextState = "";
+
+  /** True when something a comment was left in opened or closed. */
+  function checkContexts() {
+    var next = contextSignature();
+    if (next === contextState) return false;
+    contextState = next;
+    return true;
   }
 
   /*
@@ -1744,12 +2011,16 @@ export const OVERLAY_SCRIPT = `(function () {
    * the document around it does not move, and nothing is painted between
    * the two lines.
    */
-  function blockAt(clientX, clientY) {
+  function hitAt(clientX, clientY) {
     var saved = host.style.display;
     host.style.display = "none";
     var node = document.elementFromPoint(clientX, clientY);
     host.style.display = saved;
-    return nearestBlock(node);
+    return node;
+  }
+
+  function blockAt(clientX, clientY) {
+    return nearestBlock(hitAt(clientX, clientY));
   }
 
   /* --- the block under the cursor ----------------------------------- */
@@ -1817,6 +2088,18 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function spot(comment) {
     var base = host.getBoundingClientRect();
+
+    /*
+     * Inside something that is not on screen: a dialog that has been
+     * dismissed, a side panel that has slid shut, a menu that has closed --
+     * whether it was hidden where it stood or taken out of the document
+     * altogether. There is nowhere honest to draw this, and drawing it
+     * anyway is the bug: a comment about a dialog stayed on the page after
+     * the dialog was gone, over whatever the dialog had been covering. The
+     * panel still lists it, under the name of the thing it is in.
+     */
+    if (!contextOpen(comment)) return null;
+
     var target = comment.block ? blocks[comment.block] : null;
 
     /*
@@ -1867,7 +2150,30 @@ export const OVERLAY_SCRIPT = `(function () {
      * written for -- a pin that stays put while a counter it was left on
      * ticks.
      */
-    if (comment.view && comment.view !== viewKey) return null;
+    if (!onThisView(comment)) return null;
+
+    /*
+     * Measured off the context instead, where the pin has one and the block
+     * it was on is gone.
+     *
+     * This is the case a stored point is worst at. A dialog is placed
+     * against the viewport rather than on the page, so the document
+     * coordinates of a pin inside one describe where the window happened to
+     * be scrolled to when it was dropped -- and a prototype re-renders the
+     * contents of a panel constantly, so a pin in one reaches here often.
+     * The fraction across the context survives all of that, exactly as
+     * \`rx\`/\`ry\` do for a block.
+     */
+    if (comment.context && typeof comment.cx === "number") {
+      var holder = contextNode(comment.context);
+      if (holder) {
+        var area = holder.getBoundingClientRect();
+        return {
+          left: area.left - base.left + comment.cx * area.width,
+          top: area.top - base.top + comment.cy * area.height,
+        };
+      }
+    }
 
     return { left: comment.x, top: comment.y };
   }
@@ -2077,7 +2383,29 @@ export const OVERLAY_SCRIPT = `(function () {
      * deck opened with a \`?\` on the end of its URL labelled every comment
      * in it with that query instead of the slide it was left on.
      */
-    if (comment.view) return viewLabel(comment.view);
+    /*
+     * The deck's page, then -- only while it is shut -- the thing on the
+     * page the comment is inside.
+     *
+     * The context earns a place here for one reason: it is the only answer
+     * to "why is there no pin for this row". A closed dialog's comments are
+     * listed like any others and draw nothing, and without the name of the
+     * dialog beside them that reads as the overlay having lost them.
+     *
+     * And only while it is shut, which is the other half. A context is the
+     * nearest ancestor that could be named, so on a page where everything
+     * sits in one wrapper that is the wrapper -- true, useless, and on
+     * every row. Naming it only when it is closed says the one thing the
+     * reviewer cannot see for themselves, and says nothing the rest of the
+     * time. \`contextOpen\` is read live rather than stored, and the panel is
+     * redrawn when the answer changes -- see \`contextsTurned\`.
+     */
+    var where = [];
+    if (comment.view) where.push(viewLabel(comment.view));
+    if (contextClosed(comment)) {
+      where.push(viewLabel(comment.context) + " (closed)");
+    }
+    if (where.length) return where.join(" / ");
 
     // A router's own address, which for a page that is not a deck is the
     // one thing that separates two threads on it.
@@ -2425,9 +2753,13 @@ export const OVERLAY_SCRIPT = `(function () {
         // tooltip cannot describe a different thing than the row shows.
         at.setAttribute(
           "title",
-          comment.view && screen === viewLabel(comment.view)
-            ? "Left on this page of the deck: " + viewLabel(comment.view)
-            : "Left on this screen: " + comment.route,
+          contextClosed(comment)
+            ? "Left inside " +
+              viewLabel(comment.context) +
+              ", which is closed -- open it to see the pin"
+            : comment.view && screen === viewLabel(comment.view)
+              ? "Left on this page of the deck: " + viewLabel(comment.view)
+              : "Left on this screen: " + comment.route,
         );
         where.appendChild(at);
       }
@@ -2557,12 +2889,24 @@ export const OVERLAY_SCRIPT = `(function () {
   /* --- the popup ---------------------------------------------------- */
 
   var editing = null;
+  var selectedContextOpen = true;
 
   function openPopup(id) {
     var comment = byId(id);
     if (!comment) return;
     selected = id;
     editing = null;
+    /*
+     * Whether the thing this comment is in was open at the moment the card
+     * was opened, so that the card can follow it shut.
+     *
+     * A latch rather than a live question, because the two cases have to be
+     * told apart: a dialog dismissed while its comment is being read, which
+     * should take the card with it, and a comment deliberately opened from
+     * the panel while its dialog is closed, which should stay open and be
+     * readable. Both look identical to a check made after the fact.
+     */
+    selectedContextOpen = contextOpen(comment);
     // A refusal belongs to one attempt. Opening a popup starts again.
     relayError = null;
     renderPopup();
@@ -3051,7 +3395,15 @@ export const OVERLAY_SCRIPT = `(function () {
      * no pin to scroll to, and nothing turned the deck. The pin the
      * reviewer had just clicked was on another page the whole time.
      */
-    if (next.view && next.view !== viewKey) {
+    /*
+     * The same question the pin is drawn by, so the two cannot disagree. It
+     * used to be a comparison of the key, which on a prototype meant that
+     * clicking a comment in a panel the reviewer could see -- open, with no
+     * pin on it, because of the bug above -- asked the overlay to *turn* to
+     * it, and a turn swaps visibility between siblings. On a page whose
+     * siblings are two dialogs that is state nobody asked for.
+     */
+    if (!onThisView(next)) {
       turnToDeckPage(next);
       return;
     }
@@ -3374,9 +3726,29 @@ export const OVERLAY_SCRIPT = `(function () {
         ry: null,
         text: "",
         node: null,
+        context: null,
+        cx: null,
+        cy: null,
       };
 
-      var target = blockAt(clientX, clientY);
+      /*
+       * Taken from what was under the cursor rather than from the block,
+       * and the two differ exactly where it matters. A point on a dialog's
+       * own padding is inside the dialog and on no block at all, which is
+       * the pin that used to have nothing holding it.
+       */
+      var hit = hitAt(clientX, clientY);
+      point.context = contextOf(hit);
+      if (point.context) {
+        var holder = contextNode(point.context);
+        if (holder) {
+          var area = holder.getBoundingClientRect();
+          point.cx = area.width ? (clientX - area.left) / area.width : 0;
+          point.cy = area.height ? (clientY - area.top) / area.height : 0;
+        }
+      }
+
+      var target = nearestBlock(hit);
       if (target) {
         var box = target.getBoundingClientRect();
         point.block = target.getAttribute(BLOCK_ATTR);
@@ -3456,10 +3828,13 @@ export const OVERLAY_SCRIPT = `(function () {
       blockText: point.text,
       route: currentRoute(),
       view: viewKey || null,
+      context: point.context,
       x: point.x,
       y: point.y,
       rx: point.rx,
       ry: point.ry,
+      cx: point.cx,
+      cy: point.cy,
       author: author || "Anonymous",
       text: text,
       createdAt: new Date().toISOString(),
@@ -4214,6 +4589,10 @@ export const OVERLAY_SCRIPT = `(function () {
 
   function render() {
     blocks = blockIndex();
+    // Latched here rather than only in the watchers: a comment just written
+    // may be the first one in some dialog, and the signature has to know
+    // about it before the next tick calls that a change.
+    checkContexts();
     renderPins();
     renderPanel();
     if (selected && byId(selected)) renderPopup();
@@ -4240,6 +4619,23 @@ export const OVERLAY_SCRIPT = `(function () {
   // the document, so they are already scroll-invariant. Reflow is what moves
   // a block relative to the page.
   window.addEventListener("resize", reposition, { passive: true });
+
+  /*
+   * Except for the pins that are not scroll-invariant, which is the ones
+   * anchored inside something \`fixed\` or \`sticky\` -- a modal, a drawer, a
+   * bar that stays. Those move on the page precisely because they do not
+   * move in the window, so they have to be re-measured as it scrolls. See
+   * \`heldToViewport\`: until a pin's anchor turns out to be one of these,
+   * this listener does nothing at all, and \`reposition\` is a frame apart
+   * from itself whatever calls it.
+   */
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (sawFixed) reposition();
+    },
+    { passive: true },
+  );
   if (window.ResizeObserver) {
     new ResizeObserver(reposition).observe(document.body);
   }
@@ -4293,6 +4689,7 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function redrawForView() {
     blocks = blockIndex();
+    checkContexts();
     renderPins();
     renderPanel();
   }
@@ -4300,6 +4697,36 @@ export const OVERLAY_SCRIPT = `(function () {
   function viewTurned() {
     if (!checkView()) return false;
     redrawForView();
+    return true;
+  }
+
+  /*
+   * Redrawing when a dialog, a panel or a menu opens or closes.
+   *
+   * The sibling of \`viewTurned\`, for the half of a prototype the deck
+   * signature cannot see. Nothing in the document announces this either, so
+   * it is noticed the same way: a key naming which of the contexts
+   * comments were left in are on screen, compared with the last one.
+   *
+   * The card goes with the pin. A reviewer reading a comment about a dialog
+   * that is then dismissed is left holding a card pointing at nothing, and
+   * the honest thing is for it to close with the thing it was about -- but
+   * only when it was open to begin with, which is what the latch in
+   * \`openPopup\` is for.
+   */
+  function contextsTurned() {
+    if (!checkContexts()) return false;
+
+    blocks = blockIndex();
+    var open = selected ? byId(selected) : null;
+    if (open && selectedContextOpen && !contextOpen(open)) {
+      // Draws the pins and the panel itself.
+      closePopup();
+      return true;
+    }
+
+    renderPins();
+    renderPanel();
     return true;
   }
 
@@ -4335,7 +4762,7 @@ export const OVERLAY_SCRIPT = `(function () {
         stampBlocks();
         blocks = blockIndex();
         // A page turn that replaced the nodes rather than restyling them.
-        if (!viewTurned()) reposition();
+        if (!viewTurned() && !contextsTurned()) reposition();
       }, 150);
     });
     watcher.observe(document.body, {
@@ -4366,7 +4793,15 @@ export const OVERLAY_SCRIPT = `(function () {
       if (recheck !== null) return;
       recheck = window.setTimeout(function () {
         recheck = null;
-        viewTurned();
+        /*
+         * \`reposition\` at the end, which the deck half of this never
+         * needed. A pin inside something that hides in place is suppressed
+         * by \`showing\` whether or not anything can name what it is in, and
+         * without a redraw it is suppressed only the next time something
+         * else repaints. It costs one pass over the pins per interval on a
+         * page that animates, which is what that function is for.
+         */
+        if (!viewTurned() && !contextsTurned()) reposition();
       }, 120);
     });
     viewWatcher.observe(document.body, {

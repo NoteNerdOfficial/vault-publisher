@@ -31,11 +31,12 @@
  * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
  * `external` and the document's `withdrawn` list. 6 renamed the middle
  * priority from `normal` to `medium`. 7 added `route`. 8 added `imported`. 9 added `view`.
+ * 10 added `context` and the point within it, `cx` and `cy`.
  * An older file still reads: every added field is optional and defaults to
  * what a comment without it meant, and a `normal` priority is read as
  * `medium` by every reader of one.
  */
-export const OVERLAY_SCHEMA_VERSION = 9;
+export const OVERLAY_SCHEMA_VERSION = 10;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
@@ -164,12 +165,50 @@ export interface OverlayComment {
    * field existed. Both mean "show this wherever its page is shown".
    */
   view: string | null;
+  /**
+   * What the pin was dropped *inside*, or null for a point inside nothing
+   * that can be named.
+   *
+   * The third of this group, and the one for a prototype rather than a deck.
+   * A dialog, a side panel, a menu or a sheet is shown *over* a screen
+   * instead of instead of it, so `view` cannot see it -- two things are laid
+   * out at once, which is not the one-of-many a deck turns on -- and when it
+   * closes, a pin left in it has to close with it. Before this, one did not:
+   * a comment on a dismissed dialog stayed on the page, over whatever the
+   * dialog had been covering.
+   *
+   * The key names the nearest ancestor that can be identified without
+   * counting siblings: `#settings`, or `aria-label=Filters`. Named rather
+   * than positional because it is looked up again in a document that has
+   * been re-rendered since, where an index is a different element and a name
+   * is the same one. The rule it carries is simple -- a pin draws only while
+   * its context is in the document and on screen -- and it covers a context
+   * hidden in place, one hidden by something above it, and one unmounted
+   * entirely, because all three are "not showing" to the same question.
+   *
+   * Null for a page the build rendered, which is one document with nothing
+   * in it that opens and closes, and null in a review written before this
+   * field existed. Both mean "show this wherever its page is shown".
+   */
+  context: string | null;
   /** Drop point in document space, for a pin with no block to hang from. */
   x: number;
   y: number;
   /** The same point as a fraction of the block's box, or null without one. */
   rx: number | null;
   ry: number | null;
+  /**
+   * And as a fraction of the context's box, or null without one.
+   *
+   * What `rx`/`ry` are to a block, one level out. It matters most for
+   * exactly the pins `context` exists for: a dialog is placed against the
+   * viewport rather than on the page, so the document coordinates of a pin
+   * inside one describe where the window happened to be scrolled to when it
+   * was dropped. The fraction across the dialog survives a scroll, a resize
+   * and the panel's contents being re-rendered under it.
+   */
+  cx: number | null;
+  cy: number | null;
   author: string;
   text: string;
   /** ISO 8601. */

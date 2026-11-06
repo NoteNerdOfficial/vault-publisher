@@ -126,6 +126,9 @@ function readComment(value: unknown, index: number): OverlayComment {
     // And which page of a single-file deck, for the screens a URL cannot
     // tell apart. Same rule, same meaning when it is absent.
     view: typeof row.view === "string" && row.view ? row.view : null,
+    // And what it was dropped inside -- a dialog, a panel, a menu -- which
+    // is what decides whether its pin is drawn at all. Same rule again.
+    context: typeof row.context === "string" && row.context ? row.context : null,
     blockText:
       typeof row.blockText === "string"
         ? row.blockText.slice(0, BLOCK_TEXT_LIMIT)
@@ -137,6 +140,8 @@ function readComment(value: unknown, index: number): OverlayComment {
     y: num(row.y),
     rx: typeof row.rx === "number" ? row.rx : null,
     ry: typeof row.ry === "number" ? row.ry : null,
+    cx: typeof row.cx === "number" ? row.cx : null,
+    cy: typeof row.cy === "number" ? row.cy : null,
     author: typeof row.author === "string" && row.author ? row.author : "Anonymous",
     text: row.text,
     createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
