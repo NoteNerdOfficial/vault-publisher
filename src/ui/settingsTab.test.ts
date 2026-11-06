@@ -111,6 +111,10 @@ function app(files: string[] = []): App {
   return {
     vault: {
       getMarkdownFiles: () => [],
+      // The same list, as files: the whole-folder row counts what a path
+      // holds, and a stub without this would make that row throw rather
+      // than report.
+      getFiles: () => files.map((path) => ({ path })),
       // The custom stylesheet is looked for through the adapter, so that one
       // kept in a hidden folder is found as readily as one beside the notes.
       adapter: { exists: async (path: string) => files.includes(path) },
@@ -328,6 +332,78 @@ describe("excluded folders", () => {
   // a folder added tomorrow is published unless somebody remembers.
   it("says which of the two settings fails safe", () => {
     expect(desc(render(), "Exclude folders")).toContain("fails safe");
+  });
+});
+
+/**
+ * Folders published entire, for a built application whose chunks nothing
+ * references. The counterpart to the exclude list: one says what comes out
+ * of the scope, this says what goes in regardless of being asked for.
+ */
+describe("folders published whole", () => {
+  function field(root: HTMLElement): HTMLTextAreaElement | null {
+    return row(root, "Publish folders whole")?.querySelector("textarea") ?? null;
+  }
+
+  it("is offered whether or not as-is HTML is switched on", () => {
+    expect(field(render({ site: { folder: "", publishHtmlFiles: false } }))).not.toBeNull();
+    expect(field(render({ site: { folder: "", publishHtmlFiles: true } }))).not.toBeNull();
+  });
+
+  it("shows the stored list one path per line", () => {
+    const panel = render({ site: { folder: "", publishWholeFolders: ["app/dist", "docs/site"] } });
+    expect(field(panel)?.value).toBe("app/dist\ndocs/site");
+  });
+
+  it("stores what was typed as a clean list", () => {
+    const target = host({ site: { folder: "" } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    const input = field(tab.containerEl);
+    if (!input) throw new Error("no field");
+    input.value = " app/dist/ \n\n/docs/site\n";
+    input.dispatchEvent(new Event("input"));
+
+    expect(target.settings.site.publishWholeFolders).toEqual(["app/dist", "docs/site"]);
+  });
+
+  it("says what each folder holds, so a path can be checked", () => {
+    const panel = render(
+      { site: { folder: "", publishWholeFolders: ["app/dist"] } },
+      ["app/dist/index.html", "app/dist/assets/a.js", "notes/Plan.md"],
+    );
+    expect(panel.textContent).toContain("app/dist: 2 files");
+  });
+
+  /**
+   * The failure this row exists to make visible: a path that matched
+   * nothing looks exactly like a folder that is empty, and in both cases
+   * the application does not go out.
+   */
+  it("warns about an entry that matches nothing in the vault", () => {
+    const panel = render(
+      { site: { folder: "", publishWholeFolders: ["app/disp"] } },
+      ["app/dist/index.html"],
+    );
+    expect(panel.textContent).toContain("nothing here");
+    expect(panel.querySelector(".osp-settings-warning")?.textContent).toContain(
+      "matched no files",
+    );
+  });
+
+  it("says nothing at all when no folder is named", () => {
+    const panel = render({ site: { folder: "" } });
+    expect(panel.textContent).not.toContain("no file in the vault is inside it");
+    expect(panel.textContent).not.toContain("matched no files");
+  });
+
+  // The two things people get wrong: pointing it at a project root, and
+  // expecting it to override the privacy settings.
+  it("says what to point it at, and what it still leaves out", () => {
+    const description = desc(render(), "Publish folders whole");
+    expect(description).toContain("not at a project root");
+    expect(description).toContain("node_modules");
   });
 });
 

@@ -92,6 +92,11 @@ import {
   parseExcludeFolders,
 } from "./excludeFolders";
 import {
+  WholeFolderPlan,
+  WholeFolderTally,
+  planWholeFolders,
+} from "./wholeFolders";
+import {
   CompanionContext,
   CompanionRef,
   HtmlFileStats,
@@ -193,6 +198,19 @@ export interface SiteConfig {
    * the files it references carried beside it. See `htmlFiles.ts`.
    */
   publishHtmlFiles?: boolean;
+  /**
+   * Folders to publish entire, as vault paths, one per line in the setting.
+   *
+   * The answer to a built application, whose lazily loaded chunks are named
+   * nowhere a build can read them. Everything else here travels because
+   * something referenced it; a folder named here travels because it was
+   * named. See `wholeFolders.ts` for what that does and does not relax --
+   * in short, it changes what is found, never what is refused.
+   *
+   * Empty or unset means none, which is every site built before this
+   * existed.
+   */
+  publishWholeFolders?: string[];
   /**
    * Folders holding this build's own output, which are never its input.
    *
@@ -508,6 +526,27 @@ export interface BuildResult {
    */
   dependencies: DependencyTally;
   /**
+   * What each folder published whole came to, and what that weighed.
+   *
+   * An empty list on every site that names none. An entry with a count of
+   * zero is the one worth reading: it is a path that matched nothing, which
+   * is a typo that would otherwise look exactly like a folder that was
+   * published and happened to be empty.
+   */
+  wholeFolders: WholeFolderTally[];
+  /**
+   * Files carried because their folder was published whole.
+   *
+   * The non-page files only, and counted as they were read rather than as
+   * they were planned. A page in one of these folders is published through
+   * the as-is path like any other, so it is in `htmlFiles.published`; each
+   * entry's own tally counts both, which is why this number is smaller than
+   * the tallies add up to.
+   */
+  wholeFolderFiles: number;
+  /** What those weighed, which is the number to know before a push. */
+  wholeFolderBytes: number;
+  /**
    * Whether the build got slower as it ran, measured from control notes.
    *
    * Null when the vault has none. A build without controls is not proof that
@@ -630,7 +669,7 @@ export async function buildSite(
   const home = resolveHomeNote(selected, config);
   // The vault's own pages, which take no part in rendering: they are already
   // pages. Selected here so their URLs are known before anything claims one.
-  const htmlSelected = selectHtmlFiles(app, config);
+  const htmlByToggle = selectHtmlFiles(app, config);
 
   /**
    * Where a note is published.
@@ -655,6 +694,52 @@ export async function buildSite(
     sourcePath: file.path,
     url: urlFor(file.path),
   }));
+  /**
+   * The folders the author asked to be published whole.
+   *
+   * Planned here because its pages have to join the as-is selection before
+   * anything is planned against a URL, and because the only collision a file
+   * in one of these folders can lose is against a note's page -- which is
+   * what `targets` has just settled. A file cannot collide with an as-is
+   * page or with a companion: all three derive their URL from the vault path
+   * the same way, so two of them at one URL are one file, deduplicated
+   * rather than refused.
+   */
+  const wholeEntries = parseExcludeFolders(config.publishWholeFolders);
+  const noteUrls = new Map(targets.map((target) => [target.url.toLowerCase(), target.sourcePath]));
+  const wholePlan: WholeFolderPlan = planWholeFolders(
+    wholeEntries.length
+      ? app.vault.getFiles().map((file) => ({ path: file.path, size: file.stat?.size ?? 0 }))
+      : [],
+    {
+      entries: wholeEntries,
+      folder: config.folder,
+      excluded: parseExcludeFolders(config.excludeFolders),
+      outputFolders: config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS,
+      maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
+      tooBigReason: assetSkipReason,
+      claimedBy: (url) => noteUrls.get(url.toLowerCase()) ?? null,
+    },
+  );
+  /**
+   * Every page going out as-is: the ones the toggle selected, and the ones
+   * that are in a folder published whole.
+   *
+   * Unioned rather than handled separately so that one plan decides every
+   * URL. A page is a page however it was found, and a collision between two
+   * of them has to be settled in one place.
+   */
+  const htmlSelected = [...htmlByToggle];
+  const seenHtml = new Set(htmlByToggle.map((file) => file.path));
+  for (const path of wholePlan.pages) {
+    if (seenHtml.has(path)) continue;
+    const file = app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) continue;
+    seenHtml.add(path);
+    htmlSelected.push(file);
+  }
+  htmlSelected.sort((a, b) => a.path.localeCompare(b.path));
+
   /**
    * The vault's HTML files, and where each one lands.
    *
@@ -754,6 +839,9 @@ export async function buildSite(
   const skipped: { path: string; reason: string }[] = [
     ...htmlPlan.collisions,
     ...skippedHtmlReads,
+    // Reported file by file, because a folder published *whole* that quietly
+    // left something out would be the worst of both arrangements.
+    ...wholePlan.skipped,
   ];
 
   /**
@@ -1107,6 +1195,10 @@ export async function buildSite(
    * and refuse the handful of references that cannot honestly be carried.
    */
   const htmlStats = emptyHtmlFileStats();
+  // Counted as they are read rather than taken from the plan, so the report
+  // says what was published rather than what was intended.
+  let wholeCarried = 0;
+  let wholeBytes = 0;
   const wantedCompanions = new Map<string, CompanionRef>();
   // Reported once per file rather than once per page that referenced it: one
   // shared stylesheet outside the scope would otherwise fill the report.
@@ -1275,6 +1367,34 @@ export async function buildSite(
     }
   }
 
+  /*
+   * And the folders published whole.
+   *
+   * After the companions, so a file that is both -- the stylesheet a page
+   * links to, sitting in the folder -- is carried once, by whichever got
+   * there first. They are the same bytes at the same URL either way; what
+   * would be wrong is counting it twice and reporting a site larger than
+   * the one that went out.
+   */
+  for (const file of wholePlan.carry) {
+    if (wantedCompanions.has(file.sourcePath)) continue;
+    const found = app.vault.getAbstractFileByPath(file.sourcePath);
+    if (!(found instanceof TFile)) continue;
+    try {
+      const data = await app.vault.readBinary(found);
+      wholeBytes += data.byteLength;
+      wholeCarried++;
+      files.push({ path: file.url, content: data });
+    } catch (error) {
+      skipped.push({
+        path: file.sourcePath,
+        reason: `could not read file in a folder published whole: ${
+          error instanceof Error ? error.message : error
+        }`,
+      });
+    }
+  }
+
   // Harvested first, site.css second: ours must win where both have an
   // opinion, since the harvest is for layout we cannot re-author, not for
   // Obsidian's typography or colours.
@@ -1437,6 +1557,9 @@ export async function buildSite(
     htmlFilesBlockedByFlag: countHtmlFilesBlockedByFlag(app, config),
     excluded: excludedTally(app, config),
     dependencies: dependencyTally(app, config),
+    wholeFolders: wholePlan.tallies,
+    wholeFolderFiles: wholeCarried,
+    wholeFolderBytes: wholeBytes,
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
     selectedCount: selected.length,
   };
@@ -1503,6 +1626,30 @@ export function excludedTally(app: App, config: SiteConfig): ExcludeTally[] {
     ...selectNotes(app, everything),
     ...selectHtmlFiles(app, everything),
   ].map((file) => file.path);
+
+  /*
+   * And what a folder published whole would have taken, since the exclude
+   * list beats that setting too. Counted here or this report would say an
+   * entry kept nothing out while it was quietly keeping a private subfolder
+   * out of a published build folder.
+   */
+  const wholeEntries = parseExcludeFolders(config.publishWholeFolders);
+  if (wholeEntries.length) {
+    const plan = planWholeFolders(
+      app.vault.getFiles().map((file) => ({ path: file.path, size: file.stat?.size ?? 0 })),
+      {
+        entries: wholeEntries,
+        folder: config.folder,
+        excluded: [],
+        outputFolders: config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS,
+        maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
+        tooBigReason: () => null,
+        claimedBy: () => null,
+      },
+    );
+    for (const file of plan.carry) paths.push(file.sourcePath);
+    for (const page of plan.pages) paths.push(page);
+  }
 
   return excludeTallies(paths, entries);
 }

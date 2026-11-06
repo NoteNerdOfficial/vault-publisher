@@ -9,6 +9,7 @@ import {
 } from "../platform/secrets";
 import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
 import { parseExcludeFolders, swallowsScope } from "../publish/excludeFolders";
+import { entryFor } from "../publish/wholeFolders";
 import { normalizeCustomCssPath } from "../publish/customCss";
 import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "../publish/outputFolders";
 import {
@@ -183,6 +184,7 @@ export interface SettingsHost {
       pinnedProperty?: string;
       theme?: string;
       publishHtmlFiles?: boolean;
+      publishWholeFolders?: string[];
       excludeFolders?: string[];
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
@@ -954,6 +956,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         }),
       );
 
+    this.renderWholeFolders(root);
+
     // The field is a path, but the useful half is the answer: this says
     // which note the front page is actually going to be, including when the
     // field is empty and the vault's own README is winning.
@@ -1163,6 +1167,93 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           "build would have no pages in it at all.",
       );
     }
+  }
+
+  /**
+   * Folders published entire, for a built application.
+   *
+   * Given its own row rather than folded into the as-is toggle because it
+   * answers a different question. That toggle is about which of a vault's
+   * own HTML files are pages; this is about a folder whose contents are one
+   * artefact, where "was anything referenced" is the wrong question to ask.
+   *
+   * The count under the field is the useful half. An entry that matches
+   * nothing looks exactly like a folder that is empty, and this is the only
+   * place where the difference is cheap to see.
+   */
+  private renderWholeFolders(root: HTMLElement): void {
+    const site = this.host.settings.site;
+    const entries = parseExcludeFolders(site.publishWholeFolders);
+
+    new Setting(root)
+      .setName("Publish folders whole")
+      .setDesc(
+        "One vault path per line. Every file in these is published, " +
+          "referenced or not, which is what a built application needs: a " +
+          "lazily loaded chunk is named only inside the JavaScript, so " +
+          "nothing else will carry it. Point these at what your build " +
+          "produces -- a dist or build folder -- and not at a project root. " +
+          "Excluded folders, hidden files and node_modules are still left " +
+          "out, and notes are still published as pages rather than as " +
+          "Markdown.",
+      )
+      .addTextArea((text) => {
+        text.inputEl.rows = 3;
+        text.inputEl.spellcheck = false;
+        text
+          .setPlaceholder("proto/app/dist")
+          .setValue(entries.join("\n"))
+          .onChange(async (value: string) => {
+            site.publishWholeFolders = parseExcludeFolders(value);
+            await this.host.saveSettings();
+          });
+      })
+      .addExtraButton((button) =>
+        button
+          .setIcon("refresh-cw")
+          .setTooltip("Count what these folders hold")
+          .onClick(() => this.display()),
+      );
+
+    if (!entries.length) return;
+
+    const counts = this.countWholeFolders(entries);
+    const note = this.note(root);
+    note.setText(
+      counts
+        .map(({ entry, count }) =>
+          count
+            ? `${entry}: ${count} file${count === 1 ? "" : "s"}`
+            : `${entry}: nothing here -- check the path`,
+        )
+        .join(" · "),
+    );
+
+    const empty = counts.filter(({ count }) => count === 0).map(({ entry }) => entry);
+    if (empty.length) {
+      this.warning(
+        root,
+        `"${empty[0]}" matched no files in the vault, so it will publish ` +
+          "nothing. A folder that has not been built yet looks the same as a " +
+          "path with a typo in it.",
+      );
+    }
+  }
+
+  /**
+   * How many files each entry holds, before any of the refusals.
+   *
+   * Deliberately a plain count of the folder rather than a dry run of the
+   * build: this answers "is this path right", which is the question someone
+   * typing into the field is actually asking. What the build then leaves
+   * out, and why, is the build report's job.
+   */
+  private countWholeFolders(entries: readonly string[]): { entry: string; count: number }[] {
+    const files = this.app.vault.getFiles();
+    return entries.map((entry) => ({
+      entry,
+      count: files.filter((file) => entryFor(file.path, [entry]) !== null).length,
+    }));
   }
 
   private renderTheme(root: HTMLElement): void {

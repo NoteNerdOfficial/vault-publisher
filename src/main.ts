@@ -298,6 +298,9 @@ const DEFAULT_SETTINGS: Settings = {
     // makes the setting safe to add to an existing vault: a build after an
     // upgrade publishes exactly what the build before it did.
     excludeFolders: [],
+    // Likewise empty: a folder published whole is a thing somebody asks for
+    // by naming it, so an upgrade changes nothing about what goes out.
+    publishWholeFolders: [],
     theme: DEFAULT_THEME,
     // Empty, so a build after an upgrade looks exactly like the build before
     // it: one of the curated themes and nothing of anybody's own on the end.
@@ -1840,6 +1843,24 @@ export default class VaultPublisherPlugin extends Plugin {
         say(`SKIPPED ${skip.path}: ${skip.reason}`);
       }
 
+      // Folders published whole, which is the setting most likely to put
+      // something on a live site that nobody looked at: the files were never
+      // referenced, so nobody has clicked them either. The count is the
+      // thing to read, and an entry that matched nothing is a warning
+      // because it means the application did not go out at all.
+      if (result.wholeFolders.length) {
+        say(
+          `published ${result.wholeFolderFiles} file(s) whole from ` +
+            `${result.wholeFolders.length} folder(s)`,
+        );
+        for (const tally of result.wholeFolders.filter((row) => !row.count)) {
+          say(
+            `WARNING: "${tally.entry}" is set to be published whole but holds ` +
+              `no files -- check the path, or build the app first`,
+          );
+        }
+      }
+
       // What the author asked to be left out, and what it cost. A publish is
       // the moment this matters: a folder excluded is a folder that was on
       // the live site until now, and one that excluded nothing is a setting
@@ -2099,6 +2120,33 @@ export default class VaultPublisherPlugin extends Plugin {
           "carried beside it.",
       );
     }
+    if (result.wholeFolders.length) {
+      lines.push(
+        `Published whole: ${result.wholeFolderFiles} file(s) carried from ` +
+          `${result.wholeFolders.length} folder(s), ${formatBytes(result.wholeFolderBytes)}`,
+      );
+      for (const tally of result.wholeFolders) {
+        lines.push(
+          tally.count
+            ? `- \`${tally.entry}\`: ${tally.count} file(s), ${formatBytes(tally.bytes)}`
+            : `- \`${tally.entry}\`: nothing -- no file in the vault is inside it`,
+        );
+      }
+      lines.push(
+        "Everything in these folders is published whether or not anything " +
+          "references it, which is what a built application needs: a lazily " +
+          "loaded chunk is named only inside the JavaScript, so no scan will " +
+          "find it. Each folder's own pages are counted with the pages above.",
+      );
+      if (result.wholeFolders.some((tally) => !tally.count)) {
+        lines.push(
+          "A folder that matched nothing is either a path with a typo in it " +
+            "or a build that has not been run yet -- the two look identical " +
+            "from here.",
+        );
+      }
+    }
+
     if (result.excluded.length) {
       const kept = result.excluded.reduce((n, row) => n + row.count, 0);
       lines.push(
