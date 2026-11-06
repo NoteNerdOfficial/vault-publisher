@@ -421,6 +421,47 @@ describe("folders published whole", () => {
   });
 
   /**
+   * A row has two fields and nothing redraws between them.
+   *
+   * Building the new list from the one the panel was drawn with meant the
+   * second edit wrote the first one back as it used to be -- type a path,
+   * type a destination, and the path was gone. Found by typing into both
+   * fields of a real row in Obsidian, which is the only reason this test
+   * exists: every test here had set one field at a time.
+   */
+  it("keeps the folder when the destination is typed next", async () => {
+    const target = host({ site: { folder: "", publishWholeFolders: [{ folder: "" }] } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    const [folder, where] = fields(rows(tab.containerEl)[0]);
+    type(folder, "react-relative");
+    await settle();
+    type(where, "app");
+    await settle();
+
+    expect(target.settings.site.publishWholeFolders).toEqual([
+      { folder: "react-relative", at: "app" },
+    ]);
+  });
+
+  it("keeps a half-typed row when another folder is added", async () => {
+    const target = host({ site: { folder: "", publishWholeFolders: [{ folder: "" }] } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    type(fields(rows(tab.containerEl)[0])[0], "app/dist");
+    await settle();
+    button(tab.containerEl, "Publish folders whole")?.click();
+    await settle();
+
+    expect(target.settings.site.publishWholeFolders).toEqual([
+      { folder: "app/dist" },
+      { folder: "" },
+    ]);
+  });
+
+  /**
    * The difference the field has to carry: blank leaves a folder at its
    * vault path, and `/` takes over the front page.
    */

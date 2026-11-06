@@ -1199,6 +1199,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       await this.host.saveSettings();
     };
 
+    /**
+     * Change one row, against what is stored *now*.
+     *
+     * Not against `entries`, which is the list as it was when the panel
+     * was drawn. A row has two fields and nothing redraws between them, so
+     * building the new list from the drawn one means the second edit
+     * writes the first one back as it used to be: type a path, type a
+     * destination, and the path is gone. Found by typing into both fields
+     * of a real row in Obsidian, which no test did.
+     */
+    const change = async (index: number, changed: Partial<WholeFolderEntry>) => {
+      const current = parseWholeFolders(site.publishWholeFolders);
+      if (index >= current.length) return;
+      await save(current.map((row, at) => (at === index ? { ...row, ...changed } : row)));
+    };
+
     new Setting(root)
       .setName("Publish folders whole")
       .setDesc(
@@ -1212,7 +1228,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       )
       .addButton((button) =>
         button.setButtonText("Add a folder").onClick(async () => {
-          await save([...entries, { folder: "", at: null }]);
+          // Read back rather than appending to the drawn list, for the same
+          // reason: a row half typed into would be saved back empty.
+          await save([...parseWholeFolders(site.publishWholeFolders), { folder: "", at: null }]);
           this.display();
         }),
       );
@@ -1222,11 +1240,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const counts = this.countWholeFolders(entries);
 
     entries.forEach((entry, index) => {
-      const replace = async (changed: Partial<WholeFolderEntry>) => {
-        const next = entries.map((row, at) => (at === index ? { ...row, ...changed } : row));
-        await save(next);
-      };
-
       const row = new Setting(root);
       row.settingEl.addClass("osp-whole-folder");
       row.setName(entry.folder || "A folder with no path yet");
@@ -1238,7 +1251,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setPlaceholder("proto/app/dist")
           .setValue(entry.folder)
           .onChange(async (value: string) => {
-            await replace({ folder: tidyPath(value) });
+            await change(index, { folder: tidyPath(value) });
           });
       });
 
@@ -1251,7 +1264,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setPlaceholder("publish at... (blank = its vault path)")
           .setValue(entry.at ?? "")
           .onChange(async (value: string) => {
-            await replace({ at: destination(value) });
+            await change(index, { at: destination(value) });
           });
       });
 
@@ -1260,7 +1273,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setIcon("trash-2")
           .setTooltip("Remove this folder")
           .onClick(async () => {
-            await save(entries.filter((_, at) => at !== index));
+            await save(
+              parseWholeFolders(site.publishWholeFolders).filter((_, at) => at !== index),
+            );
             this.display();
           }),
       );
