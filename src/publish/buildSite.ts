@@ -78,7 +78,13 @@ import {
   tagsIndexContent,
 } from "./landing";
 import { noteSource } from "./source";
-import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput, isHiddenPath } from "./outputFolders";
+import {
+  DEFAULT_OUTPUT_FOLDERS,
+  dependencyRoot,
+  isBuildOutput,
+  isDependencyPath,
+  isHiddenPath,
+} from "./outputFolders";
 import {
   ExcludeTally,
   excludeTallies,
@@ -88,6 +94,7 @@ import {
 import {
   CompanionRef,
   HtmlFileStats,
+  appShellWithoutCode,
   baseHref,
   baseHrefHazard,
   countHtmlFilesBlockedByFlag,
@@ -490,6 +497,15 @@ export interface BuildResult {
    */
   excluded: ExcludeTally[];
   /**
+   * Installed dependencies the build skipped, as folders and a file count.
+   *
+   * Zero files on every vault that has none, which is most of them. The
+   * report says it when there is something to say and nothing when there is
+   * not -- but it has to be able to say it, because this is the one rule
+   * here that keeps out files somebody put in the vault on purpose.
+   */
+  dependencies: DependencyTally;
+  /**
    * Whether the build got slower as it ran, measured from control notes.
    *
    * Null when the vault has none. A build without controls is not proof that
@@ -716,6 +732,16 @@ export async function buildSite(
   const unpublishedByName = new Map<string, string>();
   for (const file of app.vault.getMarkdownFiles()) {
     if (published.has(file.path)) continue;
+    /*
+     * A package's `README` is not a private note, and this index is a list
+     * of names that must not leak. Left in, `node_modules` filled it with
+     * hundreds of entries -- `readme`, `changelog`, `license`, and every
+     * package name -- and the privacy scan then flagged any page that
+     * happened to use one of those words as having leaked an unpublished
+     * note. A check that cries wolf a hundred times is a check nobody
+     * reads, which is the real cost.
+     */
+    if (isDependencyPath(file.path, config.folder)) continue;
     unpublishedByName.set(file.basename.toLowerCase(), file.path);
   }
   // Compiled once here, not once per page: see `indexUnpublished`.
@@ -1152,6 +1178,12 @@ export async function buildSite(
     const hazard = baseHrefHazard(baseHref(html));
     if (hazard) htmlStats.baseHrefs.push(`${target.url}: ${hazard}`);
 
+    // A framework's unbuilt `index.html`, which publishes perfectly and
+    // cannot run. What is wrong with it is what it does not contain, so
+    // nothing else in this report can see it.
+    const shell = appShellWithoutCode(html);
+    if (shell) htmlStats.appShells.push(`${target.url}: ${shell}`);
+
     const companions = planCompanions(target, html, {
       folder: config.folder,
       statFile: (path) => {
@@ -1359,6 +1391,7 @@ export async function buildSite(
     htmlFilesNotEnabled: countHtmlFilesAvailable(app, config),
     htmlFilesBlockedByFlag: countHtmlFilesBlockedByFlag(app, config),
     excluded: excludedTally(app, config),
+    dependencies: dependencyTally(app, config),
     drift: driftSamples.length ? summarizeDrift(driftSamples) : null,
     selectedCount: selected.length,
   };
@@ -1375,6 +1408,47 @@ export async function buildSite(
  * Both selectors, because both publish: a folder kept out of the site has to
  * be kept out of it whether it holds notes or the vault's own HTML.
  */
+/** Installed dependencies inside the scope, as the report says them. */
+export interface DependencyTally {
+  /** The dependency folders found, as vault paths, in path order. */
+  folders: string[];
+  /** How many files are inside them, of any kind. */
+  files: number;
+}
+
+/**
+ * What installed dependencies inside the scope came to, so the report can
+ * say the build skipped them.
+ *
+ * Silence would be the wrong answer twice over. Somebody whose prototype's
+ * README is not on the site needs to know it was a rule rather than a
+ * failure -- and somebody whose build used to take twenty minutes needs to
+ * know what changed, which is the same sentence read the other way.
+ *
+ * Counted over every file rather than only the ones a selector would have
+ * taken, because the number that means something here is how much of the
+ * vault is somebody else's code.
+ */
+export function dependencyTally(app: App, config: SiteConfig): DependencyTally {
+  const folders: string[] = [];
+  const seen = new Set<string>();
+  let files = 0;
+
+  for (const file of app.vault.getFiles()) {
+    if (config.folder && !file.path.startsWith(`${config.folder}/`)) continue;
+    if (!isDependencyPath(file.path, config.folder)) continue;
+    files++;
+    const root = dependencyRoot(file.path);
+    if (root && !seen.has(root)) {
+      seen.add(root);
+      folders.push(root);
+    }
+  }
+
+  folders.sort();
+  return { folders, files };
+}
+
 export function excludedTally(app: App, config: SiteConfig): ExcludeTally[] {
   const entries = parseExcludeFolders(config.excludeFolders);
   if (!entries.length) return [];
@@ -1413,6 +1487,11 @@ export function selectNotes(app: App, config: SiteConfig): TFile[] {
       // vault published whole. HTML selection has always skipped these;
       // notes never did, which was an asymmetry rather than a decision.
       if (isHiddenPath(file.path, config.folder)) return false;
+      // Every package ships a README, so a vault with a prototype in it has
+      // hundreds of Markdown files nobody wrote and nobody wants rendered.
+      // `node_modules` has no leading dot, so the rule above cannot see it.
+      // See `isDependencyPath`.
+      if (isDependencyPath(file.path, config.folder)) return false;
       if (!config.requireFrontmatterFlag) return true;
       const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
       return frontmatter?.[config.requireFrontmatterFlag] === true;

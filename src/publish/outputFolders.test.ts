@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OUTPUT_FOLDERS,
+  dependencyRoot,
   isBuildOutput,
+  isDependencyPath,
   isHiddenPath,
 } from "./outputFolders";
 
@@ -87,5 +89,69 @@ describe("isHiddenPath", () => {
     expect(isHiddenPath(".archive/note.md", "")).toBe(true);
     expect(isHiddenPath(".archive/note.md", null)).toBe(true);
     expect(isHiddenPath(".archive/note.md", "notes")).toBe(true);
+  });
+});
+
+/**
+ * The third rule, and the one with a build time attached to it. A vault with
+ * a prototype in it has a `node_modules`, Obsidian indexes it like anything
+ * else, and before this both selectors took the whole tree as content: every
+ * package's README rendered as a note, every bundled demo published as a
+ * page, and the whole vault listing inlined into each of them.
+ */
+describe("isDependencyPath", () => {
+  it("claims what a package manager installed", () => {
+    expect(isDependencyPath("node_modules/left-pad/README.md")).toBe(true);
+    expect(isDependencyPath("bower_components/jquery/index.html")).toBe(true);
+    expect(isDependencyPath("jspm_packages/npm/a.js")).toBe(true);
+  });
+
+  // Where a prototype's dependencies actually live, and where npm puts a
+  // nested copy of one.
+  it("matches the folder at any depth, not only at the root", () => {
+    expect(isDependencyPath("proto/app/node_modules/vue/dist/vue.js")).toBe(true);
+    expect(
+      isDependencyPath("node_modules/a/node_modules/b/README.md"),
+    ).toBe(true);
+  });
+
+  it("leaves the vault's own content alone", () => {
+    expect(isDependencyPath("notes/node modules.md")).toBe(false);
+    expect(isDependencyPath("notes/about-node_modules.md")).toBe(false);
+    expect(isDependencyPath("node_modules-notes/a.md")).toBe(false);
+    // `vendor` is the same thing in two other languages and an ordinary
+    // word in this one, so it is left to the excluded-folders setting --
+    // which says what it left out, where this rule would not.
+    expect(isDependencyPath("vendor/a.md")).toBe(false);
+  });
+
+  // The exemption every rule in this file has: a scope aimed inside one is
+  // somebody naming the path.
+  it("yields to a scope aimed inside one of them", () => {
+    expect(
+      isDependencyPath("node_modules/demo/index.html", "node_modules/demo"),
+    ).toBe(false);
+    expect(isDependencyPath("node_modules/demo/index.html", "notes")).toBe(true);
+    // Not the whole vault, which is the case the rule exists for.
+    expect(isDependencyPath("node_modules/demo/index.html", "")).toBe(true);
+  });
+});
+
+describe("dependencyRoot", () => {
+  it("names the folder a file is installed under", () => {
+    expect(dependencyRoot("proto/node_modules/vue/dist/vue.js")).toBe(
+      "proto/node_modules",
+    );
+    expect(dependencyRoot("node_modules/a/README.md")).toBe("node_modules");
+  });
+
+  // The outermost one, so a report lists the tree rather than every package
+  // that nests a copy of its own dependencies.
+  it("takes the outermost of nested copies", () => {
+    expect(dependencyRoot("node_modules/a/node_modules/b/c.js")).toBe("node_modules");
+  });
+
+  it("has nothing to say about an ordinary path", () => {
+    expect(dependencyRoot("notes/plan.md")).toBe(null);
   });
 });

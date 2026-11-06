@@ -3,6 +3,7 @@ import type { App, TFile } from "obsidian";
 import { DEFAULT_OUTPUT_FOLDERS } from "./outputFolders";
 import {
   CompanionContext,
+  appShellWithoutCode,
   companionVaultPath,
   countHtmlFilesAvailable,
   countHtmlFilesBlockedByFlag,
@@ -20,9 +21,13 @@ import {
   planHtmlFiles,
   reservedPathReason,
   selectHtmlFiles,
+  SITE_ASSET_FILES,
+  SITE_ASSET_FOLDERS,
   urlForVaultFile,
   withinScope,
 } from "./htmlFiles";
+import { OVERLAY_SCRIPT_PATH, SITE_SCRIPT_PATH } from "./page";
+import { assetUrl } from "./assets";
 
 /** Enough of an App for selection, which reads one thing: every vault file. */
 function stubApp(paths: string[]): App {
@@ -141,6 +146,36 @@ describe("selectHtmlFiles", () => {
     expect(selected.map((f) => f.path)).toEqual(["page.html"]);
   });
 
+  /*
+   * The one that made builds fail rather than merely crawl. A prototype
+   * brings its dependencies into the vault, `node_modules` has no leading
+   * dot so the rule above cannot see it, and every package's bundled demo
+   * page, coverage report and test fixture was read, scanned and published.
+   */
+  it("leaves installed dependencies alone", () => {
+    const selected = selectHtmlFiles(
+      stubApp([
+        "proto/index.html",
+        "proto/node_modules/chart.js/docs/index.html",
+        "proto/node_modules/x/coverage/lcov-report/index.html",
+      ]),
+      config({ folder: "" }),
+    );
+    expect(selected.map((f) => f.path)).toEqual(["proto/index.html"]);
+  });
+
+  // Somebody reviewing a package's own demo page has said so by scoping to
+  // it, and a build that matched nothing and could not say why is worse.
+  it("yields to a scope aimed inside one", () => {
+    const selected = selectHtmlFiles(
+      stubApp(["proto/node_modules/chart.js/docs/index.html", "proto/index.html"]),
+      config({ folder: "proto/node_modules/chart.js" }),
+    );
+    expect(selected.map((f) => f.path)).toEqual([
+      "proto/node_modules/chart.js/docs/index.html",
+    ]);
+  });
+
   // An HTML file has no frontmatter, so it cannot pass the gate. Publishing
   // it anyway would apply the user's opt-in to notes and not to pages.
   it("publishes none of them when a frontmatter flag is required", () => {
@@ -222,15 +257,117 @@ describe("withinScope", () => {
 
 describe("reservedPathReason", () => {
   it("refuses the paths the build writes itself", () => {
-    expect(reservedPathReason("assets/site.css")).toMatch(/assets\//);
-    expect(reservedPathReason("assets")).toMatch(/assets\//);
+    for (const path of SITE_ASSET_FILES) {
+      expect(reservedPathReason(path)).toMatch(/the build writes itself/);
+    }
+    // And the two subfolders, wholesale: note media and the MathJax fonts
+    // are named from the vault, so there is no fixed list of them.
+    expect(reservedPathReason("assets/files/pics/plot.png")).toMatch(
+      /the build writes itself/,
+    );
+    expect(reservedPathReason("assets/mathjax/MathJax_Main-Regular.woff")).toMatch(
+      /the build writes itself/,
+    );
     expect(reservedPathReason(".nojekyll")).toMatch(/the site itself needs/);
     expect(reservedPathReason("CNAME")).toMatch(/the site itself needs/);
+  });
+
+  /*
+   * The case this rule used to break, and it is the common one: every
+   * bundler writes to `dist/assets/`, so a site scoped at a `dist` folder
+   * mirrors the application's own `assets/` onto the site root. A
+   * folder-wide rule refused the whole bundle -- a page that published with
+   * none of its JavaScript -- over a collision that does not exist, since a
+   * hashed name cannot be one of ours.
+   */
+  it("lets a built application keep its own assets folder", () => {
+    expect(reservedPathReason("assets/index-C7x1a9.js")).toBe(null);
+    expect(reservedPathReason("assets/index-9f2b.css")).toBe(null);
+    expect(reservedPathReason("assets/logo-4de1.svg")).toBe(null);
+    // A file called `assets` collides with nothing either: the build writes
+    // paths inside it, and never a file by that name.
+    expect(reservedPathReason("assets")).toBe(null);
   });
 
   it("allows everything else", () => {
     expect(reservedPathReason("demo/chart.html")).toBe(null);
     expect(reservedPathReason("assetsmith/x.css")).toBe(null);
+  });
+
+  /*
+   * The list is the rule, so it has to be held to the thing it describes.
+   * `page.ts` owns the two script paths because it writes the tags that
+   * reference them; adding a third there and not here would mean a vault
+   * file could land on top of the site's own JavaScript, silently, which is
+   * exactly the failure the reservation exists for.
+   */
+  it("covers every asset path the rest of the build declares", () => {
+    expect(SITE_ASSET_FILES).toContain(SITE_SCRIPT_PATH);
+    expect(SITE_ASSET_FILES).toContain(OVERLAY_SCRIPT_PATH);
+    // The two stylesheets `page.ts` links into every page.
+    expect(SITE_ASSET_FILES).toContain("assets/site.css");
+    expect(SITE_ASSET_FILES).toContain("assets/obsidian.css");
+    // And the folder note media goes to, which `assetUrl` decides.
+    expect(assetUrl("pics/plot.png").startsWith(SITE_ASSET_FOLDERS[0])).toBe(true);
+  });
+});
+
+/*
+ * The one blank page this report could not account for. An Angular project's
+ * `src/index.html` was selected, published byte for byte, and its only
+ * reference -- a favicon -- was carried; everything worked and the page was
+ * always going to be empty, because what is wrong with it is what it does
+ * not contain.
+ */
+describe("appShellWithoutCode", () => {
+  it("recognises the shell of each of the frameworks", () => {
+    expect(appShellWithoutCode(`<body><app-root></app-root></body>`)).toBe("<app-root>");
+    expect(appShellWithoutCode(`<body><router-outlet></router-outlet></body>`)).toBe(
+      "<router-outlet>",
+    );
+    expect(appShellWithoutCode(`<body><div id="root"></div></body>`)).toBe(
+      `<div id="root">`,
+    );
+    expect(appShellWithoutCode(`<body><div id="app"></div></body>`)).toBe(
+      `<div id="app">`,
+    );
+    expect(appShellWithoutCode(`<body><div id="__next"></div></body>`)).toBe(
+      `<div id="__next">`,
+    );
+  });
+
+  // An Angular `src/index.html` as `ng new` writes one: a base href, a
+  // favicon, a root element, and no code anywhere.
+  it("recognises a stock project index.html", () => {
+    const html =
+      `<!doctype html><html><head><base href="/">` +
+      `<link rel="icon" href="favicon.ico"></head>` +
+      `<body><app-root></app-root></body></html>`;
+    expect(appShellWithoutCode(html)).toBe("<app-root>");
+  });
+
+  /*
+   * And the half that keeps it quiet. A hand-written page with no JavaScript
+   * is what as-is publishing is *for*, so warning about those would put a
+   * warning on the feature's main case; a built application always carries a
+   * script tag, so it never trips either. Both halves are needed.
+   */
+  it("says nothing about a page that is not an empty shell", () => {
+    // The built app: same root element, with its code.
+    expect(
+      appShellWithoutCode(
+        `<div id="root"></div><script type="module" src="./assets/index-a1.js"></script>`,
+      ),
+    ).toBe(null);
+    // A hand-written page, which is the whole point of this path.
+    expect(appShellWithoutCode(`<h1>A page</h1><p>With no script at all.</p>`)).toBe(
+      null,
+    );
+    // A root element by another name is not one of these.
+    expect(appShellWithoutCode(`<div id="rooted"></div>`)).toBe(null);
+    expect(appShellWithoutCode(`<div id="application"></div>`)).toBe(null);
+    // And an attribute that merely ends in `id` is not `id`.
+    expect(appShellWithoutCode(`<div data-id="app"></div>`)).toBe(null);
   });
 });
 
@@ -537,6 +674,31 @@ describe("planCompanions", () => {
     expect(plan.refused).toEqual([]);
   });
 
+  /*
+   * The deliberate hole in the dependency rule, and it has to be a hole.
+   * Selection refuses to *publish* anything inside `node_modules` -- a
+   * package's README is not a note and its demo is not a page -- but a
+   * prototype that loads a library from there with a `<script src>` is
+   * pointing at it on purpose, and the published prototype is broken
+   * without it. One file per reference, so it cannot run away with the
+   * build the way selecting the tree did.
+   */
+  it("still carries a library a page asks for by name", () => {
+    const html = `<script src="../node_modules/chart.js/dist/chart.umd.js"></script>`;
+    const plan = planCompanions(page, html, {
+      ...context(),
+      statFile: (path) =>
+        path === "site/node_modules/chart.js/dist/chart.umd.js" ? 2000 : null,
+    });
+    expect(plan.carry).toEqual([
+      {
+        sourcePath: "site/node_modules/chart.js/dist/chart.umd.js",
+        url: "node_modules/chart.js/dist/chart.umd.js",
+      },
+    ]);
+    expect(plan.broken).toEqual([]);
+  });
+
   it("says which references will 404, and still carries the rest", () => {
     const html = `<link rel="stylesheet" href="../styles.css"><img src="gone.png">`;
     const plan = planCompanions(page, html, context());
@@ -758,9 +920,18 @@ describe("planHtmlFiles", () => {
   });
 
   it("refuses a file that would land on a path the build writes itself", () => {
-    const plan = planHtmlFiles(files("site/assets/a.html"), "site", []);
+    const plan = planHtmlFiles(files("site/assets/files/a.html"), "site", []);
     expect(plan.targets).toEqual([]);
-    expect(plan.collisions[0].reason).toMatch(/assets\//);
+    expect(plan.collisions[0].reason).toMatch(/the build writes itself/);
+  });
+
+  // And publishes one that merely sits in a folder of the same name, which
+  // is where a built application's own code lives.
+  it("publishes a page beside a built application's assets", () => {
+    const plan = planHtmlFiles(files("site/assets/a.html"), "site", []);
+    expect(plan.targets).toEqual([
+      { sourcePath: "site/assets/a.html", url: "assets/a.html" },
+    ]);
   });
 
   // Somebody who writes a front page by hand and calls it index.html has

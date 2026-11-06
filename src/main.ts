@@ -10,6 +10,7 @@ import {
   BuildResult,
   SiteConfig,
   isScopeChosen,
+  selectNotes,
 } from "./publish/buildSite";
 import {
   SourceLinkSettings,
@@ -1855,6 +1856,19 @@ export default class VaultPublisherPlugin extends Plugin {
         }
       }
 
+      // Somebody else's code, which is not published and is worth one line
+      // when it is there. A prototype in the vault brings its dependencies
+      // with it, and a build that quietly rendered every package's README
+      // was the slowest thing this plugin did.
+      if (result.dependencies.files) {
+        say(
+          `skipped ${result.dependencies.files} file(s) in ` +
+            `${result.dependencies.folders.length} dependency folder(s): ` +
+            result.dependencies.folders.slice(0, 3).join(", ") +
+            (result.dependencies.folders.length > 3 ? ", ..." : ""),
+        );
+      }
+
       // Said for the same reason as the skips: a page that went out
       // untouched is a page none of the checks below apply to.
       if (result.htmlFiles.published) {
@@ -1874,6 +1888,13 @@ export default class VaultPublisherPlugin extends Plugin {
         say(
           `${result.htmlFilesNotEnabled} HTML file(s) in scope were not published: ` +
             "turn on 'Publish HTML files as-is' in settings",
+        );
+      }
+      if (result.htmlFiles.appShells.length) {
+        say(
+          `WARNING: ${result.htmlFiles.appShells.length} HTML file(s) are an ` +
+            `application's shell with no code in them -- publish your build's ` +
+            `output, not its src/index.html -- see the build report`,
         );
       }
       if (result.htmlFiles.baseHrefs.length) {
@@ -2060,6 +2081,24 @@ export default class VaultPublisherPlugin extends Plugin {
           ? `, ${result.assetsUnresolved.length} unresolved`
           : ""),
     );
+    if (result.dependencies.files) {
+      lines.push(
+        `Left out as installed dependencies: ${result.dependencies.files} file(s) in ` +
+          `${result.dependencies.folders.length} folder(s)`,
+      );
+      for (const folder of result.dependencies.folders.slice(0, 10)) {
+        lines.push(`- \`${folder}\``);
+      }
+      if (result.dependencies.folders.length > 10) {
+        lines.push(`- and ${result.dependencies.folders.length - 10} more`);
+      }
+      lines.push(
+        "These are code rather than content: a package's `README.md` is not a " +
+          "note and its bundled demo is not a page. Nothing inside them is " +
+          "published, and a file one of your own pages *references* is still " +
+          "carried beside it.",
+      );
+    }
     if (result.excluded.length) {
       const kept = result.excluded.reduce((n, row) => n + row.count, 0);
       lines.push(
@@ -2244,6 +2283,25 @@ export default class VaultPublisherPlugin extends Plugin {
         );
         for (const page of html.localResourceUrls) lines.push(`- ${page}`);
       }
+      if (html.appShells.length) {
+        lines.push(
+          "",
+          `**${html.appShells.length} page(s) are an application's shell with none ` +
+            "of its code.** Each one holds the element a framework mounts into and " +
+            "no `<script>` at all, which means it is the `src/index.html` of a " +
+            "project rather than a page: the application's entry point is named in " +
+            "`angular.json` or `vite.config`, never in the HTML, so there is " +
+            "nothing here to publish and nothing here that compiles. Publish what " +
+            "your build produces instead -- `ng build --base-href ./`, " +
+            "`vite build --base=./`, or `\"homepage\": \".\"` for create-react-app " +
+            "-- and point the site at the folder *above* the output, so the app " +
+            "keeps its own `assets/` folder. Published as it is, this file loads " +
+            "and shows an empty page, which is the one failure nothing else in " +
+            "this report can see: everything about publishing it worked.",
+          "",
+        );
+        for (const page of html.appShells) lines.push(`- ${page}`);
+      }
       if (html.baseHrefs.length) {
         lines.push(
           "",
@@ -2306,10 +2364,20 @@ export default class VaultPublisherPlugin extends Plugin {
     new Notice("Vault Publisher: starting");
 
     const dataviewReady = await waitForDataviewIndex(app as never);
-    const files = this.app.vault
-      .getMarkdownFiles()
-      .filter((f) => scope === "" || f.path.startsWith(`${scope}/`))
-      .sort((a, b) => a.path.localeCompare(b.path));
+    /*
+     * The notes the publish would render, through the selector the publish
+     * uses, rather than a scope filter of this report's own.
+     *
+     * The doc comment above has always claimed this measures the notes that
+     * actually go out, and a scope filter is not that: it rendered the
+     * build's own output folders, hidden folders, folders the author
+     * excluded, notes a frontmatter flag keeps out -- and, worst of all for
+     * a report whose question is "why is my publish slow", every `README.md`
+     * in a `node_modules`. The diagnostic for a slow build was the slowest
+     * thing in the plugin. One selector, so the two cannot disagree about
+     * what is being published.
+     */
+    const files = selectNotes(this.app, this.settings.site);
 
     if (!files.length) {
       new Notice(

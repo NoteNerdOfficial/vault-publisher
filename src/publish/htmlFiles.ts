@@ -2,6 +2,7 @@ import { App, TFile } from "obsidian";
 import {
   DEFAULT_OUTPUT_FOLDERS,
   isBuildOutput,
+  isDependencyPath,
   isHiddenPath,
 } from "./outputFolders";
 import { isExcluded, parseExcludeFolders } from "./excludeFolders";
@@ -77,15 +78,43 @@ const HTML_EXTENSION = /\.html?$/i;
 const COMPANION_DENIED = /\.(?:md|html?|canvas|base)$/i;
 
 /**
+ * The files the build writes into `assets/`, by name.
+ *
+ * Named rather than described, because this list *is* the rule: anything the
+ * build starts writing under `assets/` has to be added here or a vault file
+ * can quietly land on top of it. The test beside this holds it to the two
+ * script paths `page.ts` declares, so adding a third and forgetting this
+ * fails rather than publishing over the site's own JavaScript.
+ */
+export const SITE_ASSET_FILES = [
+  "assets/site.css",
+  "assets/obsidian.css",
+  "assets/site.js",
+  "assets/overlay.js",
+];
+
+/** And the two subfolders it fills: note media, and the MathJax fonts. */
+export const SITE_ASSET_FOLDERS = ["assets/files/", "assets/mathjax/"];
+
+/**
  * Paths the build writes itself, which nothing from the vault may claim.
  *
- * `assets/` holds the harvested stylesheet, the site's own stylesheet, the
- * MathJax fonts and every note's media. A vault with a folder called
- * `assets` at the top of its published scope would otherwise mirror
- * `assets/site.css` straight over ours -- two entries for one path, with the
- * winner decided by whichever loop ran last. `.nojekyll` and `CNAME` are
- * single files with the same problem and a worse failure: losing either one
- * breaks the whole site rather than one page.
+ * A vault with a folder called `assets` at the top of its published scope
+ * would otherwise mirror `assets/site.css` straight over ours -- two entries
+ * for one path, with the winner decided by whichever loop ran last.
+ * `.nojekyll` and `CNAME` are single files with the same problem and a worse
+ * failure: losing either one breaks the whole site rather than one page.
+ *
+ * **What this refuses is those paths, not the folder they are in**, and the
+ * difference is the difference between publishing a built application and
+ * not. Every bundler on earth writes its output to `dist/assets/`, so a site
+ * scoped at a `dist` folder mirrors the app's own `assets/` onto the site
+ * root -- and a folder-wide rule refused the application's entire JavaScript
+ * bundle, named `assets/index-C7x1a9.js`, which collides with nothing we
+ * write. The page published, the code did not, and the report said so in a
+ * line about stylesheets and fonts. Hashed bundle names cannot collide with
+ * a fixed list; a file genuinely called `assets/site.css` still cannot
+ * through.
  *
  * The site's generated pages are not here, because they do not need to be:
  * `sitePaths` already picks names around what is published, so a vault page
@@ -96,10 +125,14 @@ export function reservedPathReason(url: string): string | null {
   if (path === ".nojekyll" || path === "cname") {
     return `${url} is a file the site itself needs, so it cannot be published from the vault`;
   }
-  if (path === "assets" || path.startsWith("assets/")) {
+  if (
+    SITE_ASSET_FILES.indexOf(path) !== -1 ||
+    SITE_ASSET_FOLDERS.some((folder) => path.startsWith(folder))
+  ) {
     return (
-      `${url} is inside assets/, where the build writes its own stylesheets, ` +
-      `fonts and media -- publish it from a differently named folder`
+      `${url} is a path the build writes itself -- the site's own stylesheets, ` +
+      `scripts, fonts and note media live there -- so publish it under a ` +
+      `different name`
     );
   }
   return null;
@@ -301,6 +334,15 @@ export interface HtmlFileStats {
    */
   localResourceUrls: string[];
   /**
+   * Pages that are an application's shell with none of its code, with the
+   * root element each one would have mounted into.
+   *
+   * The one blank page this report could not account for: everything about
+   * publishing the file worked, and the file was never going to run. See
+   * `appShellWithoutCode`.
+   */
+  appShells: string[];
+  /**
    * Pages whose `<base href>` will not resolve their own files, with why.
    *
    * Page-level rather than per-reference, because that is what it is: one
@@ -331,6 +373,7 @@ export function emptyHtmlFileStats(): HtmlFileStats {
     companionBytes: 0,
     unresolved: [],
     localResourceUrls: [],
+    appShells: [],
     baseHrefs: [],
     publishedPages: [],
   };
@@ -373,7 +416,8 @@ export function withinScope(path: string, folder: string | null): boolean {
  * `getFiles()` rather than `getMarkdownFiles()`, which is the first time
  * anything in this plugin has looked at the rest of the vault, so the
  * filtering is deliberately conservative: the scope folder, the build's own
- * output folders, and nothing hidden.
+ * output folders, nothing hidden, and nothing installed by a package
+ * manager.
  *
  * **A frontmatter flag excludes every one of them.** An HTML file has no
  * frontmatter to carry the flag, so there is no way for it to opt in, and
@@ -410,6 +454,10 @@ export function selectHtmlFiles(
       // nobody's web page. Shared with note selection, which needed the same
       // rule and did not have it.
       if (isHiddenPath(file.path, config.folder)) return false;
+      // A prototype's `node_modules` is the worst case this selector has:
+      // every package's demo page, coverage report and test fixture, each
+      // one read, scanned and published. See `isDependencyPath`.
+      if (isDependencyPath(file.path, config.folder)) return false;
       return true;
     })
     .sort((a, b) => a.path.localeCompare(b.path));
@@ -627,6 +675,54 @@ export function isDirectoryReference(value: string): boolean {
   const [raw] = withoutFragment.split("?");
   if (!raw) return true;
   return raw.endsWith("/") || raw === "." || raw === "..";
+}
+
+/**
+ * An application's root element, where a page has one.
+ *
+ * These are the handful of names the frameworks mount into, and they are
+ * worth recognising for one reason: a page that has one and no code at all
+ * is a source file rather than a site. See `appShellWithoutCode`.
+ */
+const APP_ROOTS: { pattern: RegExp; name: string }[] = [
+  { pattern: /<app-root[\s>]/i, name: "<app-root>" },
+  { pattern: /<router-outlet[\s>]/i, name: "<router-outlet>" },
+  // `\sid=` rather than `id=`, so `data-id="app"` is not read as `id="app"`.
+  { pattern: /<div[^>]*\sid=["']?root["'\s>]/i, name: `<div id="root">` },
+  { pattern: /<div[^>]*\sid=["']?app["'\s>]/i, name: `<div id="app">` },
+  { pattern: /<div[^>]*\sid=["']?__next["'\s>]/i, name: `<div id="__next">` },
+  { pattern: /<div[^>]*\sid=["']?__nuxt["'\s>]/i, name: `<div id="__nuxt">` },
+];
+
+/**
+ * The element an application would have mounted into, on a page that
+ * carries no code to mount anything -- or null, which is every other page.
+ *
+ * This exists because of the one failure in this whole feature that the
+ * report could not explain. Somebody opened the `index.html` of an Angular
+ * project on the published site and got a blank page. Everything had worked:
+ * the file was selected, published byte for byte, and its one reference --
+ * `favicon.ico` -- was carried. There was nothing to warn about, because the
+ * page makes no reference that could be broken. The problem is what the page
+ * *does not* contain. A framework's `src/index.html` is an empty shell;
+ * `main.ts` is named in `angular.json` or `vite.config`, never in the HTML,
+ * so this publisher cannot see it and would not know what to do with it if
+ * it could -- nothing here compiles anything, by design.
+ *
+ * So the signal is the absence: a root element with no `<script>` anywhere
+ * in the document. Both halves are needed and the second is what keeps this
+ * quiet. A hand-written page with no JavaScript is exactly what as-is
+ * publishing is *for*, and warning about those would be noise on the
+ * feature's main case; a built application always carries a script tag, so
+ * it never trips this either. What is left is the file nobody could have
+ * published successfully.
+ */
+export function appShellWithoutCode(html: string): string | null {
+  if (/<script[\s>]/i.test(html)) return null;
+  for (const root of APP_ROOTS) {
+    if (root.pattern.test(html)) return root.name;
+  }
+  return null;
 }
 
 /** True when a page's text holds an `app://` URL. */

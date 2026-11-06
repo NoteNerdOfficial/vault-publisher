@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { App, TFile } from "obsidian";
 import {
   SiteConfig,
+  dependencyTally,
   isScopeChosen,
   resolveHomeNote,
   selectNotes,
@@ -98,6 +99,38 @@ describe("selectNotes", () => {
   it("publishes a hidden folder when the scope is aimed at it", () => {
     const selected = selectNotes(stubApp(VAULT), config({ folder: ".archive" }));
     expect(selected.map((f) => f.path)).toEqual([".archive/old-note.md"]);
+  });
+
+  /*
+   * A prototype in the vault brings its dependencies with it, and every
+   * package ships a README. This repository's own `node_modules` holds 753
+   * Markdown files; each one used to go through Obsidian's renderer, the
+   * link rewriter and the privacy scan, be assembled into a page, and then
+   * appear as a row in the vault listing inlined into every other page.
+   */
+  it("leaves installed dependencies out of the whole vault", () => {
+    const selected = selectNotes(
+      stubApp([
+        { path: "proto/notes.md" },
+        { path: "proto/node_modules/left-pad/README.md" },
+        { path: "proto/node_modules/vue/CHANGELOG.md" },
+      ]),
+      config({ folder: "" }),
+    );
+    expect(selected.map((f) => f.path)).toEqual(["proto/notes.md"]);
+  });
+
+  it("publishes a package's own notes when the scope is aimed at it", () => {
+    const selected = selectNotes(
+      stubApp([
+        { path: "proto/notes.md" },
+        { path: "proto/node_modules/left-pad/README.md" },
+      ]),
+      config({ folder: "proto/node_modules/left-pad" }),
+    );
+    expect(selected.map((f) => f.path)).toEqual([
+      "proto/node_modules/left-pad/README.md",
+    ]);
   });
 
   /*
@@ -311,5 +344,63 @@ describe("resolveHomeNote", () => {
 
   it("leaves a vault with no front page to the generated overview", () => {
     expect(resolveHomeNote(files("inbox.md", "notes/a.md"), { folder: "" }).path).toBe(null);
+  });
+});
+
+/*
+ * What the report says about dependencies, which has to be said. Silence
+ * would be wrong twice: somebody whose prototype's README is not on the site
+ * needs to know it was a rule and not a failure, and somebody whose build
+ * used to take twenty minutes needs to know what changed.
+ */
+describe("dependencyTally", () => {
+  /** Enough of an App for the tally, which reads every file in the vault. */
+  function filesApp(paths: string[]): App {
+    return {
+      vault: { getFiles: () => paths.map((path) => ({ path }) as TFile) },
+    } as unknown as App;
+  }
+
+  it("counts the files and names the trees", () => {
+    const tally = dependencyTally(
+      filesApp([
+        "proto/index.html",
+        "proto/node_modules/a/README.md",
+        "proto/node_modules/a/index.js",
+        "proto/node_modules/b/README.md",
+        "other/node_modules/c/README.md",
+        "notes/plan.md",
+      ]),
+      config({ folder: "" }),
+    );
+    expect(tally.files).toBe(4);
+    expect(tally.folders).toEqual(["other/node_modules", "proto/node_modules"]);
+  });
+
+  // One row per tree, not one per package that nests its own copy.
+  it("names the outermost tree only", () => {
+    const tally = dependencyTally(
+      filesApp(["node_modules/a/node_modules/b/README.md"]),
+      config({ folder: "" }),
+    );
+    expect(tally.folders).toEqual(["node_modules"]);
+  });
+
+  it("says nothing about a vault that has none", () => {
+    const tally = dependencyTally(
+      filesApp(["notes/plan.md", "notes/node modules.md"]),
+      config({ folder: "" }),
+    );
+    expect(tally).toEqual({ folders: [], files: 0 });
+  });
+
+  // Outside the scope is outside the build, and reporting it would send
+  // somebody looking for a slowdown that is not in their site.
+  it("ignores dependencies outside the scope", () => {
+    const tally = dependencyTally(
+      filesApp(["other/node_modules/a/README.md", "site/page.md"]),
+      config({ folder: "site" }),
+    );
+    expect(tally).toEqual({ folders: [], files: 0 });
   });
 });

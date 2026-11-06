@@ -1,12 +1,13 @@
 /**
  * The folders neither selector looks at, whatever the scope says.
  *
- * Two rules, and the same shape to both: a folder nobody meant to publish,
- * skipped before anything else is considered, with one exemption -- a scope
- * aimed inside such a folder is somebody naming the path, and refusing it
- * would mean a build that matched nothing and could not say why.
+ * Three rules, and the same shape to all of them: a folder nobody meant to
+ * publish, skipped before anything else is considered, with one exemption --
+ * a scope aimed inside such a folder is somebody naming the path, and
+ * refusing it would mean a build that matched nothing and could not say why.
  *
- * The first rule is the build's own output; the second is anything hidden.
+ * The first rule is the build's own output; the second is anything hidden;
+ * the third is somebody else's code, installed rather than written.
  *
  * **The build's own output.**
  *
@@ -96,4 +97,73 @@ export function isHiddenPath(path: string, scope?: string | null): boolean {
 /** Any segment beginning with a dot makes the whole path hidden. */
 function isHidden(path: string): boolean {
   return path.split("/").some((segment) => segment.startsWith("."));
+}
+
+/**
+ * Folders holding installed dependencies, which are code and not content.
+ *
+ * `node_modules` is the one that matters and the one this was written for. A
+ * vault with a prototype in it has one, Obsidian indexes it like any other
+ * folder -- it has no leading dot, so the rule above does not reach it -- and
+ * nothing here used to look at the name, so a build treated the whole
+ * dependency tree as vault content. What that costs is worth spelling out,
+ * because "slow" undersells it:
+ *
+ *   - **Every package's `README.md` is a note.** This repository's own
+ *     `node_modules` holds 753 Markdown files and 4.5 MB of them, and each one
+ *     goes through the full note pipeline: Obsidian's Markdown renderer, the
+ *     link rewriter, the privacy scan, a page assembled around it. A
+ *     prototype's tree is usually larger.
+ *   - **Every bundled `.html` is a page**, once `publishHtmlFiles` is on --
+ *     a package's coverage report, its demo, its test fixtures -- each read,
+ *     scanned for references and published.
+ *   - **And the cost is not linear.** Every page carries the whole vault
+ *     listing (see `nav.ts`), so N files published means N rows inlined into
+ *     each of N pages. A few thousand files is where that stops being slow
+ *     and starts being a build that does not finish.
+ *
+ * So the names are refused by name. Three of them, all unambiguous: no
+ * project has ever meant one of these to be read by a person.
+ *
+ * **`vendor` is deliberately not here**, though it is the same thing in PHP
+ * and Go. It is also an ordinary English word and a perfectly good name for a
+ * folder of notes about suppliers, and silently not publishing somebody's
+ * notes is worse than publishing a dependency slowly. The excluded-folders
+ * setting is the right tool for a folder whose name only its author knows the
+ * meaning of, and it reports what it left out.
+ *
+ * Matched on any segment, not just the first: a prototype's dependencies are
+ * at `proto/node_modules`, and npm nests them inside each other.
+ */
+export const DEPENDENCY_FOLDERS = ["node_modules", "bower_components", "jspm_packages"];
+
+/**
+ * Whether a vault path is inside installed dependencies.
+ *
+ * The exemption is the one the other two rules have, and it is not merely
+ * consistency: a reviewer whose scope *is* `proto/node_modules/some-demo`
+ * has named the path, and a build that matched nothing and could not say why
+ * is the failure that rule exists to prevent.
+ */
+export function isDependencyPath(path: string, scope?: string | null): boolean {
+  if (!hasDependencySegment(path)) return false;
+  if (scope && hasDependencySegment(scope)) {
+    if (path === scope || path.startsWith(`${scope}/`)) return false;
+  }
+  return true;
+}
+
+/** The dependency folder a path sits in, as a vault path, or null. */
+export function dependencyRoot(path: string): string | null {
+  const parts = path.split("/");
+  for (let i = 0; i < parts.length; i++) {
+    if (DEPENDENCY_FOLDERS.indexOf(parts[i]) !== -1) {
+      return parts.slice(0, i + 1).join("/");
+    }
+  }
+  return null;
+}
+
+function hasDependencySegment(path: string): boolean {
+  return path.split("/").some((segment) => DEPENDENCY_FOLDERS.indexOf(segment) !== -1);
 }
