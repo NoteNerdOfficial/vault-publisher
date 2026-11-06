@@ -50,11 +50,57 @@ answers:
   safe, so it is the setting for notes that would do real harm if they went
   out by accident.
 
-Three more rules apply before any of them: the build's own output folders are
-not input, dot-folders Obsidian hides are skipped, and `privacy.ts` scans each
-rendered page for content a Dataview query pulled in from a note that is *not*
-being published — the failure mode that makes a publisher dangerous rather than
-merely buggy.
+Four more rules apply before any of them: the build's own output folders are
+not input, dot-folders Obsidian hides are skipped, installed dependencies
+(`node_modules` and its two cousins) are skipped because a package's
+`README.md` is not a note, and `privacy.ts` scans each rendered page for
+content a Dataview query pulled in from a note that is *not* being published —
+the failure mode that makes a publisher dangerous rather than merely buggy.
+
+## Publishing a prototype as well as notes
+
+A vault can hold a built web application, and publishing one is a different
+problem from publishing a note: nothing here renders it, and the question is
+only which of its files travel.
+
+**`.html` files publish as-is** when the toggle is on — byte for byte, at
+their own path, with no stylesheet or script of ours added. Off by default,
+because vaults are full of HTML nobody wrote as a web page: saved articles, a
+plugin's bundled help, an export somebody made once.
+
+**The files a page names travel with it.** Scripts, stylesheets, images, and
+the files a *stylesheet* names in turn — a `@font-face` src, a
+`background-image`, an `@import` — resolved against the stylesheet rather than
+the page, because that is what a browser does. A reference that resolves to
+nothing is reported with the file that made it rather than silently dropped.
+
+**A folder can be published whole.** Set **Publish folders whole** to the
+folder your build produces and every file in it is published, referenced or
+not. This is for code splitting: a lazily loaded chunk is named only inside a
+string in the minified JavaScript, so no scan will ever find it, and leaving
+it behind is not a missing route — in React the dynamic import rejects and the
+application unmounts, so one click turns the whole page blank. Point it at
+`dist` or `build`, not at a project root. Excluded folders, hidden files,
+`node_modules` and this build's own output are still left out, notes are still
+published as rendered pages rather than as Markdown source, and every file
+left out is reported with the reason.
+
+Two things decide whether the result works, and neither is ours:
+
+- **Build with a relative base** — `vite build --base=./`,
+  `ng build --base-href ./`, `"homepage": "."`. The default is `/`, which
+  resolves to the root of the domain, and a site published into a folder is
+  not that. The build report names every reference that does this.
+- **Publish what the build produced, not the source.** `src/index.html` is a
+  shell with no application in it; nothing here compiles anything. A page with
+  a framework root element and no `<script>` at all is reported as such.
+
+The vault itself can be the project — the app at the root with its `src`,
+its `node_modules` and a `docs` folder of notes beside them. Scope the site at
+the whole vault, name `dist` as a folder published whole, and the notes
+publish as pages while the application publishes at `/dist/`. What is not
+expressible is the application at the *root* of the site with notes beside it:
+scoping at `dist` puts the app at `/` and leaves the notes out.
 
 ## Bringing your own colours and fonts
 
@@ -183,10 +229,14 @@ src/publish/    turning rendered HTML into a site
   graph.ts        the local graph, laid out at build time and emitted as SVG
   source.ts       a note's markdown, minus what the rendering hides
   assets.ts       the files a page points at, carried and rewritten
-  htmlFiles.ts    the vault's own .html pages, published untouched
+  htmlFiles.ts    the vault's own .html pages, published untouched, and what
+                  each one -- and each stylesheet it carries -- asks for
+  wholeFolders.ts folders published entire, for a build whose chunks nothing
+                  references
   sourceLink.ts   which repository the site's bar links back to, if any
   excludeFolders.ts  folders the author keeps out of whatever the scope took in
-  outputFolders.ts   the folders neither selector looks at, whatever the scope says
+  outputFolders.ts   the folders neither selector looks at, whatever the scope
+                     says: build output, hidden paths, installed dependencies
   privacy.ts      content from unpublished notes that reached a published page
   landing.ts      the pages no note wrote: homepage, browse, a page per tag
   themes.ts       the themes a site can be built with, as custom properties
@@ -297,6 +347,21 @@ rather than trusted: anchoring in `overlayScript.test.ts`, labelling in
 
 ## Known issues
 
+- **An application cannot sit at the root of a site that also has notes.**
+  Scope decides where things land: at the whole vault an app published whole
+  is at `/dist/`, and scoping at `dist` puts it at `/` and leaves every note
+  out. Publishing the app at the root *and* notes beside it would need a
+  per-folder destination, which no setting here expresses.
+- **A Vite source `index.html` is not reported as an empty shell.** The
+  warning fires on a framework root element with no `<script>` anywhere, and
+  Vite's source page does have one — pointing at `/src/main.tsx`, which is
+  TypeScript no browser will run. It is still reported, by the rule about
+  references resolved from the root of the server, but the message is about
+  the base rather than about the page being unbuildable. Angular's source
+  `index.html` has no script tag and is caught.
+- **An application that computes a path at runtime still breaks.** Publishing
+  a folder whole carries every file, but `fetch('/api/' + id)` is asking for a
+  server, and a static host has none. Nothing here can fix that.
 - **A locked site cannot serve a code-split application.** An as-is build
   published into a locked site runs from a blob URL, and a module that
   `import()`s another chunk resolves that import against its own URL — which
