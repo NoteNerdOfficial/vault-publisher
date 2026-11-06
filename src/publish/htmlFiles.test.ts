@@ -885,6 +885,55 @@ describe("planCompanions", () => {
   });
 });
 
+/**
+ * A page that moves takes its files with it.
+ *
+ * The failure this is here for was real and quiet: a folder published at
+ * the front of the site put its `index.html` at `/`, and its script stayed
+ * at `/proto/dist/assets/index.js` because companions were still mirroring
+ * the vault path. The page loaded, asked for its script one folder down
+ * from where it was, and rendered nothing.
+ */
+describe("planCompanions, when the page has been given a destination", () => {
+  const page = { sourcePath: "proto/dist/index.html", url: "index.html" };
+
+  function context(): CompanionContext {
+    const sizes: Record<string, number> = {
+      "proto/dist/assets/app.js": 400,
+      "proto/dist/assets/app.css": 200,
+    };
+    return {
+      folder: null,
+      statFile: (path) => sizes[path] ?? null,
+      isPublishedPage: () => false,
+      pageRefused: () => null,
+      publishedNoteUrl: () => null,
+      maxBytes: 25 * 1024 * 1024,
+      tooBigReason: () => null,
+      // What a folder published at the root of the site hands in.
+      urlForFile: (path) => path.replace(/^proto\/dist\//, ""),
+    };
+  }
+
+  it("carries the page's files to where the page went", () => {
+    const html = `<script src="./assets/app.js"></script>
+      <link rel="stylesheet" href="./assets/app.css">`;
+    const plan = planCompanions(page, html, context());
+    expect(plan.carry).toEqual([
+      { sourcePath: "proto/dist/assets/app.js", url: "assets/app.js" },
+      { sourcePath: "proto/dist/assets/app.css", url: "assets/app.css" },
+    ]);
+  });
+
+  it("mirrors the vault path when no destination was given", () => {
+    const plain = { ...context(), urlForFile: undefined };
+    const plan = planCompanions(page, `<script src="./assets/app.js"></script>`, plain);
+    expect(plan.carry).toEqual([
+      { sourcePath: "proto/dist/assets/app.js", url: "proto/dist/assets/app.js" },
+    ]);
+  });
+});
+
 describe("findStylesheetReferences", () => {
   it("finds the files a stylesheet asks for, however they are spelled", () => {
     const css = `@font-face { src: url("fonts/inter.woff2") format("woff2"); }

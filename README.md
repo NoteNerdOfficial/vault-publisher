@@ -74,7 +74,7 @@ the files a *stylesheet* names in turn — a `@font-face` src, a
 the page, because that is what a browser does. A reference that resolves to
 nothing is reported with the file that made it rather than silently dropped.
 
-**A folder can be published whole.** Set **Publish folders whole** to the
+**A folder can be published whole.** Under **Publish folders whole**, add the
 folder your build produces and every file in it is published, referenced or
 not. This is for code splitting: a lazily loaded chunk is named only inside a
 string in the minified JavaScript, so no scan will ever find it, and leaving
@@ -84,6 +84,28 @@ application unmounts, so one click turns the whole page blank. Point it at
 `node_modules` and this build's own output are still left out, notes are still
 published as rendered pages rather than as Markdown source, and every file
 left out is reported with the reason.
+
+**And it can be published somewhere other than its vault path.** Each folder
+has a second field saying where it lands:
+
+| Publish at | Where the application ends up |
+| --- | --- |
+| *(blank)* | `/proto/app/dist/` — its vault path, the default |
+| `app` | `/app/` |
+| `/` | the front page of the site |
+
+A vault path is not an address anybody wants to send to a reviewer, which is
+most of the reason. The other is that `/` is what makes an application the
+site's front door: its `index.html` becomes the homepage, the overview the
+build would have written is not written, and a homepage note moves to
+`/index-note.html` — the one place a note does not win a collision, because
+here it loses to an instruction rather than to another file that happened to
+be there. The settings panel says which note is about to move, and the build
+report says it again.
+
+A destination says *where* a folder lands, not *whether* it may be published:
+the scope still decides that. Two folders cannot be sent to the same place,
+and the panel says so while it is still cheap to fix.
 
 Two things decide whether the result works, and neither is ours:
 
@@ -95,12 +117,12 @@ Two things decide whether the result works, and neither is ours:
   shell with no application in it; nothing here compiles anything. A page with
   a framework root element and no `<script>` at all is reported as such.
 
-The vault itself can be the project — the app at the root with its `src`,
-its `node_modules` and a `docs` folder of notes beside them. Scope the site at
-the whole vault, name `dist` as a folder published whole, and the notes
-publish as pages while the application publishes at `/dist/`. What is not
-expressible is the application at the *root* of the site with notes beside it:
-scoping at `dist` puts the app at `/` and leaves the notes out.
+The vault itself can be the project — the app at the root with its `src`, its
+`node_modules` and a `docs` folder of notes beside them. Scope the site at the
+whole vault, add `dist` as a folder published whole, and the notes publish as
+pages while the application publishes wherever you point it: at `/dist/` by
+default, at `/app/` if you say so, or at the front of the site with the notes
+behind it.
 
 ## Bringing your own colours and fonts
 
@@ -347,11 +369,6 @@ rather than trusted: anchoring in `overlayScript.test.ts`, labelling in
 
 ## Known issues
 
-- **An application cannot sit at the root of a site that also has notes.**
-  Scope decides where things land: at the whole vault an app published whole
-  is at `/dist/`, and scoping at `dist` puts it at `/` and leaves every note
-  out. Publishing the app at the root *and* notes beside it would need a
-  per-folder destination, which no setting here expresses.
 - **A Vite source `index.html` is not reported as an empty shell.** The
   warning fires on a framework root element with no `<script>` anywhere, and
   Vite's source page does have one — pointing at `/src/main.tsx`, which is

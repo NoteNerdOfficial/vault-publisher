@@ -200,6 +200,18 @@ export interface CompanionContext {
   /** Why a file this big is not published. Supplied, so the wording is
    * identical to the one attachments get. */
   tooBigReason: (size: number, limit: number) => string | null;
+  /**
+   * Where a carried file lands, when its vault path is not the answer.
+   *
+   * A folder published whole can be given a destination, and a page in one
+   * moves with it. Its companions have to move with it too, or the page
+   * arrives at the new address still asking for its script at the old one
+   * -- which is a site that looks published and is blank.
+   *
+   * Optional, and absent for every site that names no destination, in
+   * which case a companion keeps the mirrored vault path it always had.
+   */
+  urlForFile?: (path: string) => string;
 }
 
 /**
@@ -218,7 +230,10 @@ export function planCompanions(
   const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
   collectReferences(
     page,
-    { local: findLocalReferences(html), rootAbsolute: findRootAbsoluteReferences(html) },
+    {
+      local: findLocalReferences(html),
+      rootAbsolute: findRootAbsoluteReferences(html),
+    },
     context,
     plan,
   );
@@ -282,7 +297,9 @@ export async function planStylesheetTree(
 ): Promise<CompanionPlan> {
   const plan: CompanionPlan = { carry: [], broken: [], refused: [] };
   const known = new Set(carried.map((companion) => companion.sourcePath));
-  const queue = carried.filter((companion) => isStylesheet(companion.sourcePath));
+  const queue = carried.filter((companion) =>
+    isStylesheet(companion.sourcePath),
+  );
 
   while (queue.length) {
     const sheet = queue.shift();
@@ -401,10 +418,13 @@ function collectReferences(
       continue;
     }
 
-    const url = urlForVaultFile(path, context.folder);
+    const url = context.urlForFile?.(path) ?? urlForVaultFile(path, context.folder);
     const reserved = reservedPathReason(url);
     if (reserved) {
-      plan.refused.push({ path, reason: `referenced by ${page.url}: ${reserved}` });
+      plan.refused.push({
+        path,
+        reason: `referenced by ${page.url}: ${reserved}`,
+      });
       continue;
     }
 
@@ -501,7 +521,10 @@ export function isHtmlFilePath(path: string): boolean {
  * here, it is the mechanism -- a page and the stylesheet beside it stay
  * beside each other, so the reference between them is still true.
  */
-export function urlForVaultFile(sourcePath: string, folder: string | null): string {
+export function urlForVaultFile(
+  sourcePath: string,
+  folder: string | null,
+): string {
   return folder && sourcePath.startsWith(`${folder}/`)
     ? sourcePath.slice(folder.length + 1)
     : sourcePath;
@@ -555,7 +578,8 @@ export function selectHtmlFiles(
     .getFiles()
     .filter((file) => {
       if (!isHtmlFilePath(file.path)) return false;
-      if (config.folder && !file.path.startsWith(`${config.folder}/`)) return false;
+      if (config.folder && !file.path.startsWith(`${config.folder}/`))
+        return false;
       // The author's own list. A folder kept out of the site is kept out
       // whatever is in it: a page published as-is is as public as a note.
       if (isExcluded(file.path, leftOut)) return false;
@@ -618,7 +642,8 @@ export function countHtmlFilesBlockedByFlag(
   },
 ): number {
   if (!config.publishHtmlFiles || !config.requireFrontmatterFlag) return 0;
-  return selectHtmlFiles(app, { ...config, requireFrontmatterFlag: null }).length;
+  return selectHtmlFiles(app, { ...config, requireFrontmatterFlag: null })
+    .length;
 }
 
 /* --- what a page points at -------------------------------------------- */
@@ -780,19 +805,25 @@ export function pageTitle(html: string, sourcePath: string): string {
 
 /** Entity references in a page title, resolved to the text they stand for. */
 function decodeEntities(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
-    const named = NAMED_ENTITIES[body.toLowerCase()];
-    if (named) return named;
-    if (!body.startsWith("#")) return whole;
+  return text.replace(
+    /&(#x[0-9a-f]+|#\d+|[a-z]+);/gi,
+    (whole, body: string) => {
+      const named = NAMED_ENTITIES[body.toLowerCase()];
+      if (named) return named;
+      if (!body.startsWith("#")) return whole;
 
-    const hex = body[1] === "x" || body[1] === "X";
-    const code = Number.parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
-    // A code point outside Unicode, or a surrogate half, is not a character
-    // `fromCodePoint` will give back -- it throws. Left as written.
-    if (!Number.isInteger(code) || code <= 0 || code > 0x10ffff) return whole;
-    if (code >= 0xd800 && code <= 0xdfff) return whole;
-    return String.fromCodePoint(code);
-  });
+      const hex = body[1] === "x" || body[1] === "X";
+      const code = Number.parseInt(
+        hex ? body.slice(2) : body.slice(1),
+        hex ? 16 : 10,
+      );
+      // A code point outside Unicode, or a surrogate half, is not a character
+      // `fromCodePoint` will give back -- it throws. Left as written.
+      if (!Number.isInteger(code) || code <= 0 || code > 0x10ffff) return whole;
+      if (code >= 0xd800 && code <= 0xdfff) return whole;
+      return String.fromCodePoint(code);
+    },
+  );
 }
 
 /**
@@ -1003,7 +1034,10 @@ export function isLocalReference(value: string): boolean {
  * no file there to carry, and a `..` that escapes is the author's mistake
  * rather than ours to interpret.
  */
-export function companionVaultPath(htmlPath: string, reference: string): string | null {
+export function companionVaultPath(
+  htmlPath: string,
+  reference: string,
+): string | null {
   const [withoutFragment] = reference.split("#");
   const [raw] = withoutFragment.split("?");
   if (!raw) return null;
@@ -1057,7 +1091,19 @@ export function planHtmlFiles(
   files: Array<{ path: string }>,
   folder: string | null,
   takenUrls: Iterable<string>,
-): { targets: HtmlFileTarget[]; collisions: { path: string; reason: string }[] } {
+  /**
+   * Where a page lands when its vault path is not the answer.
+   *
+   * A folder published whole can be given a destination, and its pages
+   * have to go to the same place its other files do. Supplied rather than
+   * worked out here, so this stays the one place that decides which page
+   * wins a URL and is not also a place that knows about that setting.
+   */
+  urlOverrides?: ReadonlyMap<string, string>,
+): {
+  targets: HtmlFileTarget[];
+  collisions: { path: string; reason: string }[];
+} {
   const taken = new Map<string, string>();
   for (const url of takenUrls) taken.set(url.toLowerCase(), url);
 
@@ -1065,7 +1111,8 @@ export function planHtmlFiles(
   const collisions: { path: string; reason: string }[] = [];
 
   for (const file of files) {
-    const url = urlForVaultFile(file.path, folder);
+    const url =
+      urlOverrides?.get(file.path) ?? urlForVaultFile(file.path, folder);
     const key = url.toLowerCase();
     const claimed = taken.get(key);
 

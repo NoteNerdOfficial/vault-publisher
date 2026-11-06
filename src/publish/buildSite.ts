@@ -54,7 +54,12 @@ import {
   emptyAssetStats,
 } from "./assets";
 import { stabilizeIds, stripDebugAttributes } from "./stableIds";
-import { Mention, OutgoingLinks, buildBacklinkIndex, relatedNotes } from "./backlinks";
+import {
+  Mention,
+  OutgoingLinks,
+  buildBacklinkIndex,
+  relatedNotes,
+} from "./backlinks";
 import { buildLocalGraph } from "./graph";
 import {
   NavNote,
@@ -94,7 +99,11 @@ import {
 import {
   WholeFolderPlan,
   WholeFolderTally,
+  claimsSiteRoot,
+  entryFor,
+  parseWholeFolders,
   planWholeFolders,
+  wholeFolderUrl,
 } from "./wholeFolders";
 import {
   CompanionContext,
@@ -112,6 +121,7 @@ import {
   planHtmlFiles,
   planStylesheetTree,
   selectHtmlFiles,
+  urlForVaultFile,
 } from "./htmlFiles";
 import { stampBlockIds } from "../overlay/anchor";
 import { siteCss } from "./theme";
@@ -210,7 +220,7 @@ export interface SiteConfig {
    * Empty or unset means none, which is every site built before this
    * existed.
    */
-  publishWholeFolders?: string[];
+  publishWholeFolders?: { folder: string; at?: string }[];
   /**
    * Folders holding this build's own output, which are never its input.
    *
@@ -627,8 +637,8 @@ export function resolveHomeNote(
   if (named) {
     const forms = [named, /\.md$/i.test(named) ? named : `${named}.md`];
     const keys = new Set(
-      [...forms, ...(scope ? forms.map((form) => `${scope}/${form}`) : [])].map((form) =>
-        form.toLowerCase(),
+      [...forms, ...(scope ? forms.map((form) => `${scope}/${form}`) : [])].map(
+        (form) => form.toLowerCase(),
       ),
     );
     const hit = selected.find((file) => keys.has(file.path.toLowerCase()));
@@ -639,7 +649,9 @@ export function resolveHomeNote(
   // three folders down is documentation for that folder, not for the site.
   const top = selected.filter((file) => {
     const relative =
-      scope && file.path.startsWith(`${scope}/`) ? file.path.slice(scope.length + 1) : file.path;
+      scope && file.path.startsWith(`${scope}/`)
+        ? file.path.slice(scope.length + 1)
+        : file.path;
     return !relative.includes("/");
   });
 
@@ -685,42 +697,63 @@ export async function buildSite(
    * page it keeps its content at a name that is still its own.
    */
   const urlFor = (path: string): string => {
-    if (home.path === path) return "index.html";
+    // A folder published *at the root of the site* is somebody saying what
+    // the front page is, in the most explicit way the settings allow, so it
+    // takes `index.html` and the note that would have had it keeps its
+    // content at the name a non-home note landing there has always been
+    // given. This is the one place a note does not win a collision, and it
+    // loses to an instruction rather than to another file that happened to
+    // be there.
+    if (home.path === path) return appClaimsHome ? "index-note.html" : "index.html";
     const url = urlForNote(path, config.folder);
     return url.toLowerCase() === "index.html" ? "index-note.html" : url;
   };
+
+  /*
+   * The folders published whole, read before the notes are given their
+   * URLs: one published at the root of the site takes `index.html`, and
+   * `urlFor` has to know that while it is deciding where the homepage note
+   * goes.
+   */
+  const wholeEntries = parseWholeFolders(config.publishWholeFolders);
+  const vaultFiles = wholeEntries.length
+    ? app.vault
+        .getFiles()
+        .map((file) => ({ path: file.path, size: file.stat?.size ?? 0 }))
+    : [];
+  const appClaimsHome = claimsSiteRoot(vaultFiles, wholeEntries, config.folder);
 
   const targets: LinkTarget[] = selected.map((file) => ({
     sourcePath: file.path,
     url: urlFor(file.path),
   }));
   /**
-   * The folders the author asked to be published whole.
+   * What those folders actually publish, now that the notes have URLs.
    *
-   * Planned here because its pages have to join the as-is selection before
-   * anything is planned against a URL, and because the only collision a file
-   * in one of these folders can lose is against a note's page -- which is
-   * what `targets` has just settled. A file cannot collide with an as-is
-   * page or with a companion: all three derive their URL from the vault path
-   * the same way, so two of them at one URL are one file, deduplicated
-   * rather than refused.
+   * Planned here because a file in one can lose a collision to a note's
+   * page, which is what `targets` has just settled, and because its own
+   * pages have to join the as-is selection before anything is planned
+   * against a URL.
+   *
+   * Without a destination, a file here cannot collide with an as-is page or
+   * a companion: all three derive their URL from the vault path the same
+   * way, so two of them at one URL are one file, deduplicated rather than
+   * refused. A destination is what makes that collidable, which is why
+   * `claimedBy` is given the notes and why `planHtmlFiles` is given the
+   * overrides below.
    */
-  const wholeEntries = parseExcludeFolders(config.publishWholeFolders);
-  const noteUrls = new Map(targets.map((target) => [target.url.toLowerCase(), target.sourcePath]));
-  const wholePlan: WholeFolderPlan = planWholeFolders(
-    wholeEntries.length
-      ? app.vault.getFiles().map((file) => ({ path: file.path, size: file.stat?.size ?? 0 }))
-      : [],
-    {
-      entries: wholeEntries,
-      folder: config.folder,
-      excluded: parseExcludeFolders(config.excludeFolders),
-      outputFolders: config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS,
-      maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
-      tooBigReason: assetSkipReason,
-      claimedBy: (url) => noteUrls.get(url.toLowerCase()) ?? null,
-    },
+  const noteUrls = new Map(
+    targets.map((target) => [target.url.toLowerCase(), target.sourcePath]),
   );
+  const wholePlan: WholeFolderPlan = planWholeFolders(vaultFiles, {
+    entries: wholeEntries,
+    folder: config.folder,
+    excluded: parseExcludeFolders(config.excludeFolders),
+    outputFolders: config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS,
+    maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
+    tooBigReason: assetSkipReason,
+    claimedBy: (url) => noteUrls.get(url.toLowerCase()) ?? null,
+  });
   /**
    * Every page going out as-is: the ones the toggle selected, and the ones
    * that are in a folder published whole.
@@ -747,7 +780,25 @@ export async function buildSite(
    * collision has to be decided by something: a note's page wins, and the
    * HTML file is reported rather than published over it.
    */
-  const htmlPlan = planHtmlFiles(htmlSelected, config.folder, targets.map((t) => t.url));
+  /*
+   * Where a page in a folder published whole lands, when that folder was
+   * given a destination. Keyed by vault path, and empty for every site that
+   * names no destination -- in which case the planner works it out from the
+   * vault path exactly as it always has.
+   */
+  const wholeUrls = new Map<string, string>();
+  for (const page of wholePlan.pages) {
+    const entry = entryFor(page, wholeEntries);
+    if (!entry || entry.at === null) continue;
+    wholeUrls.set(page, wholeFolderUrl(page, entry, config.folder));
+  }
+
+  const htmlPlan = planHtmlFiles(
+    htmlSelected,
+    config.folder,
+    targets.map((t) => t.url),
+    wholeUrls,
+  );
   const htmlByPath = new Map(htmlSelected.map((file) => [file.path, file]));
 
   /**
@@ -797,7 +848,10 @@ export async function buildSite(
       const slash = target.url.lastIndexOf("/");
       return {
         url: target.url,
-        title: pageTitle(htmlContent.get(target.sourcePath) ?? "", target.sourcePath),
+        title: pageTitle(
+          htmlContent.get(target.sourcePath) ?? "",
+          target.sourcePath,
+        ),
         folder: slash === -1 ? "" : target.url.slice(0, slash),
         updated: null,
         pinned: false,
@@ -977,7 +1031,8 @@ export async function buildSite(
           totalMs: renderedNote.totalMs,
           pending: renderedNote.settle.pendingAtEnd,
           incomplete:
-            !renderedNote.settle.settled && renderedNote.settle.pendingAtEnd > 0,
+            !renderedNote.settle.settled &&
+            renderedNote.settle.pendingAtEnd > 0,
           bases,
           privacy,
           assets,
@@ -1033,7 +1088,9 @@ export async function buildSite(
     ...rendered.map((page) => page.url),
     ...htmlPlan.targets.map((target) => target.url),
   ]);
-  const counted = collectTags(rendered.map((page) => ({ url: page.url, tags: page.tags })));
+  const counted = collectTags(
+    rendered.map((page) => ({ url: page.url, tags: page.tags })),
+  );
   const tagUrlByName = tagUrls(counted, paths);
   const tags: TagLink[] = counted.map((tag) => ({
     ...tag,
@@ -1104,7 +1161,12 @@ export async function buildSite(
 
   for (const page of rendered) {
     const mentions: Mention[] = backlinks.get(page.url) ?? [];
-    const related = relatedNotes(page.url, outgoingByUrl.get(page.url), mentions, titles);
+    const related = relatedNotes(
+      page.url,
+      outgoingByUrl.get(page.url),
+      mentions,
+      titles,
+    );
     const words = countWords(page.html);
 
     files.push({
@@ -1130,7 +1192,11 @@ export async function buildSite(
         // anything.
         overlay: config.reviewOverlay
           ? {
-              sourcePath: overlayKey(config.reviewOverlay, page.url, page.sourcePath),
+              sourcePath: overlayKey(
+                config.reviewOverlay,
+                page.url,
+                page.sourcePath,
+              ),
               reviewer: config.reviewOverlay.reviewer,
               tracker: config.reviewOverlay.tracker,
               comments: config.reviewOverlay.comments !== false,
@@ -1156,7 +1222,8 @@ export async function buildSite(
           stats: {
             words,
             readingMinutes: Math.max(1, Math.round(words / 220)),
-            sections: page.headings.filter((heading) => heading.level === 2).length,
+            sections: page.headings.filter((heading) => heading.level === 2)
+              .length,
           },
           today,
           noteCount: navNotes.length,
@@ -1208,7 +1275,9 @@ export async function buildSite(
   // recognised as the working link it is rather than reported as broken --
   // and, for one that is not going out, why, so the report says what the
   // link will actually open.
-  const publishedHtml = new Set(htmlPlan.targets.map((target) => target.sourcePath));
+  const publishedHtml = new Set(
+    htmlPlan.targets.map((target) => target.sourcePath),
+  );
   const refusedPages = new Map(
     htmlPlan.collisions.map((collision) => [collision.path, collision.reason]),
   );
@@ -1234,6 +1303,15 @@ export async function buildSite(
     publishedNoteUrl: (path) => (published.has(path) ? urlFor(path) : null),
     maxBytes: config.maxAssetBytes ?? DEFAULT_MAX_ASSET_BYTES,
     tooBigReason: assetSkipReason,
+    // A companion of a page in a folder with a destination moves with the
+    // page. Without this the page arrives at its new address still asking
+    // for its script at the old one.
+    urlForFile: (path) => {
+      const entry = entryFor(path, wholeEntries);
+      return entry && entry.at !== null
+        ? wholeFolderUrl(path, entry, config.folder)
+        : urlForVaultFile(path, config.folder);
+    },
   };
 
   for (const target of htmlPlan.targets) {
@@ -1452,7 +1530,11 @@ export async function buildSite(
     files.push({
       path: "index.html",
       content: buildPage({
-        meta: { title: config.siteName, url: "index.html", siteName: config.siteName },
+        meta: {
+          title: config.siteName,
+          url: "index.html",
+          siteName: config.siteName,
+        },
         content: overviewContent(landing("index.html")),
         headings: [],
         shell: sitePageShell(),
@@ -1487,7 +1569,11 @@ export async function buildSite(
     files.push({
       path: tag.url,
       content: buildPage({
-        meta: { title: `#${tag.name}`, url: tag.url, siteName: config.siteName },
+        meta: {
+          title: `#${tag.name}`,
+          url: tag.url,
+          siteName: config.siteName,
+        },
         content: tagPageContent(tag, landing(tag.url)),
         headings: [],
         shell: sitePageShell([
@@ -1633,10 +1719,12 @@ export function excludedTally(app: App, config: SiteConfig): ExcludeTally[] {
    * entry kept nothing out while it was quietly keeping a private subfolder
    * out of a published build folder.
    */
-  const wholeEntries = parseExcludeFolders(config.publishWholeFolders);
+  const wholeEntries = parseWholeFolders(config.publishWholeFolders);
   if (wholeEntries.length) {
     const plan = planWholeFolders(
-      app.vault.getFiles().map((file) => ({ path: file.path, size: file.stat?.size ?? 0 })),
+      app.vault
+        .getFiles()
+        .map((file) => ({ path: file.path, size: file.stat?.size ?? 0 })),
       {
         entries: wholeEntries,
         folder: config.folder,
@@ -1733,7 +1821,9 @@ function navNoteFor(
 /** `YYYY-MM-DDTHH:MM`, which is the resolution batch detection needs. */
 function stampFor(value: unknown, file: TFile): string | null {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
-    return value.length >= 16 ? value.slice(0, 16) : `${value.slice(0, 10)}T12:00`;
+    return value.length >= 16
+      ? value.slice(0, 16)
+      : `${value.slice(0, 10)}T12:00`;
   }
   const mtime = file.stat?.mtime;
   if (!mtime) return null;
@@ -1749,9 +1839,9 @@ function tagsFor(app: App, file: TFile): string[] {
     : typeof front === "string"
       ? front.split(/[,\s]+/).filter(Boolean)
       : [];
-  return Array.from(new Set([...inline, ...declared].map((tag) => tag.replace(/^#/, "")))).filter(
-    Boolean,
-  );
+  return Array.from(
+    new Set([...inline, ...declared].map((tag) => tag.replace(/^#/, ""))),
+  ).filter(Boolean);
 }
 
 /** Words in the rendered note, for the rail's one line of fact. */
@@ -1780,7 +1870,11 @@ function noteHeader(
   page: { nav: NavNote; tags: string[]; outgoing: Array<{ url: string }> },
   incoming: number,
   tagUrlByName: Map<string, string>,
-): Array<{ label: string; value: string; tags?: Array<{ name: string; url: string }> }> {
+): Array<{
+  label: string;
+  value: string;
+  tags?: Array<{ name: string; url: string }>;
+}> {
   const header: Array<{
     label: string;
     value: string;
@@ -1794,7 +1888,10 @@ function noteHeader(
 
   const outgoing = new Set(page.outgoing.map((link) => link.url)).size;
   if (incoming || outgoing) {
-    header.push({ label: "Links", value: `${incoming} in \u00b7 ${outgoing} out` });
+    header.push({
+      label: "Links",
+      value: `${incoming} in \u00b7 ${outgoing} out`,
+    });
   }
 
   // A tag with no page is one no published note carries, which cannot happen
@@ -1807,5 +1904,3 @@ function noteHeader(
 
   return header;
 }
-
-

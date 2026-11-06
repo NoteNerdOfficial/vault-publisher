@@ -1859,6 +1859,10 @@ export default class VaultPublisherPlugin extends Plugin {
               `no files -- check the path, or build the app first`,
           );
         }
+        // The one that changes an address somebody may have shared.
+        for (const tally of result.wholeFolders.filter((row) => row.at === "" && row.count)) {
+          say(`"${tally.entry}" is the front page of this site`);
+        }
       }
 
       // What the author asked to be left out, and what it cost. A publish is
@@ -2126,9 +2130,16 @@ export default class VaultPublisherPlugin extends Plugin {
           `${result.wholeFolders.length} folder(s), ${formatBytes(result.wholeFolderBytes)}`,
       );
       for (const tally of result.wholeFolders) {
+        const where =
+          tally.at === null
+            ? ""
+            : tally.at === ""
+              ? ", at the front page of the site"
+              : `, at \`/${tally.at}/\``;
         lines.push(
           tally.count
-            ? `- \`${tally.entry}\`: ${tally.count} file(s), ${formatBytes(tally.bytes)}`
+            ? `- \`${tally.entry}\`: ${tally.count} file(s), ` +
+                `${formatBytes(tally.bytes)}${where}`
             : `- \`${tally.entry}\`: nothing -- no file in the vault is inside it`,
         );
       }

@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   WholeFolderContext,
+  WholeFolderEntry,
+  claimsSiteRoot,
+  destination,
   entryFor,
   isInWholeFolder,
+  parseWholeFolders,
   planWholeFolders,
+  wholeFolderUrl,
 } from "./wholeFolders";
+
+/** An entry that keeps its vault path, which is what most of these are. */
+function at(folder: string, where: string | null = null): WholeFolderEntry {
+  return { folder, at: where };
+}
 
 /**
  * A built application in a vault, with the two files nothing references:
@@ -21,7 +31,7 @@ const DIST = [
 
 function context(over: Partial<WholeFolderContext> = {}): WholeFolderContext {
   return {
-    entries: ["proto/dist"],
+    entries: [at("proto/dist")],
     folder: null,
     excluded: [],
     outputFolders: ["_vault-publisher", "_site-preview"],
@@ -34,12 +44,12 @@ function context(over: Partial<WholeFolderContext> = {}): WholeFolderContext {
 
 describe("entryFor", () => {
   it("finds the entry a path sits under", () => {
-    expect(entryFor("proto/dist/assets/a.js", ["proto/dist"])).toBe("proto/dist");
-    expect(entryFor("proto/dist", ["proto/dist"])).toBe("proto/dist");
+    expect(entryFor("proto/dist/assets/a.js", [at("proto/dist")])?.folder).toBe("proto/dist");
+    expect(entryFor("proto/dist", [at("proto/dist")])?.folder).toBe("proto/dist");
   });
 
   it("does not match a folder whose name merely starts the same way", () => {
-    expect(entryFor("proto/dist-old/a.js", ["proto/dist"])).toBe(null);
+    expect(entryFor("proto/dist-old/a.js", [at("proto/dist")])).toBe(null);
   });
 
   /**
@@ -47,15 +57,207 @@ describe("entryFor", () => {
    * these are one folder on the filesystems most vaults sit on.
    */
   it("ignores case, and tidies the way an entry was typed", () => {
-    expect(entryFor("Proto/Dist/a.js", ["proto/dist"])).toBe("proto/dist");
-    expect(entryFor("proto/dist/a.js", ["/Proto/Dist/"])).toBe("/Proto/Dist/");
+    expect(entryFor("Proto/Dist/a.js", [at("proto/dist")])?.folder).toBe("proto/dist");
+    expect(entryFor("proto/dist/a.js", [at("/Proto/Dist/")])?.folder).toBe("/Proto/Dist/");
   });
 
   it("is null when nothing covers the path, and for an empty list", () => {
-    expect(entryFor("notes/a.md", ["proto/dist"])).toBe(null);
+    expect(entryFor("notes/a.md", [at("proto/dist")])).toBe(null);
     expect(entryFor("proto/dist/a.js", [])).toBe(null);
     expect(isInWholeFolder("proto/dist/a.js", [])).toBe(false);
-    expect(isInWholeFolder("proto/dist/a.js", ["proto/dist"])).toBe(true);
+    expect(isInWholeFolder("proto/dist/a.js", [at("proto/dist")])).toBe(true);
+  });
+});
+
+describe("parseWholeFolders", () => {
+  it("reads the stored list of folders and destinations", () => {
+    expect(parseWholeFolders([{ folder: "app/dist", at: "app" }])).toEqual([
+      { folder: "app/dist", at: "app" },
+    ]);
+  });
+
+  /**
+   * Both older shapes still read, and both mean what they meant: a bare
+   * path is a folder with no destination, which is what this setting did
+   * before destinations existed.
+   */
+  it("still reads a plain list of paths, and the raw text of a field", () => {
+    expect(parseWholeFolders(["app/dist", "docs/site"])).toEqual([
+      { folder: "app/dist", at: null },
+      { folder: "docs/site", at: null },
+    ]);
+    expect(parseWholeFolders(" app/dist \n\n/docs/site/\n")).toEqual([
+      { folder: "app/dist", at: null },
+      { folder: "docs/site", at: null },
+    ]);
+  });
+
+  it("keeps the first of a repeated folder", () => {
+    expect(
+      parseWholeFolders([
+        { folder: "app/dist", at: "app" },
+        { folder: "APP/DIST", at: "other" },
+      ]),
+    ).toEqual([{ folder: "app/dist", at: "app" }]);
+  });
+
+  /**
+   * A row with nothing in it yet is what the Add button stores, so parsing
+   * it away would make that button look broken. Two of them stay two, or
+   * they would collapse while somebody was typing into the second.
+   */
+  it("keeps a row with no path yet, and does not merge two of them", () => {
+    expect(parseWholeFolders([{ folder: "" }, { folder: "" }])).toEqual([
+      { folder: "", at: null },
+      { folder: "", at: null },
+    ]);
+  });
+
+  /** A blank line in the old text shape was never a row. */
+  it("drops blank lines from the text shape", () => {
+    expect(parseWholeFolders("app/dist\n\n\n")).toEqual([{ folder: "app/dist", at: null }]);
+    expect(parseWholeFolders(["", "  "])).toEqual([]);
+  });
+
+  /** And a blank row is invisible to a build. */
+  it("gives a blank row no tally and no say in what is published", () => {
+    const plan = planWholeFolders(
+      [{ path: "proto/dist/app.js", size: 10 }],
+      {
+        entries: [{ folder: "", at: null }],
+        folder: null,
+        excluded: [],
+        outputFolders: [],
+        maxBytes: 1_000,
+        tooBigReason: () => null,
+        claimedBy: () => null,
+      },
+    );
+    expect(plan).toEqual({ carry: [], pages: [], skipped: [], tallies: [] });
+  });
+
+  it("reads nothing out of nothing", () => {
+    expect(parseWholeFolders(undefined)).toEqual([]);
+    expect(parseWholeFolders([])).toEqual([]);
+    expect(parseWholeFolders(42)).toEqual([]);
+  });
+
+  /**
+   * The bug the settings panel found: a stored `at: ""` is the root, and
+   * reading it with the field's rule -- where empty means "not filled in"
+   * -- turned every application published at the front page back into one
+   * published at its vault path, on the next load and without a word.
+   */
+  it("reads a stored root destination back as the root", () => {
+    expect(parseWholeFolders([{ folder: "app/dist", at: "" }])).toEqual([
+      { folder: "app/dist", at: "" },
+    ]);
+    expect(parseWholeFolders([{ folder: "app/dist" }])).toEqual([
+      { folder: "app/dist", at: null },
+    ]);
+  });
+
+  it("refuses a stored destination that escapes the site", () => {
+    expect(parseWholeFolders([{ folder: "app/dist", at: "../out" }])).toEqual([
+      { folder: "app/dist", at: null },
+    ]);
+  });
+});
+
+describe("destination", () => {
+  /**
+   * The difference this has to keep: an empty field means "leave it where
+   * its vault path puts it", and `/` means the front page. One of those
+   * changes the homepage and the other does not.
+   */
+  it("tells an empty field from the root", () => {
+    expect(destination("")).toBe(null);
+    expect(destination("   ")).toBe(null);
+    expect(destination("/")).toBe("");
+    expect(destination("///")).toBe("");
+  });
+
+  it("tidies a path the way every other path here is tidied", () => {
+    expect(destination(" /app/ ")).toBe("app");
+    expect(destination("docs\\site")).toBe("docs/site");
+  });
+
+  /** A destination that climbs out of the site has nowhere to be. */
+  it("refuses a destination that escapes the site", () => {
+    expect(destination("../elsewhere")).toBe(null);
+    expect(destination("app/../..")).toBe(null);
+  });
+
+  it("is null for anything that is not a string", () => {
+    expect(destination(undefined)).toBe(null);
+    expect(destination(7)).toBe(null);
+  });
+});
+
+describe("wholeFolderUrl", () => {
+  it("keeps the vault path when there is no destination", () => {
+    expect(wholeFolderUrl("proto/dist/assets/a.js", at("proto/dist"), null)).toBe(
+      "proto/dist/assets/a.js",
+    );
+    expect(wholeFolderUrl("proto/dist/assets/a.js", at("proto/dist"), "proto")).toBe(
+      "dist/assets/a.js",
+    );
+  });
+
+  it("puts the folder where the destination says", () => {
+    expect(wholeFolderUrl("proto/dist/assets/a.js", at("proto/dist", "app"), null)).toBe(
+      "app/assets/a.js",
+    );
+    expect(wholeFolderUrl("proto/dist/index.html", at("proto/dist", "app"), null)).toBe(
+      "app/index.html",
+    );
+  });
+
+  it("puts it at the front of the site for the root destination", () => {
+    expect(wholeFolderUrl("proto/dist/index.html", at("proto/dist", ""), null)).toBe(
+      "index.html",
+    );
+    expect(wholeFolderUrl("proto/dist/assets/a.js", at("proto/dist", ""), null)).toBe(
+      "assets/a.js",
+    );
+  });
+
+  /**
+   * A destination is an address on the site, said outright. Making it
+   * relative to the scope as well would move an application because a
+   * setting two rows up changed.
+   */
+  it("ignores the scope once a destination is given", () => {
+    expect(wholeFolderUrl("proto/dist/a.js", at("proto/dist", "app"), "proto")).toBe("app/a.js");
+    expect(wholeFolderUrl("proto/dist/a.js", at("proto/dist", "app"), "proto/dist")).toBe(
+      "app/a.js",
+    );
+  });
+
+  it("matches a folder written in another case", () => {
+    expect(wholeFolderUrl("proto/dist/a.js", at("/Proto/Dist/", "app"), null)).toBe("app/a.js");
+  });
+});
+
+describe("claimsSiteRoot", () => {
+  const files = [{ path: "proto/dist/index.html" }, { path: "proto/dist/app.js" }];
+
+  it("is true when a folder published at the root has an index", () => {
+    expect(claimsSiteRoot(files, [at("proto/dist", "")], null)).toBe(true);
+  });
+
+  it("is false for a destination that is not the root", () => {
+    expect(claimsSiteRoot(files, [at("proto/dist", "app")], null)).toBe(false);
+  });
+
+  it("is false with no destination, whatever the scope makes the url", () => {
+    expect(claimsSiteRoot(files, [at("proto/dist")], "proto/dist")).toBe(false);
+  });
+
+  it("is false when the folder has no index page at its root", () => {
+    expect(claimsSiteRoot([{ path: "proto/dist/app.js" }], [at("proto/dist", "")], null)).toBe(
+      false,
+    );
   });
 });
 
@@ -83,14 +285,14 @@ describe("planWholeFolders", () => {
   it("counts what each entry published, and the bytes", () => {
     const plan = planWholeFolders(DIST, context());
     expect(plan.tallies).toEqual([
-      { entry: "proto/dist", count: 6, bytes: 191_800 },
+      { entry: "proto/dist", at: null, count: 6, bytes: 191_800 },
     ]);
   });
 
   /** A path that matched nothing is a typo, and reads as one in the report. */
   it("reports an entry that matched nothing as a zero rather than silence", () => {
-    const plan = planWholeFolders(DIST, context({ entries: ["proto/disp"] }));
-    expect(plan.tallies).toEqual([{ entry: "proto/disp", count: 0, bytes: 0 }]);
+    const plan = planWholeFolders(DIST, context({ entries: [at("proto/disp")] }));
+    expect(plan.tallies).toEqual([{ entry: "proto/disp", at: null, count: 0, bytes: 0 }]);
     expect(plan.carry).toEqual([]);
   });
 
@@ -101,6 +303,88 @@ describe("planWholeFolders", () => {
     );
     expect(plan.carry.map((file) => file.sourcePath)).not.toContain("Journal/private.png");
     expect(plan.skipped).toEqual([]);
+  });
+
+  describe("with a destination", () => {
+    it("publishes the folder where the destination says", () => {
+      const plan = planWholeFolders(DIST, context({ entries: [at("proto/dist", "app")] }));
+      expect(plan.pages).toEqual(["proto/dist/index.html"]);
+      expect(plan.carry.map((file) => file.url)).toEqual([
+        "app/assets/index-abc.js",
+        "app/assets/index-abc.css",
+        "app/assets/Lazy-def.js",
+        "app/assets/inter.woff2",
+        "app/data/seed.json",
+      ]);
+    });
+
+    it("puts it at the front of the site for the root", () => {
+      const plan = planWholeFolders(DIST, context({ entries: [at("proto/dist", "")] }));
+      expect(plan.carry.map((file) => file.url)).toContain("assets/Lazy-def.js");
+    });
+
+    it("records where each folder went, for the report", () => {
+      const plan = planWholeFolders(DIST, context({ entries: [at("proto/dist", "app")] }));
+      expect(plan.tallies).toEqual([
+        { entry: "proto/dist", at: "app", count: 6, bytes: 191_800 },
+      ]);
+    });
+
+    /**
+     * Two folders at one address has no sensible reading. The first keeps
+     * it, because refusing both would turn one typo into two missing
+     * applications.
+     */
+    it("refuses the second of two folders published at the same place", () => {
+      const plan = planWholeFolders(
+        [
+          { path: "a/dist/index.html", size: 10 },
+          { path: "b/dist/index.html", size: 10 },
+        ],
+        context({ entries: [at("a/dist", "app"), at("b/dist", "app")] }),
+      );
+      expect(plan.pages).toEqual(["a/dist/index.html"]);
+      expect(plan.skipped[0]?.path).toBe("b/dist");
+      expect(plan.skipped[0]?.reason).toContain("two folders cannot be the same place");
+      expect(plan.tallies[1]).toEqual({ entry: "b/dist", at: "app", count: 0, bytes: 0 });
+    });
+
+    it("lets two folders keep their vault paths without calling it a clash", () => {
+      const plan = planWholeFolders(
+        [
+          { path: "a/dist/index.html", size: 10 },
+          { path: "b/dist/index.html", size: 10 },
+        ],
+        context({ entries: [at("a/dist"), at("b/dist")] }),
+      );
+      expect(plan.pages).toEqual(["a/dist/index.html", "b/dist/index.html"]);
+      expect(plan.skipped).toEqual([]);
+    });
+
+    /**
+     * A destination says where a folder lands, not whether it is allowed
+     * out -- otherwise naming one would quietly widen the scope.
+     */
+    it("still refuses a folder outside the scope, and says why differently", () => {
+      const plan = planWholeFolders(
+        [{ path: "elsewhere/app/main.js", size: 10 }],
+        context({ entries: [at("elsewhere/app", "app")], folder: "site" }),
+      );
+      expect(plan.carry).toEqual([]);
+      expect(plan.skipped[0]?.reason).toContain("widen the scope");
+    });
+
+    it("refuses a destination that lands on a note's page", () => {
+      const plan = planWholeFolders(
+        [{ path: "proto/dist/index.html", size: 10 }],
+        context({
+          entries: [at("proto/dist", "")],
+          claimedBy: (url) => (url === "index.html" ? "notes/Home.md" : null),
+        }),
+      );
+      expect(plan.pages).toEqual([]);
+      expect(plan.skipped[0]?.reason).toContain("already published from notes/Home.md");
+    });
   });
 
   describe("what it still refuses", () => {
@@ -141,7 +425,7 @@ describe("planWholeFolders", () => {
           { path: "proto/node_modules/react/index.js", size: 10 },
           { path: "proto/node_modules/react/README.md", size: 10 },
         ],
-        context({ entries: ["proto"] }),
+        context({ entries: [at("proto")] }),
       );
       expect(plan.pages).toEqual(["proto/index.html"]);
       expect(plan.carry).toEqual([]);
@@ -189,7 +473,7 @@ describe("planWholeFolders", () => {
     it("refuses a file outside the published folder", () => {
       const plan = planWholeFolders(
         [{ path: "elsewhere/app/main.js", size: 10 }],
-        context({ entries: ["elsewhere/app"], folder: "site" }),
+        context({ entries: [at("elsewhere/app")], folder: "site" }),
       );
       expect(plan.carry).toEqual([]);
       expect(plan.skipped[0]?.reason).toContain("outside the published folder");
@@ -198,7 +482,7 @@ describe("planWholeFolders", () => {
     it("refuses a path the build writes itself", () => {
       const plan = planWholeFolders(
         [{ path: "proto/dist/assets/site.css", size: 10 }],
-        context({ entries: ["proto/dist"], folder: "proto/dist" }),
+        context({ entries: [at("proto/dist")], folder: "proto/dist" }),
       );
       expect(plan.carry).toEqual([]);
       expect(plan.skipped[0]?.reason).toContain("a path the build writes itself");
@@ -238,7 +522,7 @@ describe("planWholeFolders", () => {
         ],
         context(),
       );
-      expect(plan.tallies).toEqual([{ entry: "proto/dist", count: 1, bytes: 100 }]);
+      expect(plan.tallies).toEqual([{ entry: "proto/dist", at: null, count: 1, bytes: 100 }]);
     });
   });
 });

@@ -9,7 +9,13 @@ import {
 } from "../platform/secrets";
 import { JIRA_AUTH_LABEL, JiraAuth, RelayProvider } from "../overlay/relay";
 import { parseExcludeFolders, swallowsScope } from "../publish/excludeFolders";
-import { entryFor } from "../publish/wholeFolders";
+import {
+  WholeFolderEntry,
+  destination,
+  entryFor,
+  parseWholeFolders,
+  tidyPath,
+} from "../publish/wholeFolders";
 import { normalizeCustomCssPath } from "../publish/customCss";
 import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "../publish/outputFolders";
 import {
@@ -184,7 +190,7 @@ export interface SettingsHost {
       pinnedProperty?: string;
       theme?: string;
       publishHtmlFiles?: boolean;
-      publishWholeFolders?: string[];
+      publishWholeFolders?: { folder: string; at?: string }[];
       excludeFolders?: string[];
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
@@ -1183,31 +1189,86 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    */
   private renderWholeFolders(root: HTMLElement): void {
     const site = this.host.settings.site;
-    const entries = parseExcludeFolders(site.publishWholeFolders);
+    const entries = parseWholeFolders(site.publishWholeFolders);
+
+    const save = async (next: WholeFolderEntry[]) => {
+      site.publishWholeFolders = next.map((entry) => ({
+        folder: entry.folder,
+        ...(entry.at === null ? {} : { at: entry.at }),
+      }));
+      await this.host.saveSettings();
+    };
 
     new Setting(root)
       .setName("Publish folders whole")
       .setDesc(
-        "One vault path per line. Every file in these is published, " +
-          "referenced or not, which is what a built application needs: a " +
-          "lazily loaded chunk is named only inside the JavaScript, so " +
-          "nothing else will carry it. Point these at what your build " +
-          "produces -- a dist or build folder -- and not at a project root. " +
-          "Excluded folders, hidden files and node_modules are still left " +
-          "out, and notes are still published as pages rather than as " +
-          "Markdown.",
+        "Every file in these is published, referenced or not, which is what " +
+          "a built application needs: a lazily loaded chunk is named only " +
+          "inside the JavaScript, so nothing else will carry it. Point these " +
+          "at what your build produces -- a dist or build folder -- and not " +
+          "at a project root. Excluded folders, hidden files and node_modules " +
+          "are still left out, and notes are still published as pages rather " +
+          "than as Markdown.",
       )
-      .addTextArea((text) => {
-        text.inputEl.rows = 3;
+      .addButton((button) =>
+        button.setButtonText("Add a folder").onClick(async () => {
+          await save([...entries, { folder: "", at: null }]);
+          this.display();
+        }),
+      );
+
+    if (!entries.length) return;
+
+    const counts = this.countWholeFolders(entries);
+
+    entries.forEach((entry, index) => {
+      const replace = async (changed: Partial<WholeFolderEntry>) => {
+        const next = entries.map((row, at) => (at === index ? { ...row, ...changed } : row));
+        await save(next);
+      };
+
+      const row = new Setting(root);
+      row.settingEl.addClass("osp-whole-folder");
+      row.setName(entry.folder || "A folder with no path yet");
+      row.setDesc(this.describeWholeFolder(entry, counts[index]?.count ?? 0));
+
+      row.addText((text) => {
         text.inputEl.spellcheck = false;
         text
           .setPlaceholder("proto/app/dist")
-          .setValue(entries.join("\n"))
+          .setValue(entry.folder)
           .onChange(async (value: string) => {
-            site.publishWholeFolders = parseExcludeFolders(value);
-            await this.host.saveSettings();
+            await replace({ folder: tidyPath(value) });
           });
-      })
+      });
+
+      // Blank means "keep the vault path", which is a different answer from
+      // "/" -- that one is the front page. The placeholder says so, because
+      // an empty field otherwise looks like a thing nobody filled in.
+      row.addText((text) => {
+        text.inputEl.spellcheck = false;
+        text
+          .setPlaceholder("publish at... (blank = its vault path)")
+          .setValue(entry.at ?? "")
+          .onChange(async (value: string) => {
+            await replace({ at: destination(value) });
+          });
+      });
+
+      row.addExtraButton((button) =>
+        button
+          .setIcon("trash-2")
+          .setTooltip("Remove this folder")
+          .onClick(async () => {
+            await save(entries.filter((_, at) => at !== index));
+            this.display();
+          }),
+      );
+    });
+
+    new Setting(root)
+      .setName("")
+      .setDesc("Counts are read when the panel opens.")
       .addExtraButton((button) =>
         button
           .setIcon("refresh-cw")
@@ -1215,29 +1276,66 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onClick(() => this.display()),
       );
 
-    if (!entries.length) return;
-
-    const counts = this.countWholeFolders(entries);
-    const note = this.note(root);
-    note.setText(
-      counts
-        .map(({ entry, count }) =>
-          count
-            ? `${entry}: ${count} file${count === 1 ? "" : "s"}`
-            : `${entry}: nothing here -- check the path`,
-        )
-        .join(" · "),
+    // A row with no path yet is not a path that matched nothing.
+    const empty = entries.filter(
+      (entry, index) => entry.folder && (counts[index]?.count ?? 0) === 0,
     );
-
-    const empty = counts.filter(({ count }) => count === 0).map(({ entry }) => entry);
-    if (empty.length) {
+    if (empty.length && empty[0]) {
       this.warning(
         root,
-        `"${empty[0]}" matched no files in the vault, so it will publish ` +
-          "nothing. A folder that has not been built yet looks the same as a " +
-          "path with a typo in it.",
+        `"${empty[0].folder}" matched no files in the ` +
+          "vault, so it will publish nothing. A folder that has not been " +
+          "built yet looks the same as a path with a typo in it.",
       );
     }
+
+    // Two folders at one address is a contradiction with no sensible
+    // reading, and the build resolves it by publishing neither of the
+    // second one's files. Said here, where it is cheap to fix.
+    const taken = new Map<string, string>();
+    for (const entry of entries) {
+      if (entry.at === null) continue;
+      const already = taken.get(entry.at);
+      if (already) {
+        this.warning(
+          root,
+          `"${entry.folder}" and "${already}" are both set to publish at ` +
+            `"${entry.at || "/"}". Two folders cannot be the same place, so ` +
+            `nothing in "${entry.folder}" would be published.`,
+        );
+        break;
+      }
+      taken.set(entry.at, entry.folder);
+    }
+
+    // The one case where this setting moves something that was already
+    // there. Worth naming the note, because its address changes.
+    const atRoot = entries.find((entry) => entry.at === "");
+    if (atRoot) {
+      const home = resolveHomeNote(selectNotes(this.app, site as SiteConfig), site);
+      this.warning(
+        root,
+        `"${atRoot.folder}" is set to publish at the front page, so its ` +
+          `index.html becomes the site's homepage` +
+          (home.path
+            ? ` and ${home.path} moves to /index-note.html.`
+            : ` in place of the overview the build would have written.`),
+      );
+    }
+  }
+
+  /** What one row says about itself, under its fields. */
+  private describeWholeFolder(entry: WholeFolderEntry, count: number): string {
+    const where =
+      entry.at === null
+        ? `/${entry.folder}/`
+        : entry.at === ""
+          ? "/ (the front page)"
+          : `/${entry.at}/`;
+    if (!entry.folder) return "Give it a vault path.";
+    return count
+      ? `${count} file${count === 1 ? "" : "s"} -> ${where}`
+      : `nothing here -- check the path`;
   }
 
   /**
@@ -1248,11 +1346,15 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * typing into the field is actually asking. What the build then leaves
    * out, and why, is the build report's job.
    */
-  private countWholeFolders(entries: readonly string[]): { entry: string; count: number }[] {
+  private countWholeFolders(
+    entries: readonly WholeFolderEntry[],
+  ): { entry: string; count: number }[] {
     const files = this.app.vault.getFiles();
     return entries.map((entry) => ({
-      entry,
-      count: files.filter((file) => entryFor(file.path, [entry]) !== null).length,
+      entry: entry.folder,
+      count: entry.folder
+        ? files.filter((file) => entryFor(file.path, [entry]) !== null).length
+        : 0,
     }));
   }
 

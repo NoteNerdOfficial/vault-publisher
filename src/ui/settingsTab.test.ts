@@ -338,42 +338,134 @@ describe("excluded folders", () => {
 /**
  * Folders published entire, for a built application whose chunks nothing
  * references. The counterpart to the exclude list: one says what comes out
- * of the scope, this says what goes in regardless of being asked for.
+ * of the scope, this says what goes in regardless of being asked for -- and
+ * a destination says where it lands once it is in.
  */
 describe("folders published whole", () => {
-  function field(root: HTMLElement): HTMLTextAreaElement | null {
-    return row(root, "Publish folders whole")?.querySelector("textarea") ?? null;
+  /** The rows, which are one per folder rather than lines in a field. */
+  function rows(root: HTMLElement): HTMLElement[] {
+    return Array.from(root.querySelectorAll(".osp-whole-folder"));
   }
 
-  it("is offered whether or not as-is HTML is switched on", () => {
-    expect(field(render({ site: { folder: "", publishHtmlFiles: false } }))).not.toBeNull();
-    expect(field(render({ site: { folder: "", publishHtmlFiles: true } }))).not.toBeNull();
+  function fields(row: HTMLElement): HTMLInputElement[] {
+    return Array.from(row.querySelectorAll("input"));
+  }
+
+  function type(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event("input"));
+  }
+
+  it("offers the row whether or not as-is HTML is switched on", () => {
+    expect(row(render({ site: { folder: "", publishHtmlFiles: false } }), "Publish folders whole"))
+      .not.toBeNull();
+    expect(row(render({ site: { folder: "", publishHtmlFiles: true } }), "Publish folders whole"))
+      .not.toBeNull();
   });
 
-  it("shows the stored list one path per line", () => {
-    const panel = render({ site: { folder: "", publishWholeFolders: ["app/dist", "docs/site"] } });
-    expect(field(panel)?.value).toBe("app/dist\ndocs/site");
+  it("shows nothing but the heading until a folder is added", () => {
+    const panel = render({ site: { folder: "" } });
+    expect(rows(panel)).toHaveLength(0);
+    expect(button(panel, "Publish folders whole")?.textContent).toBe("Add a folder");
   });
 
-  it("stores what was typed as a clean list", () => {
+  it("adds an empty row when asked, and keeps it", async () => {
     const target = host({ site: { folder: "" } });
     const tab = new VaultPublisherSettingsTab(app(), target);
     tab.display();
 
-    const input = field(tab.containerEl);
-    if (!input) throw new Error("no field");
-    input.value = " app/dist/ \n\n/docs/site\n";
-    input.dispatchEvent(new Event("input"));
+    button(tab.containerEl, "Publish folders whole")?.click();
+    await settle();
 
-    expect(target.settings.site.publishWholeFolders).toEqual(["app/dist", "docs/site"]);
+    expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "" }]);
   });
 
-  it("says what each folder holds, so a path can be checked", () => {
+  it("gives each folder a row of its own", () => {
+    const panel = render({
+      site: {
+        folder: "",
+        publishWholeFolders: [{ folder: "app/dist", at: "app" }, { folder: "docs/site" }],
+      },
+    });
+    expect(rows(panel)).toHaveLength(2);
+    expect(fields(rows(panel)[0]).map((input) => input.value)).toEqual(["app/dist", "app"]);
+    expect(fields(rows(panel)[1]).map((input) => input.value)).toEqual(["docs/site", ""]);
+  });
+
+  it("stores the folder typed into a row", async () => {
+    const target = host({ site: { folder: "", publishWholeFolders: [{ folder: "" }] } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    type(fields(rows(tab.containerEl)[0])[0], " app/dist/ ");
+    await settle();
+
+    expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "app/dist" }]);
+  });
+
+  it("stores a destination, and drops it again when the field is cleared", async () => {
+    const target = host({ site: { folder: "", publishWholeFolders: [{ folder: "app/dist" }] } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    const where = fields(rows(tab.containerEl)[0])[1];
+    type(where, "app");
+    await settle();
+    expect(target.settings.site.publishWholeFolders).toEqual([
+      { folder: "app/dist", at: "app" },
+    ]);
+
+    type(where, "");
+    await settle();
+    expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "app/dist" }]);
+  });
+
+  /**
+   * The difference the field has to carry: blank leaves a folder at its
+   * vault path, and `/` takes over the front page.
+   */
+  it("stores the root as a destination of its own", async () => {
+    const target = host({ site: { folder: "", publishWholeFolders: [{ folder: "app/dist" }] } });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    type(fields(rows(tab.containerEl)[0])[1], "/");
+    await settle();
+
+    expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "app/dist", at: "" }]);
+  });
+
+  it("removes a row when asked", async () => {
+    const target = host({
+      site: { folder: "", publishWholeFolders: [{ folder: "a/dist" }, { folder: "b/dist" }] },
+    });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    rows(tab.containerEl)[0].querySelector("button")?.click();
+    await settle();
+
+    expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "b/dist" }]);
+  });
+
+  it("says what each folder holds and where it lands", () => {
     const panel = render(
-      { site: { folder: "", publishWholeFolders: ["app/dist"] } },
+      { site: { folder: "", publishWholeFolders: [{ folder: "app/dist", at: "app" }] } },
       ["app/dist/index.html", "app/dist/assets/a.js", "notes/Plan.md"],
     );
-    expect(panel.textContent).toContain("app/dist: 2 files");
+    expect(rows(panel)[0].querySelector(".setting-item-description")?.textContent).toBe(
+      "2 files -> /app/",
+    );
+  });
+
+  it("names the front page rather than printing an empty address", () => {
+    const panel = render(
+      { site: { folder: "", publishWholeFolders: [{ folder: "app/dist", at: "" }] } },
+      ["app/dist/index.html"],
+    );
+    expect(rows(panel)[0].querySelector(".setting-item-description")?.textContent).toContain(
+      "the front page",
+    );
   });
 
   /**
@@ -383,19 +475,42 @@ describe("folders published whole", () => {
    */
   it("warns about an entry that matches nothing in the vault", () => {
     const panel = render(
-      { site: { folder: "", publishWholeFolders: ["app/disp"] } },
+      { site: { folder: "", publishWholeFolders: [{ folder: "app/disp" }] } },
       ["app/dist/index.html"],
     );
-    expect(panel.textContent).toContain("nothing here");
-    expect(panel.querySelector(".osp-settings-warning")?.textContent).toContain(
-      "matched no files",
+    expect(panel.textContent).toContain("check the path");
+    expect(panel.textContent).toContain("matched no files");
+  });
+
+  it("warns when two folders are sent to the same place", () => {
+    const panel = render(
+      {
+        site: {
+          folder: "",
+          publishWholeFolders: [
+            { folder: "a/dist", at: "app" },
+            { folder: "b/dist", at: "app" },
+          ],
+        },
+      },
+      ["a/dist/index.html", "b/dist/index.html"],
     );
+    expect(panel.textContent).toContain("Two folders cannot be the same place");
+  });
+
+  /** The one case where this setting moves something that was already there. */
+  it("says what publishing at the root does to the homepage", () => {
+    const panel = render(
+      { site: { folder: "", publishWholeFolders: [{ folder: "app/dist", at: "" }] } },
+      ["app/dist/index.html"],
+    );
+    expect(panel.textContent).toContain("becomes the site's homepage");
   });
 
   it("says nothing at all when no folder is named", () => {
     const panel = render({ site: { folder: "" } });
-    expect(panel.textContent).not.toContain("no file in the vault is inside it");
     expect(panel.textContent).not.toContain("matched no files");
+    expect(panel.textContent).not.toContain("becomes the site's homepage");
   });
 
   // The two things people get wrong: pointing it at a project root, and
