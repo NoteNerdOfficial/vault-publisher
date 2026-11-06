@@ -1,7 +1,7 @@
 {
   "id": "vault-publisher",
   "name": "Vault Publisher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.7.2",
   "description": "Publishes your vault as a static website, rendered by the app itself, so Dataview, Bases and Mermaid output survives.",
   "author": "NoteNerd",
