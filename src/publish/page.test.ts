@@ -2,6 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  addHeadingAnchors,
+  assignHeadingIds,
   buildPage,
   neutralizeMermaidColours,
   prepareCodeBlocks,
@@ -60,6 +62,130 @@ describe("stripFrontmatter", () => {
 
     expect(stripFrontmatter(root)).toBe(0);
     expect(root.textContent).toContain("name: kept");
+  });
+});
+
+describe("addHeadingAnchors", () => {
+  it("makes the heading itself a link to its own id", () => {
+    const root = render(`<h2>Why notes decay</h2><h3>One idea per note</h3>`);
+    assignHeadingIds(root);
+
+    expect(addHeadingAnchors(root)).toBe(2);
+    const links = Array.from(root.querySelectorAll("a.osp-heading-self"));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "#why-notes-decay",
+      "#one-idea-per-note",
+    ]);
+    // A real link around the words, so the right-click menu offers the
+    // browser's own "Copy link address" wherever on the heading it opens,
+    // and scripting off still jumps to the section.
+    expect(links[0]?.textContent).toBe("Why notes decay");
+    expect(links[0]?.closest("h2")?.hasAttribute("data-osp-anchored")).toBe(true);
+    // Dragging a link drags the link. These words were selectable before
+    // the pass touched them and have to stay that way.
+    expect(links[0]?.getAttribute("draggable")).toBe("false");
+    expect(root.querySelectorAll(".osp-heading-link").length).toBe(2);
+  });
+
+  /**
+   * The defect this exists for.
+   *
+   * A comment is anchored to a hash of its block's *text* (`anchor.ts`), so
+   * a word added inside a heading moves the anchor of every commented
+   * heading in the vault. Icons carry none, and the script's reply is a
+   * pseudo-element rather than an element. Do not add a label here.
+   */
+  it("adds nothing to the text of the heading it dresses", () => {
+    const root = render(`<h2>Why notes decay</h2>`);
+    assignHeadingIds(root);
+    const before = root.textContent;
+
+    addHeadingAnchors(root);
+
+    expect(root.textContent).toBe(before);
+    expect(root.querySelector(".osp-heading-link")?.textContent).toBe("");
+  });
+
+  // Out at the right edge of the column the control is a long way from a
+  // short heading, and alone at the end of a line it is further still. It
+  // goes with the last word, in a box that wraps as one or not at all.
+  it("keeps the control with the heading's last word", () => {
+    const root = render(`<h2>Why notes decay</h2>`);
+    assignHeadingIds(root);
+    addHeadingAnchors(root);
+
+    const tail = root.querySelector(".osp-heading-tail");
+    expect(tail?.textContent).toBe("decay");
+    expect(tail?.querySelector(".osp-heading-link")).not.toBeNull();
+    expect(root.querySelector("h2")?.textContent).toBe("Why notes decay");
+  });
+
+  it("takes a trailing element along whole rather than opening it up", () => {
+    const root = render(`<h2>Reading <code>main.js</code></h2>`);
+    assignHeadingIds(root);
+    addHeadingAnchors(root);
+
+    const tail = root.querySelector(".osp-heading-tail");
+    expect(tail?.querySelector("code")?.textContent).toBe("main.js");
+    expect(tail?.querySelector("code")?.querySelector(".osp-heading-link")).toBeNull();
+    expect(root.querySelector("h2")?.textContent).toBe("Reading main.js");
+  });
+
+  // The anchor is named by the heading's own words, which is a better name
+  // than any that could be written here, and the icon inside it is
+  // decorative so the heading is not read out twice.
+  it("leaves the naming to the heading", () => {
+    const root = render(`<h2>Why notes decay</h2>`);
+    assignHeadingIds(root);
+    addHeadingAnchors(root);
+
+    expect(root.querySelector(".osp-heading-self")?.hasAttribute("aria-label")).toBe(false);
+    expect(root.querySelector(".osp-heading-link")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  /**
+   * The defect this exists for.
+   *
+   * `## [[Some note]]` is an ordinary thing to write, and HTML has no
+   * nested `<a>`: the parser closes the outer one on sight, so a wrapped
+   * heading would come back from the serializer in pieces with the control
+   * adrift inside the inner link. Such a heading keeps its words.
+   */
+  it("does not wrap a heading that already holds a link", () => {
+    const root = render(`<h2>See <a href="notes/decay.html">the note</a></h2>`);
+    assignHeadingIds(root);
+
+    expect(addHeadingAnchors(root)).toBe(1);
+    expect(root.querySelector(".osp-heading-self")).toBeNull();
+    expect(root.querySelector("a a")).toBeNull();
+    // The control carries the address itself here, and so has to be named.
+    const control = root.querySelector(".osp-heading-link");
+    expect(control?.tagName).toBe("A");
+    expect(control?.getAttribute("href")).toBe("#see-the-note");
+    expect(control?.getAttribute("aria-label")).toBe("Copy link to section: See the note");
+    expect(root.querySelector("h2")?.textContent).toBe("See the note");
+  });
+
+  // Every id comes out of `slugifyFragment`, which leaves word characters
+  // and hyphens, so the fragment can be written into the href rather than
+  // encoded. This is the assertion that keeps that true.
+  it("writes a fragment that needs no escaping, whatever the heading said", () => {
+    const root = render(`<h2>Q&amp;A: what "counts" as done? (2026)</h2>`);
+    assignHeadingIds(root);
+    addHeadingAnchors(root);
+
+    const href = root.querySelector(".osp-heading-self")?.getAttribute("href") ?? "";
+    expect(href).toMatch(/^#[\w-]+$/);
+    expect(href).toBe(`#${root.querySelector("h2")?.getAttribute("id")}`);
+  });
+
+  it("skips a heading with no id, and runs twice without doubling", () => {
+    const root = render(`<h2 id="kept">Kept</h2><h2>No id</h2>`);
+
+    expect(addHeadingAnchors(root)).toBe(1);
+    expect(addHeadingAnchors(root)).toBe(0);
+    expect(root.querySelectorAll(".osp-heading-link").length).toBe(1);
+    expect(root.querySelectorAll(".osp-heading-self").length).toBe(1);
   });
 });
 

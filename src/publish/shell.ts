@@ -118,6 +118,13 @@ const PATHS: Record<string, string> = {
   // line rather than a generic arrow.
   wrap: '<path d="M4 7h16M4 17h5"/><path d="M4 12h13.5a3 3 0 0 1 0 6H15"/><path d="m17 15-2.5 3 2.5 3"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/>',
+  // The two halves of a chain, for the control that copies a heading's
+  // address. Not the copy glyph: the pair sit a few lines apart on a page
+  // and have to be told apart at a glance, and what this one hands over is
+  // a link rather than the text it is drawn beside.
+  link:
+    '<path d="M10.6 13.4a4 4 0 0 0 5.66 0l2.83-2.83a4 4 0 1 0-5.66-5.66l-1.1 1.1"/>' +
+    '<path d="M13.4 10.6a4 4 0 0 0-5.66 0L4.9 13.4a4 4 0 1 0 5.66 5.66l1.1-1.1"/>',
   check: '<path d="m4 12.5 5 5L20 6.5"/>',
   // The two reading modes. A book for the rendering and the angle brackets
   // every editor uses for source: the buttons carry words too, so these only

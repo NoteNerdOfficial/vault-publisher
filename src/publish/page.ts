@@ -560,6 +560,197 @@ export function assignHeadingIds(root: HTMLElement): Heading[] {
   return headings;
 }
 
+/**
+ * Attribute marking a heading that carries a link control.
+ *
+ * The stylesheet needs to know which headings have one: the control is
+ * revealed by the pointer being anywhere on the heading rather than only on
+ * the control itself, which is a rule about the heading. An attribute rather
+ * than `:has()` so the markup says it outright, and so a heading the pass
+ * skipped -- one with no id -- is plainly not dressed.
+ */
+export const HEADING_ANCHORED = "data-osp-anchored";
+
+/** Class and hook on the link wrapped around the heading's own words. */
+export const HEADING_SELF_CLASS = "osp-heading-self";
+export const HEADING_SELF_ATTRIBUTE = "data-osp-heading-self";
+
+/** The box that holds the heading's last word and the control together. */
+export const HEADING_TAIL_CLASS = "osp-heading-tail";
+
+/** Class and hook on the control itself. */
+export const HEADING_LINK_CLASS = "osp-heading-link";
+export const HEADING_LINK_ATTRIBUTE = "data-osp-heading-link";
+
+/**
+ * Puts the control after the heading's last word, in a box that cannot break.
+ *
+ * Beside the last word is where it belongs: out at the right edge of the
+ * column it is a long way from the short heading it refers to, with the
+ * reader's eye at one end of the line and the thing to press at the other.
+ *
+ * But an inline box at the end of a line can be pushed onto a line of its
+ * own, where it hangs under the heading looking like a bullet nobody asked
+ * for. So the last word goes with it: the two in one `nowrap` span, which
+ * wraps as a unit or not at all.
+ *
+ * Wrapping words in a span adds no words. `textContent` is what the overlay
+ * hashes a block by, and it reads the same before and after -- which is the
+ * whole reason this is allowed to touch a heading's children at all.
+ */
+function glueToLastWord(doc: Document, host: Element, control: HTMLElement): void {
+  // Trailing whitespace is not the last word, and a heading rendered from
+  // Markdown often ends in some. Walk back past it.
+  let last = host.lastChild;
+  while (last && last.nodeType === 3 && !(last.textContent ?? "").trim()) {
+    last = last.previousSibling;
+  }
+
+  const tail = doc.createElement("span");
+  tail.className = HEADING_TAIL_CLASS;
+
+  if (!last) {
+    // A heading with nothing in it. There is no word to glue to, but the
+    // box is still the control's place: the stylesheet reserves the room
+    // and hangs the icon in it, and a control outside one would have
+    // nothing to hang from.
+    tail.append(control);
+    host.append(tail);
+    return;
+  }
+
+  last.after(tail);
+
+  if (last.nodeType === 3) {
+    // The common case: the final word is split off its text node and
+    // re-emitted inside the box. `\S+\s*$` is certain to match -- the loop
+    // above stopped on a node with something in it.
+    const text = last.textContent ?? "";
+    const word = /\S+\s*$/.exec(text) as RegExpExecArray;
+    last.textContent = text.slice(0, word.index);
+    tail.append(doc.createTextNode(word[0]), control);
+    return;
+  }
+
+  // A heading ending in `code`, `em` or a link of its own: that element is
+  // the last word, and it travels whole rather than being opened up.
+  tail.append(last, control);
+}
+
+/**
+ * Turns every heading with an id into a link to itself.
+ *
+ * A heading is an address -- `assignHeadingIds` just made it one -- and
+ * without something to press, the only way to send someone a section is to
+ * know that the fragment exists and to spell the slug correctly.
+ *
+ * The heading's own words become the link, which is what makes a right-click
+ * anywhere on the heading offer the browser's own "Copy link address" with
+ * nothing to aim at first, and what keeps the degraded case working: with
+ * scripting off the heading jumps and the address bar holds the link. The
+ * words are not dressed as a link and clicking them does nothing -- a
+ * heading is where the reader already is, and they were plain text before
+ * this pass touched them. What the pointer finds instead is the control
+ * beside the last word: an icon the stylesheet reveals and the client script
+ * turns into a copy, because a reader who wants to share this section is
+ * already standing in it, so following the link is the one thing the press
+ * cannot usefully do.
+ *
+ * One link rather than two. The control is a `span` inside the anchor, not
+ * an anchor of its own, so a heading is one stop for the keyboard and one
+ * link to a screen reader -- named by the heading's own words, which is the
+ * best name it could be given.
+ *
+ * **A heading that already holds a link keeps its words to itself**, and
+ * gets an anchor of its own for the control instead. `## [[Some note]]` is
+ * an ordinary thing to write, and an `<a>` inside an `<a>` is not something
+ * HTML has: the parser closes the outer one on sight, so a wrapped heading
+ * would come back from the serializer in pieces with the control adrift
+ * inside the inner link. The words are left alone, which costs those
+ * headings the right-click -- the link they contain answers that menu with
+ * its own target -- and nothing else.
+ *
+ * **Nothing inside it is text.** Two icons and a `title`, no label element:
+ * the overlay anchors a comment to a hash of its block's text
+ * (`anchor.ts`), so a word added inside a heading would move every anchor
+ * on every commented heading in the vault. Moving the heading's existing
+ * words into an anchor is safe for precisely that reason -- the heading's
+ * `textContent` is identical before and after. The script's "Copied" reply
+ * is a pseudo-element for the same reason.
+ *
+ * Returns how many were dressed, like the other passes here. Headings with
+ * no id are skipped: there is no address to copy. Run it after
+ * `assignHeadingIds`, whose ids it points at.
+ */
+export function addHeadingAnchors(root: HTMLElement): number {
+  const doc = root.ownerDocument;
+  let added = 0;
+
+  for (const el of Array.from(root.querySelectorAll("h1, h2, h3, h4, h5, h6"))) {
+    const id = el.getAttribute("id");
+    if (!id) continue;
+    if (el.querySelector(`.${HEADING_LINK_CLASS}`)) continue;
+
+    // `slugifyFragment` leaves nothing that needs escaping in a fragment --
+    // word characters and hyphens -- which is what lets a fragment be
+    // written rather than encoded, and is asserted next door in
+    // `page.test.ts`.
+    const href = `#${id}`;
+    const nested = el.querySelector("a") !== null;
+
+    let control: HTMLElement;
+    if (nested) {
+      // The control is the only link this heading gets, so it carries the
+      // address itself and is named for a reader who cannot see it.
+      const text = el.textContent?.trim() ?? "";
+      control = doc.createElement("a");
+      control.setAttribute("href", href);
+      control.setAttribute(
+        "aria-label",
+        text ? `Copy link to section: ${text}` : "Copy link to this section",
+      );
+    } else {
+      // Decorative on purpose. The link around it is already named by the
+      // heading, and a name here would have a screen reader read the
+      // heading twice over; what it does is the "copy link address" the
+      // link itself offers anyway.
+      control = doc.createElement("span");
+      control.setAttribute("aria-hidden", "true");
+    }
+    control.className = HEADING_LINK_CLASS;
+    control.setAttribute(HEADING_LINK_ATTRIBUTE, "");
+    control.setAttribute("title", "Copy link to this section");
+    appendMarkup(
+      doc,
+      control,
+      icon("link", "osp-icon-sm osp-heading-icon-link") +
+        icon("check", "osp-icon-sm osp-heading-icon-done"),
+    );
+
+    if (nested) {
+      glueToLastWord(doc, el, control);
+    } else {
+      const self = doc.createElement("a");
+      self.className = HEADING_SELF_CLASS;
+      self.setAttribute("href", href);
+      self.setAttribute(HEADING_SELF_ATTRIBUTE, "");
+      // A drag that starts on a link drags the link; a drag that starts on
+      // text selects the text. A heading is text first and these words
+      // were selectable before this pass touched them, so the browser is
+      // told that this particular link is not for dragging.
+      self.setAttribute("draggable", "false");
+      while (el.firstChild) self.append(el.firstChild);
+      glueToLastWord(doc, self, control);
+      el.append(self);
+    }
+
+    el.setAttribute(HEADING_ANCHORED, "");
+    added++;
+  }
+
+  return added;
+}
+
 /** Depth of a published URL, for resolving site-root assets relatively. */
 export function pathToRoot(url: string): string {
   const depth = url.split("/").length - 1;

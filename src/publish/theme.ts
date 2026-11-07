@@ -98,6 +98,129 @@ body {
 .markdown-rendered h3 { font-size: 1.15rem; }
 .markdown-rendered h4 { font-size: 1rem; }
 
+/* --- a heading is an address ----------------------------------------- *
+ * The heading's own words are the link, which is what makes a right-click
+ * anywhere on the heading offer "Copy link address" with nothing to aim at
+ * first. They are not dressed as a link: a heading is where the reader
+ * already is, so the words keep the heading's colour and the text cursor,
+ * and the thing that looks pressable is the icon.
+ *
+ * The icon sits against the last word rather than out at the right edge of
+ * the column, where a short heading leaves it far from anything that
+ * explains it and easy to miss. It holds its space whether or not it is
+ * showing, so revealing it moves no text -- a heading that reflowed under
+ * the pointer would be a heading nobody could click -- and it travels with
+ * the last word in a box that cannot break, so a heading that wraps cannot
+ * strand it alone on a line.
+ * --------------------------------------------------------------------- */
+
+.markdown-rendered .osp-heading-self {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+}
+
+.markdown-rendered .osp-heading-tail {
+  white-space: nowrap;
+  /* The room the icon hangs in, reserved on the word rather than taken
+     from the line: an inline box the height of this one would push every
+     heading's line taller to make space for it, and a box the line does
+     not know about costs nothing and moves nothing. */
+  position: relative;
+  padding-right: max(1.6rem, 1.4em);
+}
+
+.markdown-rendered .osp-heading-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* In the room the last word reserved, centred on that word's own text
+     box rather than on the line, which on a heading of two lines is not
+     where the word is. */
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  /* Sized against the heading rather than in absolute pixels: an icon
+     that reads as a control beside 16 point text is a speck beside a
+     section title, and the same glyph now has to work beside both. The
+     floor keeps it from shrinking past being worth aiming at. */
+  width: max(1.4rem, 1.2em);
+  height: max(1.4rem, 1.2em);
+  border-radius: max(4px, calc(var(--osp-radius) - 2px));
+  color: var(--osp-text-muted);
+  /* It is an anchor of its own on a heading that already holds a link. */
+  text-decoration: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.markdown-rendered [data-osp-anchored]:hover .osp-heading-link,
+.markdown-rendered .osp-heading-self:focus-visible .osp-heading-link,
+.markdown-rendered .osp-heading-link:focus-visible,
+.markdown-rendered .osp-heading-link[data-osp-said] {
+  opacity: 1;
+}
+.markdown-rendered .osp-heading-link:hover {
+  background: var(--osp-hover);
+  color: var(--osp-text);
+}
+.markdown-rendered .osp-heading-link:active { background: var(--osp-press); }
+
+/* No pointer, no hover: a control revealed by something the device cannot
+   do is a control that is not there. Quiet rather than hidden. */
+@media (hover: none) {
+  .markdown-rendered .osp-heading-link { opacity: 0.5; }
+}
+
+/* Bigger than the 14 pixels every other small icon on the site is: this
+   one stands in a line of large type with nothing beside it to lend it a
+   scale, and the site's small icon next to a heading looks like dust. */
+.markdown-rendered .osp-heading-link .osp-icon-sm {
+  width: max(15px, 0.8em);
+  height: max(15px, 0.8em);
+}
+
+.markdown-rendered .osp-heading-icon-done { display: none; }
+.markdown-rendered .osp-heading-link[data-osp-copied] { color: var(--osp-accent); }
+.markdown-rendered .osp-heading-link[data-osp-copied] .osp-heading-icon-link { display: none; }
+.markdown-rendered .osp-heading-link[data-osp-copied] .osp-heading-icon-done { display: inline; }
+
+/* What the script says back, as a pseudo-element rather than an element:
+   the overlay anchors a comment to a hash of its block's text, and a word
+   added inside a heading would move every anchor on every commented
+   heading.
+
+   Above the icon rather than beside it. Beside it is where the heading has
+   just run out of line: on a narrow window a heading that reaches the edge
+   would push the reply off the page and the page into a sideways scroll
+   for as long as it showed. Above, it is centred on a control that is
+   itself well inside the column, and it has nowhere to overflow to. */
+.markdown-rendered .osp-heading-link[data-osp-said]::after {
+  content: attr(data-osp-said);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.15rem);
+  transform: translateX(-50%);
+  padding: 0.12rem 0.4rem;
+  border-radius: max(4px, calc(var(--osp-radius) - 2px));
+  background: var(--osp-surface);
+  /* It stands over whatever the heading has above it, so it is given an
+     edge rather than left to blend into the line it covers. */
+  box-shadow: 0 0 0 1px var(--osp-border);
+  color: var(--osp-text-muted);
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.markdown-rendered .osp-heading-link[data-osp-copied]::after {
+  color: var(--osp-accent);
+}
+
 .markdown-rendered p,
 .markdown-rendered .osp-block-paragraph {
   margin: 0 0 1.25rem;
@@ -2540,6 +2663,7 @@ html { scroll-behavior: smooth; }
   /* Paper does not scroll: nothing may be left outside the edge of a block,
      and no control may be printed that could not be pressed. */
   .osp-code-tools { display: none; }
+  .osp-heading-link { display: none; }
   .osp-code pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
   .osp-scroller {
     overflow: visible;

@@ -29,6 +29,7 @@ import {
 import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
 import {
   SITE_SCRIPT_PATH,
+  addHeadingAnchors,
   buildPage,
   prepareCodeBlocks,
   prepareTables,
@@ -141,6 +142,9 @@ function prepared(html: string): string {
   root.innerHTML = html;
   prepareCodeBlocks(root);
   prepareTables(root);
+  // The fixture writes its own heading ids rather than calling
+  // `assignHeadingIds`, so this is the pass that dresses them.
+  addHeadingAnchors(root);
   return root.innerHTML;
 }
 

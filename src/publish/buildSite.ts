@@ -4,6 +4,7 @@ import { waitForDataviewIndex } from "../render/settle";
 import { withDataviewRefreshSuspended } from "../render/dataviewRefresh";
 import { LinkResolver, LinkTarget, rewriteLinks } from "./links";
 import {
+  addHeadingAnchors,
   assignHeadingIds,
   buildPage,
   dropRedundantTitleHeading,
@@ -988,6 +989,11 @@ export async function buildSite(
             prepareTaskStatuses(container);
             neutralizeMermaidColours(container);
             headings = assignHeadingIds(container);
+            // Straight after the ids, which is what it points at. Anything
+            // later renaming one -- `stabilizeIds` does, for a slug that
+            // looks machine-made -- rewrites every attribute pointing at
+            // it, this href included.
+            addHeadingAnchors(container);
             const rewritten = rewriteLinks(container, resolver, url);
             unresolvedTargets = rewritten.unresolvedTargets;
             outgoing = rewritten.resolvedTargets;

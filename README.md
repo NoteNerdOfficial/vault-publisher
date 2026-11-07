@@ -244,7 +244,8 @@ src/publish/    turning rendered HTML into a site
   normalize.ts    repairs markup that a browser would rearrange on reparse
   links.ts        wikilinks to relative URLs; unpublished targets degrade safely
   urls.ts         a vault path made safe to put in an attribute
-  page.ts         document shell, heading ids, table of contents
+  page.ts         document shell, heading ids and the control that copies
+                  one, table of contents
   shell.ts        command bar, vault panel, context rail (markup only)
   nav.ts          the navigation model every page carries
   backlinks.ts    what links to this note, and what it is near
