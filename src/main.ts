@@ -763,6 +763,7 @@ export default class VaultPublisherPlugin extends Plugin {
     // could only ever answer with the reason it cannot work.
     const target = resolveTarget(this.settings.relay, this.settings.github);
     const result = await this.build({
+      previewBuild: true,
       reviewOverlay: overlay.enabled
         ? {
             reviewer: overlay.reviewer,
@@ -815,6 +816,45 @@ export default class VaultPublisherPlugin extends Plugin {
     new Notice(
       `Built ${result.pages.length} pages${asIs} in ${Math.round(result.totalMs)}ms${removed} -> ${PREVIEW_FOLDER}/`,
     );
+
+    /*
+     * The pages that published perfectly and will render nothing.
+     *
+     * Said here as well as in the report and on the page itself, because
+     * this is the moment before somebody opens the preview and the three
+     * reach them at different times: this one gets there first, the page
+     * explains itself to whoever lands on it, and the report is what is
+     * still there tomorrow. An unbuilt `src/index.html` is the whole reason
+     * -- a blank preview with no explanation anywhere near it is how a day
+     * goes missing.
+     */
+    /*
+     * A folder published whole that serves no page at its own address.
+     * Said here as well as in the report for the same reason the shell
+     * warning is: this is the moment before somebody opens the preview,
+     * clicks through to the app, and gets a 404 with nothing to explain it.
+     */
+    const headless = result.wholeFolders.filter((tally) => tally.count && !tally.hasIndex);
+    if (headless.length) {
+      new Notice(
+        `Vault Publisher: ${headless.length} published folder(s) have no ` +
+          `index.html at the top, so opening them gives a 404 -- ` +
+          `${headless.map((tally) => tally.entry).join(", ")}. ` +
+          `Point at the folder holding index.html (often a "browser" subfolder).`,
+        12000,
+      );
+    }
+
+    const shells = result.htmlFiles.appShells.length;
+    if (shells) {
+      new Notice(
+        `Vault Publisher: ${shells} published ${shells === 1 ? "page is" : "pages are"} ` +
+          `an application shell with none of its code, so ${shells === 1 ? "it" : "they"} ` +
+          `will render blank. Publish what your build produces instead -- see ` +
+          `${OUTPUT_FOLDER}/build-report.md.`,
+        12000,
+      );
+    }
 
     // The other moment worth syncing on: a build is somebody about to look
     // at the review, and the overlay in the page they open reads the
@@ -2155,6 +2195,28 @@ export default class VaultPublisherPlugin extends Plugin {
             "or a build that has not been run yet -- the two look identical " +
             "from here.",
         );
+      }
+      /*
+       * The near miss, which the count above cannot show.
+       *
+       * A folder aimed one level above the build -- `dist/app` where the
+       * build wrote `dist/app/browser` -- publishes every file correctly
+       * and serves nothing at its own address, because the page is one
+       * folder further down. Healthy count, healthy bytes, 404.
+       */
+      const headless = result.wholeFolders.filter((tally) => tally.count && !tally.hasIndex);
+      if (headless.length) {
+        lines.push(
+          "",
+          `**${headless.length} folder(s) published files but no \`index.html\` at ` +
+            "the top.** Opening where they were published gives a 404 rather " +
+            "than a page: the folder named is one level above the build. " +
+            "Point it at the folder that holds `index.html` -- for Angular " +
+            "that is usually a `browser` subfolder of the configured " +
+            "`outputPath`.",
+          "",
+        );
+        for (const tally of headless) lines.push(`- \`${tally.entry}\``);
       }
     }
 

@@ -3,6 +3,7 @@ import type { App, TFile } from "obsidian";
 import { DEFAULT_OUTPUT_FOLDERS } from "./outputFolders";
 import {
   CompanionContext,
+  appShellNotice,
   appShellWithoutCode,
   companionVaultPath,
   countHtmlFilesAvailable,
@@ -1355,5 +1356,69 @@ describe("pageTitle", () => {
     // A stock `ng new` src/index.html has a title; a hand-written fragment
     // may not, and it is still published.
     expect(pageTitle("<app-root></app-root>", "my-app/src/index.html")).toBe("index");
+  });
+});
+
+/*
+ * The preview's own copy of the blank page.
+ *
+ * `appShellWithoutCode` has always known about this file; what was missing
+ * was anywhere to say so that somebody staring at a blank preview would
+ * actually look. This is that place, and it is preview-only -- the publish
+ * side of the assertion lives in `buildSite`, where the flag is read.
+ */
+describe("appShellNotice", () => {
+  const notice = appShellNotice("<app-root>", "src/index.html");
+
+  it("names the file and the element it found", () => {
+    expect(notice).toContain("src/index.html");
+    expect(notice).toContain("&lt;app-root&gt;");
+  });
+
+  it("says what to do instead, in the words the report uses", () => {
+    expect(notice).toContain("ng build --base-href ./");
+    expect(notice).toContain("vite build --base=./");
+    // The half people miss: the site points above the output, not at it.
+    expect(notice).toContain("above");
+  });
+
+  it("says it is the publisher's and not the author's", () => {
+    expect(notice).toContain("not part of your file");
+  });
+
+  /*
+   * It covers a page that renders nothing, so it has to be visible without
+   * any stylesheet of ours -- there is none on an as-is page -- and it must
+   * not be painted under the page's own background.
+   */
+  it("carries its own styling and sits above the page", () => {
+    expect(notice).toContain("position:fixed");
+    expect(notice).toContain("z-index:2147483646");
+    expect(notice).toContain("prefers-color-scheme:dark");
+  });
+
+  /*
+   * The path comes from the vault, so it is the one piece of this string an
+   * author controls. A quote in a filename must not end up as markup.
+   */
+  it("escapes a path that would otherwise break out", () => {
+    const hostile = appShellNotice("<app-root>", `a"><script>x()</script>.html`);
+    expect(hostile).not.toContain("<script>x()");
+    expect(hostile).toContain("&quot;&gt;&lt;script&gt;");
+  });
+
+  // Scoped under one id, so it cannot collide with the author's own markup.
+  it("scopes every selector it writes", () => {
+    const css = /<style>([\s\S]*?)<\/style>/.exec(notice)?.[1] ?? "";
+    expect(css).not.toBe("");
+    // Drop the media query's own wrapper; its contents are selectors too.
+    const flat = css.replace(/@media[^{]*\{/g, "").replace(/\}\s*\}/g, "}");
+    for (const selector of flat.split("}")) {
+      const head = selector.split("{")[0].trim();
+      if (!head) continue;
+      for (const part of head.split(",")) {
+        expect(part.trim().startsWith("#osp-app-shell")).toBe(true);
+      }
+    }
   });
 });

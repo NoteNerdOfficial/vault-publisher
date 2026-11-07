@@ -889,6 +889,77 @@ export function appShellWithoutCode(html: string): string | null {
   return null;
 }
 
+/**
+ * What a preview says on a page that was always going to be empty.
+ *
+ * `appShellWithoutCode` has known about this file since the report was
+ * written, and the report is the wrong place to say it. A blank page in a
+ * browser is where somebody finds out, and from there the build report is a
+ * file in the vault they have to already know to open -- so the finding sat
+ * one step away from the only moment it was useful, and the symptom people
+ * actually arrive with is "the preview opens and the app never renders".
+ *
+ * **Previews only, never a publish.** The byte-for-byte promise of as-is
+ * publishing is what makes this path worth having, and this does not touch
+ * it: the caller adds this inside the same delimited, preview-only region
+ * the review overlay already travels in, so a published copy of the file is
+ * the file. See the comment on the append in `buildSite`.
+ *
+ * Styled inline and positioned over the page because there is nothing here
+ * to style it with and nothing underneath to cover: a page this fires on
+ * renders nothing at all. `color-scheme` plus a dark `@media` block keeps it
+ * readable either way, and everything is scoped under one id so it cannot
+ * collide with markup the author may yet add.
+ */
+export function appShellNotice(shell: string, sourcePath: string): string {
+  const root = escapeAttribute(shell);
+  const file = escapeAttribute(sourcePath);
+  return (
+    `<div id="osp-app-shell">` +
+    `<style>` +
+    `#osp-app-shell{position:fixed;inset:0;z-index:2147483646;overflow:auto;` +
+    `padding:2.5rem 1.5rem;box-sizing:border-box;color-scheme:light dark;` +
+    `font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;` +
+    `background:#fff;color:#1a1a1a}` +
+    `#osp-app-shell .osp-in{max-width:40rem;margin:0 auto}` +
+    `#osp-app-shell h1{font-size:1.25rem;margin:0 0 .75rem}` +
+    `#osp-app-shell p{margin:0 0 .85rem}` +
+    `#osp-app-shell code,#osp-app-shell pre{` +
+    `font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}` +
+    `#osp-app-shell pre{background:#f4f4f5;padding:.7rem .9rem;border-radius:6px;` +
+    `overflow-x:auto;margin:0 0 .85rem}` +
+    `#osp-app-shell .osp-tag{display:inline-block;font-size:.72rem;` +
+    `letter-spacing:.08em;text-transform:uppercase;opacity:.65;margin-bottom:.6rem}` +
+    `@media (prefers-color-scheme:dark){` +
+    `#osp-app-shell{background:#18181b;color:#ededed}` +
+    `#osp-app-shell pre{background:#27272a}}` +
+    `</style>` +
+    `<div class="osp-in">` +
+    `<div class="osp-tag">Vault Publisher preview &middot; not part of your file</div>` +
+    `<h1>This page is an application shell with none of its code.</h1>` +
+    `<p><code>${file}</code> holds <code>${root}</code> and no ` +
+    `<code>&lt;script&gt;</code> at all, so it is the source <code>index.html</code> ` +
+    `of a project rather than a page. The entry point is named in ` +
+    `<code>angular.json</code> or <code>vite.config</code>, never in the HTML &mdash; ` +
+    `nothing here compiles, so there is nothing to run and the page is blank. ` +
+    `Everything about publishing it worked.</p>` +
+    `<p>Publish what your build produces instead:</p>` +
+    `<pre>ng build --base-href ./\nvite build --base=./\n"homepage": "."   (create-react-app)</pre>` +
+    `<p>Then point the site at the folder <em>above</em> the output, so the app ` +
+    `keeps its own <code>assets/</code> folder beside it.</p>` +
+    `</div></div>`
+  );
+}
+
+/** Attribute- and text-safe, so a path with a quote in it cannot break out. */
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 /** True when a page's text holds an `app://` URL. */
 export function hasLocalResourceUrl(html: string): boolean {
   return APP_URL.test(html);

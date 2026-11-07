@@ -17,7 +17,24 @@ import {
   tidyPath,
 } from "../publish/wholeFolders";
 import { normalizeCustomCssPath } from "../publish/customCss";
-import { DEFAULT_OUTPUT_FOLDERS, isBuildOutput } from "../publish/outputFolders";
+import {
+  DEFAULT_OUTPUT_FOLDERS,
+  isBuildOutput,
+  isDependencyPath,
+  isHiddenPath,
+} from "../publish/outputFolders";
+import {
+  type AppReport,
+  scanForApps,
+  suggestedDestination,
+  underRoot,
+} from "../publish/detectApp";
+import {
+  VITE_BASE_HINT,
+  patchAngularConfig,
+  patchBuiltPage,
+  patchPackageHomepage,
+} from "../publish/baseHrefFix";
 import {
   SourceLinkSettings,
   resolveSourceUrl,
@@ -253,6 +270,15 @@ export interface SettingsHost {
   stopReviewServer(): Promise<void>;
 }
 
+/** What each marker means, in the words its users use. */
+const FRAMEWORK_LABEL: Record<string, string> = {
+  angular: "Angular",
+  vite: "Vite",
+  next: "Next.js",
+  cra: "create-react-app",
+  unknown: "a built app",
+};
+
 export class VaultPublisherSettingsTab extends PluginSettingTab {
   private host: SettingsHost;
   private statusEl: HTMLElement | null = null;
@@ -333,6 +359,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     this.renderLegacyNotice(containerEl);
     this.renderActions(containerEl);
     this.renderContent(containerEl);
+    this.renderWholeFolders(containerEl);
     this.renderTheme(containerEl);
     this.renderConnection(containerEl);
     this.renderPassword(containerEl);
@@ -386,11 +413,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * vault that is probably synced. Worth one button rather than a line in a
    * changelog nobody reads.
    */
-  private renderLegacyNotice(root: HTMLElement): void {
+  private renderLegacyNotice(container: HTMLElement): void {
     const folder = this.host.legacyFolder;
     if (!folder) return;
 
-    new Setting(root).setName("Leftover from the old plugin").setHeading();
+    const root = this.section(container, "Leftover from the old plugin", true);
 
     new Setting(root)
       .setName("Remove the previous plugin folder")
@@ -462,13 +489,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * same thing on the row, before the press, is the same sentence delivered
    * where it can still be acted on.
    */
-  private renderActions(root: HTMLElement): void {
+  private renderActions(container: HTMLElement): void {
     const steps = this.setupSteps();
     const ready = steps.every((step) => step.done);
 
-    new Setting(root)
-      .setName(ready ? "Preview and publish" : "Get started")
-      .setHeading();
+    const root = this.section(container, ready ? "Preview and publish" : "Get started", true);
 
     if (!ready) this.renderChecklist(root, steps);
 
@@ -739,8 +764,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
   // -- connect -------------------------------------------------------------
 
-  private renderConnection(root: HTMLElement): void {
-    new Setting(root).setName("GitHub").setHeading();
+  private renderConnection(container: HTMLElement): void {
+    const root = this.section(container, "GitHub", true);
 
     const github = this.host.settings.github;
 
@@ -867,8 +892,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
   // -- what to publish -----------------------------------------------------
 
-  private renderContent(root: HTMLElement): void {
-    new Setting(root).setName("What to publish").setHeading();
+  private renderContent(container: HTMLElement): void {
+    const root = this.section(container, "What to publish", true);
 
     const site = this.host.settings.site;
 
@@ -962,7 +987,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         }),
       );
 
-    this.renderWholeFolders(root);
 
     // The field is a path, but the useful half is the answer: this says
     // which note the front page is actually going to be, including when the
@@ -1187,8 +1211,48 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * nothing looks exactly like a folder that is empty, and this is the only
    * place where the difference is cheap to see.
    */
-  private renderWholeFolders(root: HTMLElement): void {
+  private renderWholeFolders(container: HTMLElement): void {
     const site = this.host.settings.site;
+
+    /*
+     * Its own section, because it answers a different question from the
+     * rest of "What to publish".
+     *
+     * Everything above this decides which of a vault's *notes* become
+     * pages. This decides how an application that was built by something
+     * else gets onto the same site -- which is not a filtering question at
+     * all, and was being read as one: a reader looking for "how do I put
+     * my app here" has no reason to look under a list of note filters, and
+     * the two settings that answer it sat there unexplained.
+     *
+     * Framework names in the heading on purpose. "Folders published whole"
+     * is what the mechanism *is*; "Angular, React and other built apps" is
+     * what somebody is looking for when they need it.
+     */
+    const root = this.section(container, "Angular, React and other built apps", false);
+
+    this.note(
+      root,
+      "A built application is published whole, from the folder your build " +
+        "produces. This plugin does not compile anything: run your build " +
+        "yourself, then point this at its output. Scan below and it will " +
+        "find the folder, check the build is current, and wire it up.",
+    );
+
+    this.note(
+      root,
+      "Two things decide whether the app renders rather than showing a " +
+        "blank page: build with a relative base — ng build --base-href ./, " +
+        "vite build --base=./, or \"homepage\": \".\" for create-react-app — " +
+        "and publish the folder whole, because a lazily loaded chunk is " +
+        "named only inside the JavaScript and nothing else will carry it.",
+    );
+
+    this.note(
+      root,
+      "This applies to a published site exactly as it does to a preview: " +
+        "both are the same build, from these same settings.",
+    );
     const entries = parseWholeFolders(site.publishWholeFolders);
 
     const save = async (next: WholeFolderEntry[]) => {
@@ -1234,6 +1298,49 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           this.display();
         }),
       );
+
+    /*
+     * The other way in, for somebody who does not yet know what to type.
+     *
+     * "Point these at what your build produces" assumes the reader knows
+     * where that is, and the answer is frequently not where the config
+     * says: Angular 17 writes a `browser` subfolder of its own
+     * `outputPath`. Scanning finds it, and finds the three other things
+     * that make a correct entry publish a blank page anyway -- no build,
+     * a stale build, a base href resolved from the server root.
+     *
+     * It reads and reports. Nothing here runs a build: see the comment at
+     * the top of `detectApp.ts` for why that stays in a terminal.
+     */
+    new Setting(root)
+      .setName("Find a built app")
+      .setDesc(
+        "Looks for an Angular, Vite, Next or create-react-app project in " +
+          "this vault, works out where its build lands, and checks whether " +
+          "it will actually render. It never runs your build.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Scan").onClick(async () => {
+          button.setDisabled(true);
+          button.setButtonText("Scanning\u2026");
+          try {
+            this.appReports = await this.scanVaultForApps();
+            if (!this.appReports.length) {
+              new Notice(
+                "Vault Publisher: no angular.json, vite.config, next.config or " +
+                  "react-scripts project found outside node_modules.",
+                8000,
+              );
+            }
+          } finally {
+            this.display();
+          }
+        }),
+      );
+
+    if (this.appReports) {
+      for (const report of this.appReports) this.renderAppReport(root, report, save);
+    }
 
     if (!entries.length) return;
 
@@ -1340,6 +1447,230 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   }
 
   /** What one row says about itself, under its fields. */
+  /**
+   * What the last scan found, or null before one has been run.
+   *
+   * Held on the tab rather than recomputed in `display`, because the scan
+   * reads every config file it finds and the panel redraws on every
+   * keystroke in every other field. It is cleared by closing the panel,
+   * which is also when it would start to go stale.
+   */
+  private appReports: AppReport[] | null = null;
+
+  /**
+   * The vault, filtered the way publishing filters it.
+   *
+   * The same three exclusions selection applies, and each one matters
+   * here. Without `isDependencyPath` the first `angular.json` found is one
+   * in a dependency's own test fixtures; without `isHiddenPath` a project
+   * inside `.obsidian` counts; without the output folders the preview's
+   * copy of a build is found as a second project built from itself.
+   */
+  private async scanVaultForApps(): Promise<AppReport[]> {
+    const site = this.host.settings.site;
+    const excluded = parseExcludeFolders(site.excludeFolders);
+    const adapter = this.app.vault.adapter;
+
+    return scanForApps(
+      {
+        files: this.app.vault.getFiles().map((file) => ({
+          path: file.path,
+          mtime: file.stat?.mtime ?? 0,
+        })),
+        read: async (path: string) => {
+          try {
+            return await adapter.read(path);
+          } catch {
+            // A file the index knows and the adapter cannot read tells us
+            // nothing. The folder scan does not need it.
+            return null;
+          }
+        },
+      },
+      (path) =>
+        isDependencyPath(path) ||
+        isHiddenPath(path) ||
+        isBuildOutput(path, DEFAULT_OUTPUT_FOLDERS) ||
+        excluded.some((folder) => path === folder || path.startsWith(`${folder}/`)),
+    );
+  }
+
+  /**
+   * One project, and the four things that decide whether it will render.
+   *
+   * Ordered the way they block each other: there is no point reporting a
+   * base href on a build that does not exist, and no point offering to
+   * wire up a folder that holds nothing. Each line that can be acted on
+   * carries its own action, so the reader never has to hold a remedy in
+   * their head while they look for where to apply it.
+   */
+  private renderAppReport(
+    root: HTMLElement,
+    report: AppReport,
+    save: (next: WholeFolderEntry[]) => Promise<void>,
+  ): void {
+    const { app } = report;
+    const site = this.host.settings.site;
+    /* A project's identity for the arming latch: root plus name, since a
+       workspace has several projects sharing one root. */
+    const fixKey = (one: typeof app) => `${one.root}\u0000${one.name ?? ""}`;
+    const armedFor = (one: typeof app) => this.appFixArmed === fixKey(one);
+    const label =
+      (app.name ?? (app.root || "this vault")) + " \u00b7 " + FRAMEWORK_LABEL[app.framework];
+
+    const row = new Setting(root);
+    row.settingEl.addClass("osp-app-report");
+    row.setName(label);
+
+    const lines: string[] = [];
+    let blocked = false;
+
+    if (!report.built) {
+      blocked = true;
+      lines.push(
+        app.configuredOutput
+          ? `Not built. Its config says ${app.configuredOutput}, and there is no build there.`
+          : "Not built, and no output folder could be found.",
+      );
+      lines.push(`Run this in the project folder, then scan again:  ${app.command}`);
+    } else {
+      lines.push(`Built, at ${app.builtOutput}.`);
+
+      /*
+       * The check worth the whole feature. A stale build publishes and
+       * renders, and renders what the author changed an hour ago -- which
+       * from the outside is indistinguishable from a bug in the app.
+       */
+      if (report.stale) {
+        lines.push(
+          `This build is older than the source it came from, so the site ` +
+            `will show an earlier version of the app. Rebuild with:  ${app.command}`,
+        );
+      }
+
+      if (report.baseHrefHazard) {
+        lines.push(`base href: ${report.baseHrefHazard}.`);
+      }
+    }
+
+    // Whether the site is already pointed at it, by the resolved folder
+    // rather than by the configured one -- those differ on Angular.
+    const entries = parseWholeFolders(site.publishWholeFolders);
+    const wired = app.builtOutput
+      ? entries.find((entry) => entry.folder === app.builtOutput)
+      : undefined;
+
+    if (report.built && !wired) {
+      lines.push("Not published yet: no folder published whole points at it.");
+    } else if (wired) {
+      lines.push(
+        wired.at === null
+          ? `Published whole, at its vault path.`
+          : `Published whole, at /${wired.at || ""}.`,
+      );
+    }
+
+    row.setDesc(lines.join(" "));
+
+    if (!blocked && app.builtOutput && !wired) {
+      const folder = app.builtOutput;
+      const at = suggestedDestination(app);
+      row.addButton((button) =>
+        button
+          .setButtonText(`Publish it at /${at}`)
+          .setCta()
+          .onClick(async () => {
+            await save([...parseWholeFolders(site.publishWholeFolders), { folder, at }]);
+            this.appReports = null;
+            this.display();
+            new Notice(`Vault Publisher: publishing ${folder} at /${at}.`, 6000);
+          }),
+      );
+    }
+
+    /*
+     * Repairing the base href, which is the only thing in this panel that
+     * writes to a file the user owns.
+     *
+     * Two presses, not one. The first names the exact file and key; the
+     * second applies it. A dialog would say the same thing, and this says
+     * it in the row where the fault is reported, which is where the reader
+     * already is. `appFixArmed` holds which row is waiting, so arming one
+     * disarms any other.
+     *
+     * Both halves of the repair go together: the config, so the next build
+     * keeps it, and the built page, so this preview works without one. See
+     * `baseHrefFix.ts` for why a Vite config is shown rather than written.
+     */
+    if (report.built && report.baseHrefHazard) {
+      const armed = armedFor(app);
+      if (app.framework === "vite") {
+        row.addButton((button) =>
+          button.setButtonText("How to fix").onClick(() => {
+            new Notice(VITE_BASE_HINT, 15000);
+          }),
+        );
+      } else {
+        row.addButton((button) =>
+          button
+            .setButtonText(armed ? "Write the change" : "Fix base href")
+            .onClick(async () => {
+              if (!armed) {
+                this.appFixArmed = fixKey(app);
+                this.appFixPreview = await this.applyBaseHrefFix(report, true);
+                this.display();
+                return;
+              }
+              this.appFixArmed = null;
+              this.appFixPreview = null;
+              await this.applyBaseHrefFix(report, false);
+            }),
+        );
+      }
+    }
+
+    if (armedFor(app) && this.appFixPreview) {
+      /*
+       * What the write would actually do, read off the files rather than
+       * described from the outside.
+       *
+       * A sentence promising to edit `angular.json` is a promise; this is
+       * the result of running the patch and not saving it. It catches the
+       * three things prose cannot -- a file that cannot be read, a key
+       * that is already correct, and a config this cannot walk -- before
+       * the reader commits to anything rather than after.
+       */
+      this.note(
+        root,
+        "Nothing has been written yet. Pressing again will make exactly " +
+          "these changes, and nothing else in either file:",
+      );
+      for (const line of this.appFixPreview) this.note(root, `\u2022 ${line}`);
+    }
+
+    /*
+     * The command, on a button rather than only in the text. It is the one
+     * thing here the user has to carry out of this panel by hand, and a
+     * path with a hyphenated project name in it is exactly what gets
+     * mistyped. Copying is as far as this goes towards running it.
+     */
+    if (!report.built || report.stale) {
+      row.addButton((button) =>
+        button.setButtonText("Copy command").onClick(async () => {
+          const where = app.root ? ` (in ${app.root})` : "";
+          try {
+            await navigator.clipboard.writeText(app.command);
+            new Notice(`Copied: ${app.command}${where}`, 6000);
+          } catch {
+            // A clipboard a sandbox refused. The command is in the text
+            // above either way, which is why this is not an error.
+            new Notice(`Run: ${app.command}${where}`, 10000);
+          }
+        }),
+      );
+    }
+  }
+
   private describeWholeFolder(entry: WholeFolderEntry, count: number): string {
     const where =
       entry.at === null
@@ -1373,8 +1704,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     }));
   }
 
-  private renderTheme(root: HTMLElement): void {
-    new Setting(root).setName("Appearance").setHeading();
+  private renderTheme(container: HTMLElement): void {
+    const root = this.section(container, "Appearance", false);
 
     const site = this.host.settings.site;
 
@@ -1767,8 +2098,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * which it is good at, and using it for something that matters, which it
    * is not built for.
    */
-  private renderPassword(root: HTMLElement): void {
-    new Setting(root).setName("Password").setHeading();
+  private renderPassword(container: HTMLElement): void {
+    const root = this.section(container, "Password", false);
 
     this.note(
       root,
@@ -1834,7 +2165,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     }
   }
 
-  private renderReview(root: HTMLElement): void {
+  private renderReview(container: HTMLElement): void {
     const overlay = this.host.settings.commentOverlay;
 
     // Nothing here until there is an overlay to configure. The switch that
@@ -1843,7 +2174,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // comes and goes with it instead of standing empty behind one toggle.
     if (!overlay.enabled) return;
 
-    new Setting(root).setName("Review").setHeading();
+    const root = this.section(container, "Review", false);
 
     this.note(
       root,
@@ -1996,7 +2327,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * a vault whose reviews stay in the vault should not have to read any of
    * this.
    */
-  private renderRelay(root: HTMLElement): void {
+  private renderRelay(container: HTMLElement): void {
     // Nothing to file from, so nothing to configure. It follows the Review
     // section and reads as part of it, which means it should come and go
     // with it rather than offering a tracker for comments that cannot exist.
@@ -2005,7 +2336,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const relay = this.host.settings.relay;
     const github = this.host.settings.github;
 
-    new Setting(root).setName("Issue tracker").setHeading();
+    const root = this.section(container, "Issue tracker", false);
 
     /*
      * The one thing about this section that cannot be worked out from it.
@@ -2433,6 +2764,126 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * Returns the element holding the text, for the two callers that rewrite
    * it in place rather than redrawing the panel.
    */
+  /**
+   * Which sections the reader has opened or closed, across redraws.
+   *
+   * `display` rebuilds the whole panel, and it runs on nearly every change
+   * in it -- a toggle, a scope, a field that redraws its own description.
+   * Without this, a section the reader opened would shut again the moment
+   * they touched anything inside it, which is worse than not collapsing
+   * anything. Held on the tab rather than in settings: it is where someone
+   * is looking right now, not something to remember between sessions.
+   *
+   * Keyed by the heading, which is also what `display` passes, so a
+   * renamed section quietly reverts to its default rather than inheriting
+   * the state of a section that no longer exists.
+   */
+  private sectionState = new Map<string, boolean>();
+
+  /**
+   * Which app row has been armed for a base-href write, if any.
+   *
+   * One at a time, so arming a second row disarms the first: two rows both
+   * offering "Write the change" is two files about to be edited by one
+   * press somebody half remembers making.
+   */
+  private appFixArmed: string | null = null;
+
+  /**
+   * The dry run shown beside an armed repair, or null when none is armed.
+   *
+   * Computed by running the same patches the write runs, with the save
+   * skipped, so what the reader is shown and what they get are produced by
+   * one code path. A description written separately would be a second
+   * claim about the same edit, free to drift from it.
+   */
+  private appFixPreview: string[] | null = null;
+
+  /**
+   * Writes the base href into the project's config and its built page.
+   *
+   * Reads each file, patches the text, writes it back, and says exactly
+   * what changed. A patch that comes back null means the file was already
+   * right -- reported as such rather than as a failure, since arriving at
+   * the wanted state by another route is not an error.
+   */
+  private async applyBaseHrefFix(report: AppReport, dryRun: boolean): Promise<string[]> {
+    const { app } = report;
+    const adapter = this.app.vault.adapter;
+    const done: string[] = [];
+
+    const edit = async (
+      path: string,
+      patch: (text: string) => { text: string; summary: string } | null,
+    ) => {
+      let text: string;
+      try {
+        text = await adapter.read(path);
+      } catch {
+        done.push(`${path} could not be read, so it would be left alone`);
+        return;
+      }
+      const result = patch(text);
+      if (!result) {
+        done.push(`${path} is already correct, so it would be left alone`);
+        return;
+      }
+      if (!dryRun) await adapter.write(path, result.text);
+      done.push(result.summary);
+    };
+
+    if (app.framework === "angular" && app.name) {
+      await edit(underRoot(app.root, "angular.json"), (text) =>
+        patchAngularConfig(text, app.name as string),
+      );
+    } else if (app.framework === "cra") {
+      await edit(underRoot(app.root, "package.json"), (text) => patchPackageHomepage(text));
+    }
+
+    if (app.builtOutput) {
+      await edit(underRoot(app.builtOutput, "index.html"), (text) => patchBuiltPage(text));
+    }
+
+    if (dryRun) return done;
+
+    new Notice(`Vault Publisher: ${done.join("; ")}.`, 12000);
+    // Re-read, so the row reports the state it is now in rather than the
+    // state that armed the button.
+    this.appReports = await this.scanVaultForApps();
+    this.display();
+    return done;
+  }
+
+
+  /**
+   * A collapsible section, returning the element its rows go in.
+   *
+   * A native `<details>` rather than a div and a click handler: it gives
+   * keyboard operation, the disclosure triangle, find-in-page opening the
+   * section it matched, and correct semantics for a screen reader, none of
+   * which is worth reimplementing.
+   *
+   * The heading inside the `<summary>` keeps Obsidian's own classes. A
+   * theme styles `.setting-item-heading`, and so does the test next door,
+   * which reads the panel's shape back through exactly those names -- so
+   * the markup is the same markup, in a new wrapper.
+   */
+  private section(root: HTMLElement, name: string, openByDefault: boolean): HTMLElement {
+    const details = root.createEl("details", { cls: "osp-section" });
+    if (this.sectionState.get(name) ?? openByDefault) details.setAttribute("open", "");
+
+    const summary = details.createEl("summary", { cls: "osp-section-summary" });
+    const head = summary.createDiv({ cls: "setting-item setting-item-heading" });
+    const info = head.createDiv({ cls: "setting-item-info" });
+    info.createDiv({ cls: "setting-item-name", text: name });
+
+    details.addEventListener("toggle", () => {
+      this.sectionState.set(name, details.hasAttribute("open"));
+    });
+
+    return details.createDiv({ cls: "osp-section-body" });
+  }
+
   private note(root: HTMLElement, text?: string): HTMLElement {
     const item = root.createDiv({ cls: "setting-item osp-settings-note" });
     const info = item.createDiv({ cls: "setting-item-info" });
@@ -2466,8 +2917,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * what. A single list puts "Off" and "Publish to GitHub" one row apart,
    * which is a long way to slip.
    */
-  private renderAutomation(root: HTMLElement): void {
-    new Setting(root).setName("On startup").setHeading();
+  private renderAutomation(container: HTMLElement): void {
+    const root = this.section(container, "On startup", false);
 
     const settings = this.host.settings;
     const mode = settings.autoRun;
@@ -2535,8 +2986,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * community listing in the reader's own browser, where installing is
    * Obsidian's business and not ours.
    */
-  private renderRelatedPlugins(root: HTMLElement): void {
-    new Setting(root).setName("Related plugins").setHeading();
+  private renderRelatedPlugins(container: HTMLElement): void {
+    const root = this.section(container, "Related plugins", true);
     this.note(root, "Other community plugins that pair well with Vault Publisher.");
 
     for (const plugin of RELATED_PLUGINS) {

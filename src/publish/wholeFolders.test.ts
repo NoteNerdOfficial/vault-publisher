@@ -285,14 +285,14 @@ describe("planWholeFolders", () => {
   it("counts what each entry published, and the bytes", () => {
     const plan = planWholeFolders(DIST, context());
     expect(plan.tallies).toEqual([
-      { entry: "proto/dist", at: null, count: 6, bytes: 191_800 },
+      { entry: "proto/dist", at: null, count: 6, bytes: 191_800, hasIndex: true },
     ]);
   });
 
   /** A path that matched nothing is a typo, and reads as one in the report. */
   it("reports an entry that matched nothing as a zero rather than silence", () => {
     const plan = planWholeFolders(DIST, context({ entries: [at("proto/disp")] }));
-    expect(plan.tallies).toEqual([{ entry: "proto/disp", at: null, count: 0, bytes: 0 }]);
+    expect(plan.tallies).toEqual([{ entry: "proto/disp", at: null, count: 0, bytes: 0, hasIndex: false }]);
     expect(plan.carry).toEqual([]);
   });
 
@@ -326,7 +326,7 @@ describe("planWholeFolders", () => {
     it("records where each folder went, for the report", () => {
       const plan = planWholeFolders(DIST, context({ entries: [at("proto/dist", "app")] }));
       expect(plan.tallies).toEqual([
-        { entry: "proto/dist", at: "app", count: 6, bytes: 191_800 },
+        { entry: "proto/dist", at: "app", count: 6, bytes: 191_800, hasIndex: true },
       ]);
     });
 
@@ -346,7 +346,7 @@ describe("planWholeFolders", () => {
       expect(plan.pages).toEqual(["a/dist/index.html"]);
       expect(plan.skipped[0]?.path).toBe("b/dist");
       expect(plan.skipped[0]?.reason).toContain("two folders cannot be the same place");
-      expect(plan.tallies[1]).toEqual({ entry: "b/dist", at: "app", count: 0, bytes: 0 });
+      expect(plan.tallies[1]).toEqual({ entry: "b/dist", at: "app", count: 0, bytes: 0, hasIndex: false });
     });
 
     it("lets two folders keep their vault paths without calling it a clash", () => {
@@ -522,7 +522,45 @@ describe("planWholeFolders", () => {
         ],
         context(),
       );
-      expect(plan.tallies).toEqual([{ entry: "proto/dist", at: null, count: 1, bytes: 100 }]);
+      expect(plan.tallies).toEqual([{ entry: "proto/dist", at: null, count: 1, bytes: 100, hasIndex: false }]);
     });
+  });
+});
+
+/**
+ * The near miss: a folder pointed one level above the build.
+ *
+ * `dist/app` where the build wrote `dist/app/browser` publishes every file
+ * correctly and still serves nothing at its own address, because the page
+ * is one folder further down. The count is healthy and the destination is
+ * a 404, so nothing else in the build can see it.
+ */
+describe("whether a folder published a front page", () => {
+  const AT_ROOT = [
+    { path: "dist/app/browser/index.html", size: 10 },
+    { path: "dist/app/browser/main-GHI789.js", size: 20 },
+  ];
+
+  function tally(files: { path: string; size: number }[], folder: string, dest: string | null) {
+    const plan = planWholeFolders(files, context({ entries: [{ folder, at: dest }] }));
+    return plan.tallies[0];
+  }
+
+  it("sees the index at the top of the folder", () => {
+    expect(tally(AT_ROOT, "dist/app/browser", "app").hasIndex).toBe(true);
+  });
+
+  // Pointed one level too high: the files travel, the address does not work.
+  it("does not count an index one folder down", () => {
+    expect(tally(AT_ROOT, "dist/app", "app").hasIndex).toBe(false);
+    // ...and the count is healthy, which is what makes this invisible.
+    expect(tally(AT_ROOT, "dist/app", "app").count).toBe(2);
+  });
+
+  // The question is about the folder, so the destination cannot change it.
+  it("answers the same whatever the destination", () => {
+    for (const at of ["app", "", null]) {
+      expect(tally(AT_ROOT, "dist/app/browser", at).hasIndex).toBe(true);
+    }
   });
 });

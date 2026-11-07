@@ -4630,3 +4630,301 @@ describe("a prototype whose panels open and close", () => {
     expect(drawn).toEqual(["a"]);
   });
 });
+
+/**
+ * The panel's copy of an anchor, on a page that renders itself.
+ *
+ * Reported as: "Anchor lost" on some comments, gone when you return to the
+ * page, back again later. Not a hash that drifts and not a block that moved
+ * -- the block is on the screen the whole time. The overlay runs while the
+ * application's root element is still empty, so the first stamp marks
+ * nothing and every anchored comment is an orphan; the application mounts,
+ * the restamp timer fixes `blocks`, and the panel was never told, because
+ * that path ended at `reposition` and `reposition` draws pins only.
+ */
+describe("an anchor that comes back", () => {
+  function mountApp(): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<div id="root"></div>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      }),
+    );
+    document.head.appendChild(meta);
+  }
+
+  function render(html: string): void {
+    (document.getElementById("root") as HTMLElement).innerHTML = html;
+  }
+
+  /** Long enough for the restamp timer's own interval to have passed. */
+  const settle = () => new Promise((done) => setTimeout(done, 260));
+
+  const ANCHOR = blockId("p", "Pick a theme.");
+
+  function seed(): void {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        {
+          version: OVERLAY_SCHEMA_VERSION,
+          id: "c1",
+          sourcePath: "app/index.html",
+          page: "app/index.html",
+          block: ANCHOR,
+          blockText: "Pick a theme.",
+          text: "Why is this here?",
+          author: "Reviewer",
+          createdAt: new Date().toISOString(),
+          replies: [],
+          resolved: false,
+        },
+      ]),
+    );
+  }
+
+  const LOST = "Anchor lost";
+
+  /*
+   * The honest half of the warning. Before the application mounts the block
+   * really is absent, and saying so is correct -- the bug was never this.
+   */
+  it("warns while the application has not rendered yet", () => {
+    seed();
+    mountApp();
+    const shadow = run();
+    mode(shadow, "review");
+    expect(shadow.textContent).toContain(LOST);
+  });
+
+  // The regression. The panel is already open, as it is for anyone who
+  // opened the review while the page was still loading.
+  it("clears the warning on an open panel once the block arrives", async () => {
+    seed();
+    mountApp();
+    const shadow = run();
+    mode(shadow, "review");
+    expect(shadow.textContent).toContain(LOST);
+
+    render(`<h1>Settings</h1><p>Pick a theme.</p>`);
+    await settle();
+
+    // The block is genuinely on the page now...
+    expect(document.querySelector(`[data-osp-block="${ANCHOR}"]`)).not.toBeNull();
+    // ...so the panel must not still be saying it is gone.
+    expect(shadow.textContent).not.toContain(LOST);
+  });
+
+  // And the other direction, which has to keep working: a route change that
+  // takes the block away puts the warning back without being asked.
+  it("puts the warning back when the block goes away again", async () => {
+    seed();
+    mountApp();
+    const shadow = run();
+    render(`<h1>Settings</h1><p>Pick a theme.</p>`);
+    await settle();
+    mode(shadow, "review");
+    expect(shadow.textContent).not.toContain(LOST);
+
+    render(`<h1>Account</h1><p>Something else.</p>`);
+    await settle();
+    expect(shadow.textContent).toContain(LOST);
+  });
+
+  /*
+   * The reason the redraw is conditional. An application that mutates on a
+   * timer must not have the review panel rebuilt under the reviewer, so a
+   * mutation that changes no anchor's state must not reach `renderPanel`.
+   */
+  it("does not redraw the panel for a mutation that changes no anchor", async () => {
+    seed();
+    mountApp();
+    const shadow = run();
+    render(`<h1>Settings</h1><p>Pick a theme.</p>`);
+    await settle();
+    mode(shadow, "review");
+
+    const row = shadow.querySelector(".co-row");
+    expect(row).not.toBeNull();
+
+    // Text elsewhere on the page changes; the anchored block is untouched.
+    render(`<h1>Settings</h1><p>Pick a theme.</p><p>A clock: 12:01.</p>`);
+    await settle();
+
+    // The very same element, so nothing was torn down and rebuilt.
+    expect(shadow.querySelector(".co-row")).toBe(row);
+  });
+});
+
+/**
+ * Cause 2: the occurrence suffix renumbering under a framework.
+ *
+ * `stampBlocks` numbers identical blocks `H`, `H-1`, `H-2` in document
+ * order, so a block's id depends on how many identical ones precede it.
+ * Remove the first of two and the survivor restamps from `H-1` to `H`:
+ * the comment on `H-1` is orphaned, though nothing about the block it was
+ * left on changed. On an application with lists that grow and shrink, that
+ * is a comment lost on every render.
+ */
+describe("an anchor whose suffix renumbered", () => {
+  function mountApp(): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<div id="root"></div>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      }),
+    );
+    document.head.appendChild(meta);
+  }
+
+  const render = (html: string) => {
+    (document.getElementById("root") as HTMLElement).innerHTML = html;
+  };
+  const settle = () => new Promise((done) => setTimeout(done, 260));
+
+  const BASE = blockId("p", "Continue");
+
+  function seedOn(block: string): void {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        {
+          version: OVERLAY_SCHEMA_VERSION,
+          id: "c1",
+          sourcePath: "app/index.html",
+          page: "app/index.html",
+          block,
+          blockText: "Continue",
+          text: "Should this be primary?",
+          author: "Reviewer",
+          createdAt: new Date().toISOString(),
+          replies: [],
+          resolved: false,
+        },
+      ]),
+    );
+  }
+
+  /*
+   * The renumbering itself, which is the mechanism and not yet the bug.
+   * Worth pinning down, because the recovery below is only correct if this
+   * is what actually happens.
+   */
+  it("renumbers the survivor when an identical block before it goes", async () => {
+    mountApp();
+    run();
+    render(`<p>Continue</p><p>Continue</p>`);
+    await settle();
+    expect(
+      Array.from(document.querySelectorAll("p")).map((p) =>
+        p.getAttribute("data-osp-block"),
+      ),
+    ).toEqual([BASE, `${BASE}-1`]);
+
+    render(`<p>Continue</p>`);
+    await settle();
+    expect(document.querySelector("p")?.getAttribute("data-osp-block")).toBe(BASE);
+  });
+
+  // The recovery. One candidate with the same text, so there is no doubt
+  // which block the comment was about.
+  it("follows the comment onto the surviving block", async () => {
+    seedOn(`${BASE}-1`);
+    mountApp();
+    const shadow = run();
+    render(`<p>Continue</p>`);
+    await settle();
+    mode(shadow, "review");
+
+    expect(shadow.textContent).not.toContain("Anchor lost");
+    // And it is anchored, not merely un-warned: a pin is drawn for it.
+    expect(shadow.querySelectorAll(".co-pin")).toHaveLength(1);
+  });
+
+  /*
+   * The half that must not guess. Two identical blocks still on the page
+   * and nothing to say which one was meant -- picking either would move a
+   * reviewer's comment onto the wrong paragraph silently.
+   */
+  it("refuses to choose between two blocks with the same text", async () => {
+    seedOn(`${BASE}-5`);
+    mountApp();
+    const shadow = run();
+    render(`<p>Continue</p><p>Continue</p>`);
+    await settle();
+    mode(shadow, "review");
+
+    expect(shadow.textContent).toContain("Anchor lost");
+    // And it says which kind of lost, because the text is plainly still there.
+    expect(shadow.textContent).toContain("more than once");
+    expect(shadow.textContent).not.toContain("has been rewritten since");
+  });
+
+  /*
+   * The wording the old message was always right about: the text really is
+   * gone. This case must keep saying so.
+   */
+  it("still says rewritten when the text is genuinely gone", async () => {
+    seedOn(`${BASE}-1`);
+    mountApp();
+    const shadow = run();
+    render(`<p>Something else entirely.</p>`);
+    await settle();
+    mode(shadow, "review");
+
+    expect(shadow.textContent).toContain("has been rewritten since");
+    expect(shadow.textContent).not.toContain("more than once");
+  });
+
+  /*
+   * Two comments on two identical blocks must not both land on one. The
+   * first is an exact hit, so it claims its block and the second has only
+   * the other to recover onto.
+   */
+  it("does not pull a second comment onto an already claimed block", async () => {
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify(
+        [`${BASE}`, `${BASE}-9`].map((block, index) => ({
+          version: OVERLAY_SCHEMA_VERSION,
+          id: `c${index}`,
+          sourcePath: "app/index.html",
+          page: "app/index.html",
+          block,
+          blockText: "Continue",
+          text: `Note ${index}`,
+          author: "Reviewer",
+          createdAt: new Date().toISOString(),
+          replies: [],
+          resolved: false,
+        })),
+      ),
+    );
+    mountApp();
+    const shadow = run();
+    render(`<p>Continue</p><p>Continue</p>`);
+    await settle();
+    mode(shadow, "review");
+
+    // Two blocks, two comments, two pins -- not two pins on one block.
+    const pins = shadow.querySelectorAll(".co-pin");
+    expect(pins).toHaveLength(2);
+    expect(shadow.textContent).not.toContain("Anchor lost");
+  });
+});

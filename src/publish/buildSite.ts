@@ -109,6 +109,7 @@ import {
   CompanionContext,
   CompanionRef,
   HtmlFileStats,
+  appShellNotice,
   appShellWithoutCode,
   baseHref,
   baseHrefHazard,
@@ -330,6 +331,21 @@ export interface SiteConfig {
    * `page.test.ts` holds the test that a page built without it carries no
    * trace of either the overlay or the path.
    */
+  /**
+   * This build is going to the preview folder rather than to a publish.
+   *
+   * Separate from `reviewOverlay` on purpose, though both are preview-only
+   * and both are set by the same caller. The overlay is a *feature* the user
+   * switches off when they do not want to leave comments; whether a build is
+   * a preview is a fact about the build. Folding the first into the second
+   * would mean a preview with commenting turned off quietly lost the
+   * diagnostics below, which is the configuration somebody reading their own
+   * site is most likely to be in.
+   *
+   * It must never be set by `publish()`. What it gates is content added to a
+   * page that as-is publishing otherwise copies byte for byte.
+   */
+  previewBuild?: boolean;
   reviewOverlay?: {
     /** Prefills the comment author in the overlay. */
     reviewer?: string;
@@ -1341,7 +1357,7 @@ export async function buildSite(
      * from the same content-derived hash.
      */
     const overlay = config.reviewOverlay;
-    const content = overlay
+    const withOverlay = overlay
       ? html +
         reviewOverlayAppendix({
           sourcePath: overlayKey(overlay, target.url, target.sourcePath),
@@ -1355,6 +1371,32 @@ export async function buildSite(
           contact: overlay.contact,
         })
       : html;
+
+    /*
+     * The one thing a preview can say that a build report cannot: it can say
+     * it on the blank page itself.
+     *
+     * `appShellWithoutCode` has recognised this file for as long as the
+     * report has existed, and the report is a file in the vault somebody has
+     * to already know to open. The symptom people actually arrive with is
+     * "the preview opens and the app never renders", so the explanation
+     * belongs where they are standing when they find out.
+     *
+     * Gated on `previewBuild` rather than on the overlay, so a preview with
+     * commenting switched off still explains itself; appended rather than
+     * prepended, because anything before `<!doctype html>` puts the document
+     * into quirks mode; and inside the same delimited region the overlay
+     * already uses, so the preview's additions to an as-is page remain one
+     * documented exception rather than two. A publish sets neither flag.
+     */
+    const shellRoot = appShellWithoutCode(html);
+    const content =
+      config.previewBuild && shellRoot
+        ? withOverlay +
+          `\n<!-- osp-review:start -- added by the publisher; not in the source file -->\n` +
+          appShellNotice(shellRoot, target.sourcePath) +
+          `\n<!-- osp-review:end -->\n`
+        : withOverlay;
 
     // The scans below read `html`, never `content`: what the report says
     // about a page is about the author's file, not about anything of ours
@@ -1376,8 +1418,8 @@ export async function buildSite(
     // A framework's unbuilt `index.html`, which publishes perfectly and
     // cannot run. What is wrong with it is what it does not contain, so
     // nothing else in this report can see it.
-    const shell = appShellWithoutCode(html);
-    if (shell) htmlStats.appShells.push(`${target.url}: ${shell}`);
+    // Already read above, where the preview's own copy needed it.
+    if (shellRoot) htmlStats.appShells.push(`${target.url}: ${shellRoot}`);
 
     const companions = planCompanions(target, html, companionContext);
 

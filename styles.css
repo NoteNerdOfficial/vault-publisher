@@ -129,3 +129,56 @@
 .osp-warning-text {
   color: var(--text-warning);
 }
+
+/* A scan result: several sentences of diagnosis rather than a one-line
+   hint, so the description needs room to be read and the actions need to
+   sit under it rather than beside it on a narrow panel. */
+.osp-app-report .setting-item-description {
+  line-height: 1.5;
+  max-width: 46em;
+}
+
+/* --- collapsible sections --------------------------------------------- */
+
+/* The panel is long enough that finding a section matters more than seeing
+   every row at once. A native <details> carries the keyboard handling and
+   the disclosure triangle; what is left is making its summary look like the
+   heading it contains rather than like a list item. */
+.osp-section > .osp-section-summary {
+  list-style: none;
+  cursor: pointer;
+}
+.osp-section > .osp-section-summary::-webkit-details-marker {
+  display: none;
+}
+.osp-section > .osp-section-summary .setting-item-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+/* The triangle, drawn rather than inherited, so it turns with the section
+   and sits on the text baseline in every theme. */
+.osp-section > .osp-section-summary .setting-item-name::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: var(--size-4-2);
+  vertical-align: middle;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  opacity: 0.6;
+  transition: transform 0.12s ease;
+}
+.osp-section[open] > .osp-section-summary .setting-item-name::before {
+  transform: rotate(90deg);
+}
+.osp-section > .osp-section-summary:hover .setting-item-name::before {
+  opacity: 1;
+}
+/* A closed section must not leave the heading's bottom border hanging over
+   nothing, and an open one must not double it against the first row. */
+.osp-section > .osp-section-body > .setting-item:first-child {
+  border-top: none;
+}

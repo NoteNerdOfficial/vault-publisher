@@ -170,6 +170,7 @@ describe("how the panel is ordered", () => {
     expect(sections(render())).toEqual([
       "Preview and publish",
       "What to publish",
+      "Angular, React and other built apps",
       "Appearance",
       "GitHub",
       "Password",
@@ -180,6 +181,7 @@ describe("how the panel is ordered", () => {
     expect(sections(render({ overlay: { enabled: true } }))).toEqual([
       "Preview and publish",
       "What to publish",
+      "Angular, React and other built apps",
       "Appearance",
       "GitHub",
       "Password",
@@ -197,6 +199,7 @@ describe("how the panel is ordered", () => {
     expect(fresh).toEqual([
       "Get started",
       "What to publish",
+      "Angular, React and other built apps",
       "Appearance",
       "GitHub",
       // Always shown, like every other section: the panel does not
@@ -790,15 +793,25 @@ describe("the spacing between rows", () => {
         .not.toBeNull();
     }
 
-    // And nothing is left putting prose straight into the container. The
+    // And nothing is left putting prose straight into a container. The
     // theme specimen is exempt and says so by name: it is a card of its
     // own, so it lines up with the edges of the rows and not with the text
     // inside them.
-    const bare = Array.from(root.children).filter(
-      (node) =>
-        !node.classList.contains("setting-item") &&
-        !node.classList.contains("osp-theme-specimen") &&
-        (node.textContent ?? "").length > 40,
+    //
+    // Every section's body is checked as well as the panel itself, since
+    // the rows live one level down now that the sections collapse. A
+    // `<details>` is structure rather than prose, so the wrapper is
+    // exempt and what it holds is not -- which keeps this checking the
+    // thing it was written to check.
+    const holders = [root, ...Array.from(root.querySelectorAll(".osp-section-body"))];
+    const bare = holders.flatMap((holder) =>
+      Array.from(holder.children).filter(
+        (node) =>
+          !node.classList.contains("setting-item") &&
+          !node.classList.contains("osp-section") &&
+          !node.classList.contains("osp-theme-specimen") &&
+          (node.textContent ?? "").length > 40,
+      ),
     );
     expect(bare).toEqual([]);
   });
@@ -1049,5 +1062,115 @@ describe("the issue tracker section", () => {
     expect(heading).toBeGreaterThan(-1);
     expect(note).toBe(heading + 1);
     expect(firstRow).toBe(note + 1);
+  });
+});
+
+/**
+ * Collapsing, and what stays open.
+ *
+ * The panel outgrew a single scroll. What decides which sections stay open
+ * is `setupSteps`: it names the four things that must be set before
+ * anything works -- a site name and a scope, both in "What to publish",
+ * and a token and a repository, both in "GitHub". Those two sections plus
+ * the actions at the top are the plugin working; the rest are things you
+ * configure once and then never look at again.
+ */
+describe("how the panel collapses", () => {
+  function sectionNode(root: HTMLElement, name: string): HTMLDetailsElement | null {
+    return (
+      (Array.from(root.querySelectorAll("details.osp-section")).find(
+        (node) => node.querySelector(".setting-item-name")?.textContent === name,
+      ) as HTMLDetailsElement | undefined) ?? null
+    );
+  }
+
+  const openNames = (root: HTMLElement) =>
+    Array.from(root.querySelectorAll("details.osp-section"))
+      .filter((node) => node.hasAttribute("open"))
+      .map((node) => node.querySelector(".setting-item-name")?.textContent ?? "");
+
+  it("opens the working loop, the two sections setup needs, and related plugins", () => {
+    expect(openNames(render())).toEqual([
+      "Preview and publish",
+      "What to publish",
+      "GitHub",
+      "Related plugins",
+    ]);
+  });
+
+  it("collapses everything that is configured once and forgotten", () => {
+    const root = render({ overlay: { enabled: true } });
+    for (const name of [
+      "Angular, React and other built apps",
+      "Appearance",
+      "Password",
+      "Review",
+      "On startup",
+    ]) {
+      expect(sectionNode(root, name)?.hasAttribute("open")).toBe(false);
+    }
+  });
+
+  /*
+   * Before setup is done the first section is called something else, and
+   * it is the one place a reader has to start -- so it is open under
+   * either name.
+   */
+  it("opens the checklist while setup is unfinished", () => {
+    const root = render({
+      site: { siteName: "", folder: null },
+      github: { token: "", owner: "", repo: "" },
+    });
+    expect(sectionNode(root, "Get started")?.hasAttribute("open")).toBe(true);
+  });
+
+  // Every section is collapsible: a heading outside one would be a row
+  // nobody can fold away, and the panel's length is the whole problem.
+  it("leaves no heading outside a collapsible section", () => {
+    const root = render({ overlay: { enabled: true } });
+    for (const heading of Array.from(root.querySelectorAll(".setting-item-heading"))) {
+      expect(heading.closest("details.osp-section")).not.toBeNull();
+    }
+  });
+});
+
+/**
+ * Where the four settings that describe a *note* live.
+ *
+ * Homepage, the two frontmatter property names and the two refusals are
+ * all answers to "which of my notes, and read how" -- the same question
+ * the scope and the flag answer. They are not about a built application,
+ * and when the apps section was introduced above them they silently became
+ * part of it, which is the arrangement this pins down.
+ */
+describe("what sits under What to publish", () => {
+  function sectionOf(root: HTMLElement, rowName: string): string | null {
+    const found = row(root, rowName);
+    const details = found?.closest("details.osp-section") ?? null;
+    return details?.querySelector(".setting-item-name")?.textContent ?? null;
+  }
+
+  it("keeps the note settings with the scope that selects them", () => {
+    const root = render();
+    for (const name of [
+      "Site name",
+      "Scope",
+      "Exclude folders",
+      "Homepage",
+      "Date property",
+      "Start here property",
+      "Refuse to publish if private notes are exposed",
+      "Refuse to publish a shortened Bases view",
+    ]) {
+      expect(sectionOf(root, name)).toBe("What to publish");
+    }
+  });
+
+  // And the apps section is a sibling of it, not a part of it.
+  it("keeps the built-app settings in their own section", () => {
+    const root = render();
+    for (const name of ["Publish folders whole", "Find a built app"]) {
+      expect(sectionOf(root, name)).toBe("Angular, React and other built apps");
+    }
   });
 });

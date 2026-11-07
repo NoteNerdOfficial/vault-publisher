@@ -240,6 +240,20 @@ export interface WholeFolderTally {
   count: number;
   /** Their total size, which is the thing worth knowing before a push. */
   bytes: number;
+  /**
+   * Whether an `index.html` landed at the top of where this folder went.
+   *
+   * The check that catches the near miss. A folder pointed one level too
+   * high -- `dist/app` where the build actually wrote `dist/app/browser`
+   * -- publishes every file correctly and still serves nothing at its
+   * own address, because the page is one folder further down. The count
+   * is healthy, the bytes are healthy, and the destination is a 404.
+   *
+   * Nothing else can see this. A static host answers a directory with its
+   * `index.html` or with nothing, and the build has no idea which address
+   * a reader will open.
+   */
+  hasIndex: boolean;
 }
 
 /** One file to publish, and where it lands. */
@@ -425,6 +439,7 @@ export function planWholeFolders(
       at: entry.at,
       count: 0,
       bytes: 0,
+      hasIndex: false,
     });
     if (entry.at === null) continue;
     const taken = claimed.get(entry.at);
@@ -539,6 +554,17 @@ export function planWholeFolders(
     if (tally) {
       tally.count += 1;
       tally.bytes += file.size;
+      /*
+       * The page a reader gets by opening the destination itself.
+       *
+       * Measured against the entry's own folder rather than against the
+       * published url, because the url depends on the destination and
+       * this question does not: an `index.html` at the top of the folder
+       * is the folder's front page wherever the folder is put.
+       */
+      if (file.path.slice(entry.folder.length + 1).toLowerCase() === "index.html") {
+        tally.hasIndex = true;
+      }
     }
 
     if (isHtmlFilePath(file.path)) {

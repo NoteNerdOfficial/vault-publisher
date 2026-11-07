@@ -2100,7 +2100,7 @@ export const OVERLAY_SCRIPT = `(function () {
      */
     if (!contextOpen(comment)) return null;
 
-    var target = comment.block ? blocks[comment.block] : null;
+    var target = anchorFor(comment);
 
     /*
      * The block is in the document but not on the page being shown: it is
@@ -2178,8 +2178,142 @@ export const OVERLAY_SCRIPT = `(function () {
     return { left: comment.x, top: comment.y };
   }
 
+  /*
+   * A block id without its occurrence suffix.
+   *
+   * \`stampBlocks\` numbers blocks whose text is identical: \`H\`, \`H-1\`,
+   * \`H-2\`, in document order. The hash is what the text is; the suffix is
+   * only which of several identical ones this was at the moment of the
+   * pass, so stripping it leaves the part that means something.
+   */
+  function baseOf(id) {
+    var cut = id.lastIndexOf("-");
+    return cut === -1 ? id : id.slice(0, cut);
+  }
+
+  /*
+   * The block a comment is about, looking past a suffix that renumbered.
+   *
+   * The problem this solves: the suffix depends on how many identical
+   * blocks sit *earlier in the document*, so a block's id changes when a
+   * sibling it has nothing to do with appears or disappears. Remove the
+   * first of two "Continue" buttons and the survivor restamps from \`H-1\`
+   * to \`H\` -- the comment on \`H-1\` is orphaned, and nothing about the
+   * block it was left on changed. On an application, where lists grow and
+   * shrink on every render, this happens constantly.
+   *
+   * So a miss is retried against the base hash. Same hash means same tag
+   * and same text, which is the whole of what the anchor ever asserted;
+   * the suffix was always bookkeeping.
+   *
+   * **Only one candidate counts.** If two blocks with that text are still
+   * on the page and unclaimed, there is no way to tell which one the
+   * reviewer meant, and picking either would silently move a comment onto
+   * the wrong paragraph. That case stays orphaned and is reported as the
+   * ambiguity it is, rather than guessed at.
+   *
+   * Candidates already claimed by another comment's exact id are taken out
+   * first, so two comments on two identical blocks do not both recover
+   * onto the same one.
+   */
+  function recovered(comment) {
+    if (!comment.block) return null;
+    var base = baseOf(comment.block);
+    var claimed = Object.create(null);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].block && blocks[all[i].block]) claimed[all[i].block] = true;
+    }
+    var found = null;
+    for (var key in blocks) {
+      if (!Object.prototype.hasOwnProperty.call(blocks, key)) continue;
+      if (baseOf(key) !== base && key !== base) continue;
+      if (claimed[key]) continue;
+      // A second candidate is an ambiguity, not a better answer.
+      if (found) return null;
+      found = key;
+    }
+    return found;
+  }
+
+  /*
+   * The element a comment points at, or null.
+   *
+   * One lookup for the pin and the warning both, so the two can never
+   * disagree -- a pin drawn on a block the panel calls lost is a bug that
+   * only shows up to the person using it.
+   */
+  function anchorFor(comment) {
+    if (!comment.block) return null;
+    var direct = blocks[comment.block];
+    if (direct) return direct;
+    var moved = recovered(comment);
+    return moved ? blocks[moved] : null;
+  }
+
   function orphaned(comment) {
-    return !!comment.block && !blocks[comment.block];
+    return !!comment.block && !anchorFor(comment);
+  }
+
+  /*
+   * Why an anchor could not be placed, for a reviewer who has to act on it.
+   *
+   * "This block has been rewritten since" was the only answer, and on a
+   * page that renders itself it is frequently untrue: the text is still
+   * there, in two places, and the comment could not be put on either
+   * without guessing. Sending somebody to look for an edit that nobody
+   * made is worse than saying nothing.
+   *
+   * So the two cases are told apart by the thing that distinguishes them,
+   * which is whether the text is still on the page at all.
+   */
+  function whyLost(comment) {
+    if (!comment.block) return "";
+    var base = baseOf(comment.block);
+    var copies = 0;
+    for (var key in blocks) {
+      if (!Object.prototype.hasOwnProperty.call(blocks, key)) continue;
+      if (baseOf(key) === base || key === base) copies++;
+    }
+    return copies > 1
+      ? "Anchor lost: this text is now on the page more than once, so the comment could not be placed."
+      : "Anchor lost: this block has been rewritten since.";
+  }
+
+  /*
+   * Whether any comment's anchor has found or lost its block since the last
+   * time this was asked.
+   *
+   * The panel decides \`lost\` once, when it builds a row. On a page the
+   * build rendered that is the end of it, because the document never
+   * changes underneath. On a page that renders itself the document changes
+   * constantly, and the row's answer goes stale the moment the application
+   * mounts -- so the restamp path asks this, and redraws only when the
+   * answer somebody is looking at has actually stopped being true.
+   *
+   * A signature rather than a count: two comments, one finding its block in
+   * the same pass as the other loses its own, is a change the panel has to
+   * show and a count would miss.
+   *
+   * Only anchored comments are in it. A comment about the page as a whole
+   * has no block to lose and would add a constant to every signature.
+   *
+   * Erring towards a redraw is deliberate. Another path may have rebuilt
+   * the panel without asking -- \`viewTurned\` and \`contextsTurned\` both do
+   * -- which leaves this holding an older signature and costs one redundant
+   * redraw the next time something moves. The opposite error is the bug
+   * this exists to fix.
+   */
+  var lastAnchors = null;
+
+  function anchorsChanged() {
+    var parts = [];
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].block) parts.push(all[i].id + (anchorFor(all[i]) ? "1" : "0"));
+    }
+    var now = parts.join(",");
+    if (now === lastAnchors) return false;
+    lastAnchors = now;
+    return true;
   }
 
   /*
@@ -2866,7 +3000,7 @@ export const OVERLAY_SCRIPT = `(function () {
     if (meta.length) body.appendChild(el("div", "co-row-meta", meta.join(" \\u00b7 ")));
 
     if (lost) {
-      body.appendChild(el("div", "co-warn", "Anchor lost: this block has been rewritten since."));
+      body.appendChild(el("div", "co-warn", whyLost(comment)));
       if (comment.blockText) body.appendChild(el("div", "co-quote", comment.blockText));
     }
 
@@ -3056,7 +3190,7 @@ export const OVERLAY_SCRIPT = `(function () {
 
     if (orphaned(comment)) {
       var note = el("div", "co-pop-note");
-      note.appendChild(el("div", "co-warn", "Anchor lost: this block has been rewritten since."));
+      note.appendChild(el("div", "co-warn", whyLost(comment)));
       if (comment.blockText) note.appendChild(el("div", "co-quote", comment.blockText));
       popup.appendChild(note);
     }
@@ -4762,7 +4896,33 @@ export const OVERLAY_SCRIPT = `(function () {
         stampBlocks();
         blocks = blockIndex();
         // A page turn that replaced the nodes rather than restyling them.
-        if (!viewTurned() && !contextsTurned()) reposition();
+        if (!viewTurned() && !contextsTurned()) {
+          reposition();
+          /*
+           * The panel's own copy of what \`reposition\` has just corrected.
+           *
+           * A pin is drawn from \`blocks\` every time it moves, so it was
+           * always right. A panel row is not: \`lost\` is decided when the
+           * row is built, and this path rebuilt neither the row nor the
+           * popup -- so on a page that renders itself, the panel kept
+           * whatever it decided before the application had mounted.
+           *
+           * That is the whole of "Anchor lost" appearing on a block that is
+           * plainly on the screen. The overlay runs while \`<app-root>\` is
+           * still empty, so the first stamp marks nothing and every
+           * anchored comment is an orphan; the application then renders,
+           * this timer re-stamps, and nothing told the panel. Leaving the
+           * page and coming back rebuilt it from current state and the
+           * warning went; the next route change emptied the document and
+           * brought it back.
+           *
+           * Redrawn only when an anchor actually changed state, which keeps
+           * the reason this path avoided \`renderPanel\` in the first place:
+           * an application that mutates continuously must not have its
+           * review panel rebuilt on a timer.
+           */
+          if (anchorsChanged()) renderPanel();
+        }
       }, 150);
     });
     watcher.observe(document.body, {
