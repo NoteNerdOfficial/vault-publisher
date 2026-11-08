@@ -20,6 +20,17 @@ GitHub Pages path are all verified against a real repository, and the settings
 screen, the five site themes and the review overlay are built. What is still
 open is scale (see **Known issues**) and the design pass on the themes.
 
+## Install
+
+**Settings → Community plugins → Browse**, search for **Vault Publisher**,
+install it, then enable it. The listing is at
+[community.obsidian.md/plugins/vault-publisher](https://community.obsidian.md/plugins/vault-publisher),
+whose **Add to Obsidian** button opens the same screen in the app.
+
+Desktop only, because it renders through a running Obsidian, and Obsidian
+**1.7.2** or later. Building it yourself is under **Development** below, and
+is not the route to use if you only want to publish a vault.
+
 ## Why it renders in Obsidian
 
 Dataview, Datacore, Bases and Mermaid output exists only inside a running Obsidian. Any publisher that converts Markdown outside the app has to reimplement them, which is why most alternatives either skip those features or hand you a static-site generator and leave it to you.
