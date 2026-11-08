@@ -26,7 +26,7 @@ import {
   tagUrls,
   tagsIndexContent,
 } from "./landing";
-import { NavNote, buildNavTree, collectTags, recencyBuckets } from "./nav";
+import { NavNote, buildNavTree, collectTags, recencyBuckets, sortPinned } from "./nav";
 import {
   SITE_SCRIPT_PATH,
   addHeadingAnchors,
@@ -42,9 +42,22 @@ import { DEFAULT_THEME, THEMES } from "./themes";
 
 const TODAY = new Date("2026-10-25T12:00:00Z");
 
-function note(url: string, title: string, updated: string | null, pinned = false): NavNote {
+function note(
+  url: string,
+  title: string,
+  updated: string | null,
+  pinned = false,
+  pinOrder?: number,
+): NavNote {
   const slash = url.lastIndexOf("/");
-  return { url, title, folder: slash === -1 ? "" : url.slice(0, slash), updated, pinned };
+  return {
+    url,
+    title,
+    folder: slash === -1 ? "" : url.slice(0, slash),
+    updated,
+    pinned,
+    pinOrder,
+  };
 }
 
 const BATCH = "2026-10-25T09:41";
@@ -52,13 +65,13 @@ const BATCH = "2026-10-25T09:41";
 const NOTES: NavNote[] = [
   note("index-home.html", "Home", "2026-10-20T09:15", true),
   note("notes/atomic-notes-in-practice.html", "Atomic notes in practice", "2026-10-24T18:40", true),
-  note("notes/linking-your-thinking.html", "Linking your thinking", "2026-10-18T11:02"),
-  note("notes/evergreen-notes-grow.html", "Evergreen notes grow", "2026-10-22T08:30"),
+  note("notes/linking-your-thinking.html", "Linking your thinking", "2026-10-18T11:02", true),
+  note("notes/evergreen-notes-grow.html", "Evergreen notes grow", "2026-10-22T08:30", true),
   note("notes/why-notes-decay.html", "Why notes decay", "2026-09-30T16:25"),
-  note("projects/reading-queue.html", "Reading queue", "2026-10-21T20:00"),
-  note("projects/vault-site/design-notes.html", "Design notes", "2026-10-23T14:05"),
+  note("projects/reading-queue.html", "Reading queue", "2026-10-21T20:00", true, 2),
+  note("projects/vault-site/design-notes.html", "Design notes", "2026-10-23T14:05", true),
   note("projects/vault-site/open-questions.html", "Open questions", "2026-10-19T10:11"),
-  note("reference/glossary.html", "Glossary", "2026-10-09T17:20", true),
+  note("reference/glossary.html", "Glossary", "2026-10-09T17:20", true, 1),
   note("reference/markdown-syntax.html", "Markdown syntax", "2026-08-14T12:00"),
   ...Array.from({ length: 14 }, (_, i) =>
     note(`archive/note-${i + 1}.html`, `Archived idea ${i + 1}`, BATCH),
@@ -182,6 +195,11 @@ const LANDING: LandingNote[] = NOTES.map((note, index) => ({
   folder: note.folder,
   updated: note.updated,
   pinned: note.pinned,
+  // Carried like `buildSite.ts` carries it, or the front page's "Start
+  // here" sorts by title while the panel beside it sorts by the author's
+  // numbers -- which is exactly the drift `sortPinned` exists to prevent,
+  // reproduced in the harness meant to catch it.
+  pinOrder: note.pinOrder,
   tags: TAGGED.find((t) => t.url === note.url)?.tags ?? [],
   excerpt:
     index % 3 === 0
@@ -284,7 +302,7 @@ function page(themeName: string): string {
     source: noteSource(SOURCE),
     shell: {
       nav: buildNavTree(NOTES),
-      pinned: NOTES.filter((n) => n.pinned),
+      pinned: sortPinned(NOTES.filter((n) => n.pinned)),
       recency: recencyBuckets(NOTES, TODAY),
       tags: TAGS,
       paths: PATHS,
@@ -312,14 +330,15 @@ function sitePage(
   url: string,
   content: string,
   crumbs?: Array<{ label: string; url?: string }>,
+  startTheme?: "light" | "dark",
 ): string {
   return buildPage({
-    meta: { title, url, siteName: "A Vault, Published" },
+    meta: { title, url, siteName: "A Vault, Published", startTheme },
     content,
     headings: [],
     shell: {
       nav: buildNavTree(NOTES),
-      pinned: NOTES.filter((n) => n.pinned),
+      pinned: sortPinned(NOTES.filter((n) => n.pinned)),
       recency: recencyBuckets(NOTES, TODAY),
       tags: TAGS,
       paths: PATHS,
@@ -443,6 +462,20 @@ describe("the shell", () => {
     writeFileSync(join(out, SITE_SCRIPT_PATH), CLIENT_SCRIPT);
     writeFileSync(join(out, "notes/atomic-notes-in-practice.html"), page(DEFAULT_THEME));
     writeFileSync(join(out, "index.html"), sitePage("A Vault, Published", "index.html", overviewContent(landing("index.html"))));
+    // The same front page, opened in dark by the site's own setting rather
+    // than by the machine looking at it -- which is the only way to get a
+    // dark page out of here on a light system, and the README's second
+    // screenshot.
+    writeFileSync(
+      join(out, "index-dark.html"),
+      sitePage(
+        "A Vault, Published",
+        "index.html",
+        overviewContent(landing("index.html")),
+        undefined,
+        "dark",
+      ),
+    );
     writeFileSync(join(out, PATHS.browse), sitePage("Browse", PATHS.browse, browseContent(landing(PATHS.browse), folderSlug)));
     writeFileSync(join(out, PATHS.tags), sitePage("Tags", PATHS.tags, tagsIndexContent(landing(PATHS.tags))));
     // The other homepage: a note the author wrote, with the strip that gives

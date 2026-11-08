@@ -13,10 +13,12 @@ import { describe, expect, it } from "vitest";
 import { Heading } from "./page";
 import { siteCss } from "./theme";
 import {
+  PINS_SHOWN,
   ShellInput,
   commandBar,
   contextRail,
   inPageMenu,
+  jumpPanel,
   statsHeader,
   themeButton,
   vaultPanel,
@@ -236,6 +238,145 @@ describe("the drawer's head", () => {
     // toggle, and the stylesheet picks the glyph off it.
     expect(markup).toContain("data-osp-theme-toggle");
     expect(markup).toContain('aria-checked="false"');
+  });
+});
+
+describe("Start here, in the panel", () => {
+  const pins = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      url: `notes/pin-${i + 1}.html`,
+      title: `Pinned note ${i + 1}`,
+      folder: "notes",
+      updated: "2026-10-24T18:40",
+      pinned: true,
+    }));
+
+  it("is absent entirely when the author pinned nothing", () => {
+    const panel = vaultPanel(shell({ pinned: [] }));
+    expect(panel).not.toContain("osp-pins");
+    expect(panel).not.toContain("Start here");
+  });
+
+  it("sits above the body, which is what holds it still", () => {
+    // The body is the panel's only scroll container, so a block before it
+    // stays put while the tree moves. This ordering *is* the pinning.
+    const panel = vaultPanel(shell({ pinned: pins(3) }));
+    expect(panel.indexOf("osp-pins")).toBeLessThan(panel.indexOf("osp-panel-body"));
+  });
+
+  it("keeps the pins out of the body, so search cannot index them twice", () => {
+    // clientScript.ts reads ".osp-panel-body .osp-tree .osp-row". A pinned
+    // note is an ordinary note and is already in the tree, so a copy inside
+    // the body would put every one of them in the results twice.
+    const panel = vaultPanel(shell({ pinned: pins(3) }));
+    const body = panel.slice(panel.indexOf('class="osp-panel-body'));
+    expect(body).not.toContain("osp-pin-list");
+    expect(panel).toContain("osp-pin-list");
+  });
+
+  it("renders the order it is given, and does not re-sort it", () => {
+    // The running order is decided once, in buildSite.ts, by `sortPinned`.
+    // The panel's job is to draw the list it was handed -- if it sorted
+    // too, the homepage and the panel could drift apart.
+    const panel = vaultPanel(
+      shell({
+        pinned: [
+          { url: "z.html", title: "Zebra", folder: "", updated: null, pinned: true },
+          { url: "a.html", title: "Aardvark", folder: "", updated: null, pinned: true },
+        ],
+      }),
+    );
+    expect(panel.indexOf("Zebra")).toBeLessThan(panel.indexOf("Aardvark"));
+  });
+
+  it("counts every pin in the heading, not just the ones on show", () => {
+    const panel = vaultPanel(shell({ pinned: pins(12) }));
+    expect(panel).toContain('Start here<span class="osp-count">12</span>');
+  });
+
+  it("asks for nothing when the whole list already fits", () => {
+    const panel = vaultPanel(shell({ pinned: pins(PINS_SHOWN) }));
+    expect(panel.match(/osp-row/g)).toHaveLength(PINS_SHOWN);
+    expect(panel).not.toContain("osp-pins-rest");
+    expect(panel).not.toContain("Show more");
+  });
+
+  it("shows five and offers the rest, rather than capping the list", () => {
+    const panel = vaultPanel(shell({ pinned: pins(30) }));
+    // Every pin is in the markup: the default is what is *shown*, not a
+    // limit on what an author may pin.
+    for (let i = 1; i <= 30; i++) expect(panel).toContain(`Pinned note ${i}<`);
+    expect(panel).toContain("osp-pins-rest");
+    // And the control counts what is still folded away.
+    expect(panel).toContain(`<span class="osp-num osp-pins-count">${30 - PINS_SHOWN}</span>`);
+  });
+
+  it("carries both labels, so the toggle needs no script to change its mind", () => {
+    const panel = vaultPanel(shell({ pinned: pins(8) }));
+    expect(panel).toContain("osp-pins-more");
+    expect(panel).toContain("Show more");
+    expect(panel).toContain("osp-pins-less");
+    expect(panel).toContain("Show less");
+    // A <details> opens with JavaScript off, which is the point of using one
+    // in front of notes the author chose. Nothing scripted is wired to it.
+    expect(panel).toContain("<details class=\"osp-pins-rest\"");
+    expect(panel).not.toContain("data-osp-pins");
+  });
+
+  it("is drawn under the rows it reveals, by the stylesheet", () => {
+    // The summary must come first in the markup -- a <details> has no other
+    // shape -- so the order a reader sees is CSS, and this is the pair of
+    // rules that makes it so.
+    const css = siteCss();
+    expect(css).toContain(".osp-pins-rest > summary { order: 2;");
+    expect(css).toContain(".osp-pins-rest > .osp-pin-list { order: 1; }");
+  });
+
+  it("is bounded, so an expanded list cannot push the tree off the panel", () => {
+    const css = siteCss();
+    const at = css.indexOf(".osp-pins {");
+    expect(at).toBeGreaterThan(-1);
+    const rule = css.slice(at, css.indexOf("}", at));
+    expect(rule).toContain("max-height:");
+    // And the overflow scrolls inside the section rather than growing it.
+    expect(css).toContain(".osp-pins-scroll { flex: 1; min-height: 0; overflow-y: auto; }");
+  });
+
+  it("swaps the label and drops the count once it is open", () => {
+    const css = siteCss();
+    expect(css).toContain(".osp-pins-rest[open] .osp-pins-more { display: none; }");
+    expect(css).toContain(".osp-pins-rest[open] .osp-pins-less { display: inline; }");
+    expect(css).toContain(".osp-pins-rest[open] .osp-pins-count { display: none; }");
+  });
+
+  it("resets the list's bullets, like every other list in the furniture", () => {
+    expect(siteCss()).toContain(".osp-pin-list");
+  });
+});
+
+describe("the search drop-down, now that Start here has left it", () => {
+  const pins = [
+    {
+      url: "notes/pin-1.html",
+      title: "Pinned note 1",
+      folder: "notes",
+      updated: "2026-10-24T18:40",
+      pinned: true,
+    },
+  ];
+
+  it("no longer carries the list, so it is not on the page twice", () => {
+    expect(jumpPanel(shell({ pinned: pins }))).not.toContain("Start here");
+  });
+
+  it("still answers with what changed, which is the question search is near", () => {
+    expect(jumpPanel(shell({ pinned: pins }))).toContain("Recently updated");
+  });
+
+  it("keeps the element the script bails out without", () => {
+    // search() in clientScript.ts returns early on a missing
+    // [data-osp-jump-recent], so emptying this panel is not an option.
+    expect(jumpPanel(shell({ pinned: pins }))).toContain("data-osp-jump-recent");
   });
 });
 

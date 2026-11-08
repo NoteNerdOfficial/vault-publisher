@@ -5,8 +5,10 @@ import {
   calendarDaysBetween,
   collectTags,
   formatDay,
+  readPin,
   recencyBuckets,
   relativeDay,
+  sortPinned,
 } from "./nav";
 
 function note(url: string, title: string, updated: string | null = null): NavNote {
@@ -138,5 +140,97 @@ describe("formatDay", () => {
 
   it("says nothing about a date it cannot read", () => {
     expect(formatDay("sometime last year")).toBe("");
+  });
+});
+
+describe("readPin", () => {
+  it("takes true as a place in the list with nothing said about where", () => {
+    expect(readPin(true)).toEqual({ pinned: true });
+  });
+
+  it("takes a positive number as the place itself", () => {
+    expect(readPin(1)).toEqual({ pinned: true, pinOrder: 1 });
+    expect(readPin(12)).toEqual({ pinned: true, pinOrder: 12 });
+  });
+
+  it("allows a fraction, so a note can be slipped in without renumbering", () => {
+    expect(readPin(1.5)).toEqual({ pinned: true, pinOrder: 1.5 });
+  });
+
+  it("reads zero and below as off, not as the zeroth place", () => {
+    // Somebody writing `pinned: 0` means "no", and the places a reader
+    // counts in start at one.
+    expect(readPin(0)).toEqual({ pinned: false });
+    expect(readPin(-1)).toEqual({ pinned: false });
+  });
+
+  it("ignores anything that is neither true nor a number", () => {
+    for (const value of [false, undefined, null, "", "1", "true", "yes", [], {}, NaN, Infinity]) {
+      expect(readPin(value)).toEqual({ pinned: false });
+    }
+  });
+});
+
+describe("sortPinned", () => {
+  const pin = (title: string, pinOrder?: number) => ({ title, pinOrder });
+
+  it("puts the numbered ones in their numbers", () => {
+    expect(
+      sortPinned([pin("third", 3), pin("first", 1), pin("second", 2)]).map((n) => n.title),
+    ).toEqual(["first", "second", "third"]);
+  });
+
+  it("lets a fraction land between two whole numbers", () => {
+    expect(
+      sortPinned([pin("b", 2), pin("a", 1), pin("between", 1.5)]).map((n) => n.title),
+    ).toEqual(["a", "between", "b"]);
+  });
+
+  it("leads with what the author numbered, then what they only marked", () => {
+    // A number says where the note goes; `true` does not, so it follows.
+    expect(
+      sortPinned([pin("aaa"), pin("ranked", 2), pin("zzz"), pin("leads", 1)]).map((n) => n.title),
+    ).toEqual(["leads", "ranked", "aaa", "zzz"]);
+  });
+
+  it("falls back to the title, which is what the tree sorts by too", () => {
+    // The order used to come from the vault path, so a folder decided it.
+    // `sortLevel` above reads titles; these two no longer disagree.
+    expect(sortPinned([pin("Beta"), pin("Alpha")]).map((n) => n.title)).toEqual([
+      "Alpha",
+      "Beta",
+    ]);
+  });
+
+  it("breaks a tie on the title rather than leaving it to chance", () => {
+    expect(
+      sortPinned([pin("Beta", 1), pin("Alpha", 1)]).map((n) => n.title),
+    ).toEqual(["Alpha", "Beta"]);
+  });
+
+  it("leaves the caller's array alone", () => {
+    const input = [pin("b", 2), pin("a", 1)];
+    sortPinned(input);
+    expect(input.map((n) => n.title)).toEqual(["b", "a"]);
+  });
+
+  it("is the order the old path sort got wrong", () => {
+    // The case from the plugin's own guide vault: five pins whose vault
+    // paths sorted the note called "Start here" last and the most advanced
+    // topic first. Numbered, it reads the way it was meant to.
+    const pins = [
+      { title: "Publishing to GitHub Pages", pinOrder: 5 },
+      { title: "The note header", pinOrder: 4 },
+      { title: "Choosing what gets published", pinOrder: 2 },
+      { title: "Install and first build", pinOrder: 3 },
+      { title: "Start here", pinOrder: 1 },
+    ];
+    expect(sortPinned(pins).map((n) => n.title)).toEqual([
+      "Start here",
+      "Choosing what gets published",
+      "Install and first build",
+      "The note header",
+      "Publishing to GitHub Pages",
+    ]);
   });
 });

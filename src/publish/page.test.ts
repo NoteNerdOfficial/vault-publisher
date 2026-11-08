@@ -13,6 +13,7 @@ import {
   reviewOverlayMeta,
   stripFrontmatter,
 } from "./page";
+import { THEME_BOOT } from "./clientScript";
 
 /** Builds a container the way Obsidian's renderer leaves one. */
 function render(html: string): HTMLElement {
@@ -569,5 +570,56 @@ describe("buildPage and the review overlay", () => {
     expect(html).not.toContain(`content="{"`);
     expect(html).not.toContain("<x>");
     expect(html).toContain("&quot;");
+  });
+});
+
+describe("which mode the site opens in", () => {
+  const page = (startTheme?: "light" | "dark", source?: string) =>
+    buildPage({
+      meta: { title: "A note", url: "notes/a.html", siteName: "Notes", startTheme },
+      content: "<p>Body.</p>",
+      headings: [],
+      source,
+    });
+
+  it("says nothing when the author did not choose, so the system decides", () => {
+    // The default has to be *absence*: the stylesheet's own
+    // prefers-color-scheme block is what answers then, which is what every
+    // site built before this setting existed does.
+    const html = page();
+    expect(html).toContain('<html lang="en">');
+    // Scoped to the tag: the boot script in <head> names the attribute too,
+    // which is how a reader's remembered choice gets applied.
+    const tag = html.slice(html.indexOf("<html"), html.indexOf(">", html.indexOf("<html")) + 1);
+    expect(tag).not.toContain("data-theme");
+  });
+
+  it("pins the site to dark, before any script runs", () => {
+    expect(page("dark")).toContain('<html lang="en" data-theme="dark">');
+  });
+
+  it("pins the site to light, which is the one that needs an attribute", () => {
+    // A dark system would otherwise win through prefers-color-scheme, so
+    // "light" is not a no-op: the stylesheet guards that block against
+    // exactly this attribute.
+    expect(page("light")).toContain('<html lang="en" data-theme="light">');
+  });
+
+  it("sits beside the markdown flag rather than displacing it", () => {
+    expect(page("dark", "# A note")).toContain(
+      '<html lang="en" data-theme="dark" data-osp-source>',
+    );
+    expect(page(undefined, "# A note")).toContain('<html lang="en" data-osp-source>');
+  });
+
+  it("still lets a reader who worked the switch win", () => {
+    // The attribute is the site's opening position, not a lock. The boot
+    // script runs in <head> and overwrites it from localStorage, which only
+    // a reader can write to, so a remembered choice beats the setting on
+    // every page without the setting having to know.
+    expect(THEME_BOOT).toContain('localStorage.getItem("osp-theme")');
+    expect(THEME_BOOT).toContain('r.setAttribute("data-theme",t)');
+    // And the page carries that script, so this is true of the real output.
+    expect(page("dark")).toContain(THEME_BOOT);
   });
 });

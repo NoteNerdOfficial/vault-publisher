@@ -571,6 +571,81 @@ function historyButton(direction: "back" | "forward", glyph: string, label: stri
 
 /* --- vault panel ----------------------------------------------------- */
 
+/**
+ * How many starting points the panel shows before asking.
+ *
+ * Not a cap: every pinned note is in the markup, and the rest are one click
+ * away. Five is the number that still reads as a short list rather than a
+ * second tree -- past it a reader stops seeing "the author put these first"
+ * and starts seeing a folder.
+ */
+export const PINS_SHOWN = 5;
+
+/**
+ * The author's own starting points, held above the tree.
+ *
+ * These used to live only in the search field's drop-down, which put the
+ * most editorial thing on the site behind the one control a reader touches
+ * when they already know where they are going. The panel's own argument for
+ * keeping the tree at every width -- see `panelToggle` -- applies here with
+ * more force: "where do I start" is not a question search can be asked, and
+ * a list that vanishes on the first keystroke cannot answer it.
+ *
+ * Three decisions worth stating.
+ *
+ * It sits *outside* `.osp-panel-body` rather than at the top of it, which is
+ * two things at once. It is what pins it: the body is the scroll container,
+ * so a block above it stays while the tree moves. And it is what keeps
+ * search honest -- `clientScript.ts` builds its index from
+ * `.osp-panel-body .osp-tree .osp-row`, and a pinned note is an ordinary
+ * note that is already in the tree, so a copy inside the body would put
+ * every one of them in the results twice.
+ *
+ * The overflow is a `<details>`, not a scripted toggle, for the reason
+ * `batchRow` gives: it opens with JavaScript off, and this one stands in
+ * front of notes the author chose. Nothing in `clientScript.ts` knows this
+ * section exists.
+ *
+ * And the whole block is bounded in `theme.ts` rather than here, by a
+ * `max-height` with its own scroll. An author may pin thirty notes, and
+ * expanded without that bound the list would push the tree off the panel --
+ * which would spend exactly what this section is beside the tree to protect.
+ */
+export function pinnedSection(input: ShellInput): string {
+  if (!input.pinned.length) return "";
+
+  const shown = input.pinned.slice(0, PINS_SHOWN);
+  const rest = input.pinned.slice(PINS_SHOWN);
+  const list = (notes: NavNote[]) =>
+    `<ul class="osp-pin-list">` +
+    notes.map((note) => `<li>${noteRow(note, input, { icon: "pin" })}</li>`).join("") +
+    `</ul>`;
+
+  return (
+    `<div class="osp-pins">` +
+    `<h2 class="osp-group-title osp-pins-title">Start here` +
+    `<span class="osp-count">${input.pinned.length}</span></h2>` +
+    `<div class="osp-pins-scroll osp-scroll">` +
+    list(shown) +
+    (rest.length
+      ? `<details class="osp-pins-rest">` +
+        // Below the rows it reveals, which a stylesheet does and markup
+        // cannot: a summary is its element's first child by rule, and a
+        // control that says "show more" belongs at the end of the list it
+        // is extending rather than in the middle of it.
+        `<summary class="osp-row osp-pins-toggle">` +
+        icon("chevronDown", "osp-icon-sm osp-pins-chev") +
+        `<span class="osp-label osp-pins-more">Show more</span>` +
+        `<span class="osp-label osp-pins-less">Show less</span>` +
+        `<span class="osp-num osp-pins-count">${rest.length}</span>` +
+        `</summary>` +
+        list(rest) +
+        `</details>`
+      : "") +
+    `</div></div>`
+  );
+}
+
 export function vaultPanel(input: ShellInput): string {
   return (
     // The scrim is a sibling rather than a layer inside the panel: it covers
@@ -602,6 +677,9 @@ export function vaultPanel(input: ShellInput): string {
     `<button class="osp-btn osp-btn-sq osp-panel-close" type="button" data-osp-panel-close ` +
     `aria-label="Close" title="Close">${icon("close", "osp-icon")}</button>` +
     `</div>` +
+    // Above the body rather than inside it, which is what holds it still
+    // while the tree scrolls. See `pinnedSection`.
+    pinnedSection(input) +
     `<div class="osp-panel-body osp-scroll">` +
     `<h2 class="osp-group-title osp-browse-title">Browse` +
     `<span class="osp-count">${input.noteCount}</span></h2>` +
@@ -613,10 +691,19 @@ export function vaultPanel(input: ShellInput): string {
 /**
  * The jump-to panel: the field's own answer, before and after typing.
  *
- * Before anything is typed it shows what changed and what the author put
- * first, which is the honest home for recency -- the moment a visitor has not
- * yet said what they want. Typing replaces that with matches, notes first and
- * then tags, because a tag is a place to go as much as a note is.
+ * Before anything is typed it shows what changed, which is the honest home
+ * for recency -- the moment a visitor has not yet said what they want is
+ * exactly when "what moved since I looked" is worth answering. Typing
+ * replaces that with matches, notes first and then tags, because a tag is a
+ * place to go as much as a note is.
+ *
+ * What it no longer shows is "Start here". That list went to the vault
+ * panel, beside the tree, where `pinnedSection` explains why: recency is a
+ * question about the vault's clock and belongs next to the field, while the
+ * author's starting points are a claim about the vault itself and were only
+ * ever reachable here by a reader who had already stopped needing them. The
+ * list is not in both places on purpose -- one list twice is one too many,
+ * and the drop-down is the copy that disappeared on the first keystroke.
  *
  * It sits outside the vault panel and is positioned against the viewport,
  * because the field it answers to is in the command bar and the panel it
@@ -640,14 +727,6 @@ export function jumpPanel(input: ShellInput): string {
     `<div class="osp-jump" data-osp-jump hidden>` +
     `<div class="osp-jump-recent" data-osp-jump-recent>` +
     recencySection(input) +
-    (input.pinned.length
-      ? `<h2 class="osp-group-title">Start here</h2>` +
-        `<ul class="osp-tree">` +
-        input.pinned
-          .map((note) => `<li>${noteRow(note, input, { icon: "pin" })}</li>`)
-          .join("") +
-        `</ul>`
-      : "") +
     `</div>` +
     `<div class="osp-jump-results" data-osp-jump-results hidden></div>` +
     `<p class="osp-jump-hint"><span><kbd>↑</kbd><kbd>↓</kbd> move</span>` +

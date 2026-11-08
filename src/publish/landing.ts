@@ -21,7 +21,7 @@
  * destination with its own address is what a tag was always pretending to be.
  */
 
-import { NavBucket, NavNote, formatDay, relativeDay } from "./nav";
+import { NavBucket, NavNote, formatDay, relativeDay, sortPinned } from "./nav";
 import { SitePaths, escapeHtml, icon } from "./shell";
 import { encodeUrlPath } from "./urls";
 
@@ -32,6 +32,8 @@ export interface LandingNote {
   folder: string;
   updated: string | null;
   pinned: boolean;
+  /** The author's place for this one in "Start here". See `readPin`. */
+  pinOrder?: number;
   tags: string[];
   /** The note's opening prose, so a list can be read rather than scanned. */
   excerpt: string;
@@ -306,7 +308,9 @@ export function overviewContent(input: LandingInput): string {
     lastUpdated ? `updated ${formatDay(lastUpdated)}` : "",
   ].filter(Boolean);
 
-  const pinned = notes.filter((note) => note.pinned);
+  // The same order the panel shows, from the same function, so the front
+  // page and the furniture beside it cannot disagree.
+  const pinned = sortPinned(notes.filter((note) => note.pinned));
   const linked = notes
     .filter((note) => note.incoming > 0 && !note.pinned)
     .sort((a, b) => b.incoming - a.incoming || a.title.localeCompare(b.title))

@@ -712,15 +712,73 @@ body {
 .markdown-rendered .footnote-ref a { text-decoration: none; }
 
 /* --- diagrams -------------------------------------------------------- *
- * Mermaid ships its geometry and its palette together, scoped to the
- * diagram's own id. The palette is taken out at build time, so what arrives
- * here is shape, stroke width and dash pattern with no colour at all, and
- * every rule below is the page deciding what a diagram looks like.
+ * Two renderers, which colour themselves in two different ways.
+ *
+ * Classic Mermaid ships its geometry and its palette together, scoped to
+ * the diagram's own id. The palette is taken out at build time, so what
+ * arrives here is shape, stroke width and dash pattern with no colour at
+ * all, and the rules below are the page deciding what it looks like.
+ *
+ * Obsidian's own renderer (svg.pele) does the opposite: it paints from
+ * custom properties and holds no literal colours at all, which is why
+ * neutralizeMermaidColours passes over it -- there is nothing literal in
+ * it to take out. It emits fill="var(--pele-surface,#f3f3f3)", and the
+ * harvested app stylesheet maps --pele-* onto --mermaid-*, which it
+ * maps in turn onto --text-normal, --background-primary and the rest
+ * of the app's own namespace -- none of which exists on a published page.
+ * So every one of those chains collapsed to the light fallback baked into
+ * the attribute, and a dark site got light boxes. Text was the half that
+ * *did* get themed, by the blanket rule at the end of this section, which
+ * is what made it unreadable rather than merely wrong: on a dark page the
+ * labels came out near-white on near-white.
  *
  * Shape selectors are qualified by element -- rect.actor, not .actor --
  * because Mermaid puts the same class on a box and on the text inside it,
  * and a label painted with the box fill is a label nobody can read.
  * --------------------------------------------------------------------- */
+
+/* The palette Obsidian's renderer paints from, answered in the site's own
+   terms so that a diagram tracks the theme and the light/dark switch for
+   free -- every value here resolves through --osp-*, which is already
+   redeclared for dark.
+
+   On body rather than on :root because the harvested stylesheet
+   declares the same names on body, and a declaration on the element
+   beats one inherited from its parent: at :root this would be shadowed
+   and change nothing. assets/site.css is linked after
+   assets/obsidian.css, so at equal specificity these win.
+
+   Both namespaces are set deliberately. --mermaid-* is what the
+   harvested mapping reads; --pele-* is what the SVG itself reads, and
+   setting it directly is what keeps a diagram themed on a build whose CSS
+   harvest came back empty.
+
+   The categorical series colours are left out on purpose. They are a
+   diagram's data rather than its furniture, the renderer's own defaults
+   are saturated enough to read on either background, and inventing eight
+   of them per theme is a palette decision this file should not be making
+   on its own. Unset, they fall back to those defaults. */
+body {
+  --mermaid-background: var(--osp-bg);
+  --mermaid-text-color: var(--osp-text);
+  --mermaid-muted-color: var(--osp-text-muted);
+  --mermaid-line-color: var(--osp-dgm-line);
+  --mermaid-surface: var(--osp-dgm-fill);
+  --mermaid-surface-alt: var(--osp-dgm-note);
+  --mermaid-border-color: var(--osp-dgm-stroke);
+  --mermaid-accent: var(--osp-accent);
+  --mermaid-radius: var(--osp-radius);
+
+  --pele-bg: var(--osp-bg);
+  --pele-fg: var(--osp-text);
+  --pele-muted: var(--osp-text-muted);
+  --pele-line: var(--osp-dgm-line);
+  --pele-surface: var(--osp-dgm-fill);
+  --pele-surface-alt: var(--osp-dgm-note);
+  --pele-border: var(--osp-dgm-stroke);
+  --pele-accent: var(--osp-accent);
+  --pele-radius: var(--osp-radius);
+}
 
 .markdown-rendered .mermaid-wrapper,
 .markdown-rendered .mermaid { margin: 0 0 1.5rem; text-align: center; }
@@ -790,14 +848,22 @@ body {
 }
 
 /* Last, and wider than the shapes: whatever a diagram writes, it writes in
-   the page's text colour. */
-.markdown-rendered .mermaid svg text,
-.markdown-rendered .mermaid svg tspan,
-.markdown-rendered .mermaid svg .label,
-.markdown-rendered .mermaid svg .nodeLabel,
-.markdown-rendered .mermaid svg .edgeLabel,
-.markdown-rendered .mermaid svg foreignObject div,
-.markdown-rendered .mermaid svg span {
+   the page's text colour.
+
+   Classic Mermaid only. svg.pele is excluded because it has already been
+   told what the page's text colour is, above, and because it uses the fill
+   of a label to mean something: a pie chart paints its slice labels in the
+   *background* colour so they read against a saturated wedge. Painting
+   those with the text colour instead is how a blanket rule turns one
+   renderer's readable diagram into another's unreadable one -- which is
+   the bug this exclusion exists to not reintroduce. */
+.markdown-rendered .mermaid svg:not(.pele) text,
+.markdown-rendered .mermaid svg:not(.pele) tspan,
+.markdown-rendered .mermaid svg:not(.pele) .label,
+.markdown-rendered .mermaid svg:not(.pele) .nodeLabel,
+.markdown-rendered .mermaid svg:not(.pele) .edgeLabel,
+.markdown-rendered .mermaid svg:not(.pele) foreignObject div,
+.markdown-rendered .mermaid svg:not(.pele) span {
   fill: var(--osp-text);
   color: var(--osp-text);
 }
@@ -1563,7 +1629,56 @@ body {
   background: var(--osp-surface);
 }
 
-.osp-tree, .osp-tree ul, .osp-outline, .osp-outline ul, .osp-graph-key {
+/* --- Start here -------------------------------------------------------
+ * The author's starting points, pinned above the tree.
+ *
+ * Held still by position in the flex column rather than by position:
+ * sticky: the section is a sibling of .osp-panel-body, and the body is
+ * the only thing in the panel that scrolls. A sticky block inside the body
+ * would have to win a fight with .osp-browse-title, which is already
+ * pinned at top: 0 a few rows below it and would slide underneath.
+ *
+ * max-height is the load-bearing line. Nothing limits how many notes an
+ * author pins, the overflow expands to all of them, and flex: none with
+ * thirty rows in it would push the tree out of the panel entirely. Capped
+ * at a little over a third, the list scrolls inside itself and the tree
+ * always keeps the rest -- which is the whole reason this sits beside the
+ * tree rather than on top of it.
+ * -------------------------------------------------------------------- */
+.osp-pins {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 38%;
+  padding: 0 0.5rem 0.35rem;
+  border-bottom: var(--osp-rule) solid var(--osp-border);
+}
+.osp-pins-title { flex: none; }
+.osp-pins-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* The toggle under the rows it reveals rather than over them. A <details>
+   carries its summary first by rule, so the order a reader sees is a layout
+   decision: the list, then the control that extends it. */
+.osp-pins-rest { display: flex; flex-direction: column; }
+.osp-pins-rest > summary { order: 2; list-style: none; }
+.osp-pins-rest > summary::-webkit-details-marker { display: none; }
+.osp-pins-rest > .osp-pin-list { order: 1; }
+
+.osp-pins-toggle { color: var(--osp-link); }
+.osp-pins-toggle:hover { color: var(--osp-link); }
+.osp-pins-chev { transition: transform 180ms var(--osp-ease); opacity: 0.7; }
+.osp-pins-rest[open] .osp-pins-chev { transform: rotate(180deg); }
+
+/* One summary, two labels, and the stylesheet says which is true. The count
+   is how many more there are, so it goes with "Show more" and not with the
+   list it was counting. */
+.osp-pins-less { display: none; }
+.osp-pins-rest[open] .osp-pins-more { display: none; }
+.osp-pins-rest[open] .osp-pins-less { display: inline; }
+.osp-pins-rest[open] .osp-pins-count { display: none; }
+
+.osp-tree, .osp-tree ul, .osp-pin-list, .osp-outline, .osp-outline ul, .osp-graph-key {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -2347,6 +2462,7 @@ body {
   .osp-panel-toggle { display: inline-flex; }
   .osp-scrim { display: block; }
   .osp-panel-body { padding-left: 0.4rem; padding-right: 0.4rem; }
+  .osp-pins { padding-left: 0.4rem; padding-right: 0.4rem; }
 
   /* Name, then menu. Two things, one at each end.
      The field that used to hold the middle of this row is in the drawer, so

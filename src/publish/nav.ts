@@ -33,6 +33,15 @@ export interface NavNote {
   updated: string | null;
   pinned: boolean;
   /**
+   * Where the author put this one in the running order, or absent for a note
+   * that is pinned without saying where.
+   *
+   * See `readPin`: the frontmatter key carries both facts, so `pinned: true`
+   * is a note that belongs in the list and `pinned: 2` is a note that
+   * belongs second. `sortPinned` is the only thing that reads this.
+   */
+  pinOrder?: number;
+  /**
    * True for one of the vault's own HTML files, published as it was written.
    *
    * The tree is the one place these pages appear, and it is why this flag
@@ -99,6 +108,63 @@ function sortLevel(level: NavNode[]): void {
     return an.localeCompare(bn);
   });
   for (const node of level) if (node.kind === "folder") sortLevel(node.children);
+}
+
+/**
+ * What the "start here" frontmatter key means, in one place.
+ *
+ * The key used to be read as a plain boolean, which left the running order
+ * to whatever `selectNotes` happened to return -- alphabetical by *vault
+ * path*, so the folder a note sat in decided whether it led the list, and a
+ * note titled "Begin here" at `archive/zz-draft.md` came last. Nobody chose
+ * that order; it was the sort that made link rewriting reproducible, leaking
+ * out through a `filter` that preserved it.
+ *
+ * So the key now carries two facts rather than one:
+ *
+ *   pinned: true   this note belongs in the list
+ *   pinned: 2      this note belongs second
+ *
+ * A positive number is a rank. Zero, a negative and anything that is not a
+ * number or `true` mean not pinned -- `pinned: 0` is far more likely to be
+ * somebody writing "off" than somebody claiming the zeroth place, and the
+ * ranks a reader thinks in start at one. Fractions are deliberately allowed:
+ * `pinned: 1.5` slips a note between the first and the second without
+ * renumbering the rest, which is the whole reason to prefer a number over a
+ * list somebody has to keep in step.
+ */
+export function readPin(value: unknown): { pinned: boolean; pinOrder?: number } {
+  if (value === true) return { pinned: true };
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return { pinned: true, pinOrder: value };
+  }
+  return { pinned: false };
+}
+
+/**
+ * The running order: what the author numbered, then what they only marked.
+ *
+ * Numbered notes lead, because somebody who wrote a number was saying where
+ * the note goes and somebody who wrote `true` was not. Both groups fall back
+ * to the title, which is also what `sortLevel` sorts the tree by -- the two
+ * used to disagree, the tree reading titles and this list reading paths, in
+ * the same panel a few rows apart.
+ *
+ * Shared rather than done twice: the panel's `pinnedSection` and the
+ * generated homepage's "Start here" both end up here, so the site cannot
+ * show one order beside the tree and a different one on its front page.
+ */
+export function sortPinned<T extends { title: string; pinOrder?: number }>(
+  notes: T[],
+): T[] {
+  return [...notes].sort((a, b) => {
+    const ar = a.pinOrder;
+    const br = b.pinOrder;
+    if (ar !== undefined && br !== undefined && ar !== br) return ar - br;
+    if (ar !== undefined && br === undefined) return -1;
+    if (ar === undefined && br !== undefined) return 1;
+    return a.title.localeCompare(b.title);
+  });
 }
 
 /** A run of notes that were all written in the same minute. */

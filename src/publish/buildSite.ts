@@ -7,6 +7,7 @@ import {
   addHeadingAnchors,
   assignHeadingIds,
   buildPage,
+  PageMeta,
   dropRedundantTitleHeading,
   pathToRoot,
   neutralizeMermaidColours,
@@ -67,7 +68,9 @@ import {
   buildNavTree,
   collectTags,
   formatDay,
+  readPin,
   recencyBuckets,
+  sortPinned,
 } from "./nav";
 import { SitePaths, folderSlug } from "./shell";
 import {
@@ -238,6 +241,17 @@ export interface SiteConfig {
   /** Theme name from themes.ts. Falls back to the default when unknown. */
   theme?: string;
   /**
+   * Which mode the site opens in: "light", "dark", or absent to follow the
+   * visitor's own system preference, which is what every site did before
+   * this setting existed and is still the default.
+   *
+   * Emitted as `data-theme` on `<html>` by `buildPage`, so it holds with
+   * scripting off as well as on, and a reader who works the switch still
+   * wins -- `THEME_BOOT` overwrites the attribute from `localStorage`
+   * before the first paint, and only a reader can put anything there.
+   */
+  startTheme?: "light" | "dark";
+  /**
    * A stylesheet of the author's own, as a vault path, appended to the
    * site's.
    *
@@ -277,7 +291,10 @@ export interface SiteConfig {
   /** Frontmatter key holding a note's own edit date. Defaults to `updated`. */
   updatedProperty?: string;
   /**
-   * Frontmatter key marking a note as one to start from. Defaults to `pinned`.
+   * Frontmatter key marking a note as one to start from, and optionally
+   * where it goes. Defaults to `pinned`. See `readPin` for what the value
+   * may say: `true` for a place in the list, a positive number for a place
+   * in the running order.
    *
    * Deliberately not Obsidian's bookmarks: those are reached through an
    * internal API, they hold folders and saved searches as well as notes, and
@@ -1089,7 +1106,8 @@ export async function buildSite(
   // The tree is the whole published vault, notes and the vault's own pages
   // together. Everything below it is notes alone -- see `htmlNavNotes`.
   const navTree = buildNavTree([...navNotes, ...htmlNavNotes]);
-  const pinned = navNotes.filter((note) => note.pinned);
+  // The author's running order, not the path sort `selectNotes` returns.
+  const pinned = sortPinned(navNotes.filter((note) => note.pinned));
   const recency = recencyBuckets(navNotes, config.now ?? new Date());
   const titles = new Map(rendered.map((page) => [page.url, page.title]));
   const today = config.now ?? new Date();
@@ -1126,6 +1144,7 @@ export async function buildSite(
     folder: page.nav.folder,
     updated: page.nav.updated,
     pinned: page.nav.pinned,
+    pinOrder: page.nav.pinOrder,
     tags: page.tags,
     excerpt: noteExcerpt(page.html),
     incoming: backlinks.get(page.url)?.length ?? 0,
@@ -1148,6 +1167,28 @@ export async function buildSite(
    * and these pages are not notes. The vault panel, the search and the tags
    * are the same everywhere, which is the point of them.
    */
+  /**
+   * A page's metadata, with the parts that are the *site's* filled in.
+   *
+   * `siteName` was already repeated at all five `buildPage` calls and got
+   * away with it, because leaving it out is a type error. `startTheme` is
+   * optional, so leaving it out is silent -- and the symptom would be one
+   * page of a site opening in a different mode from the other four, which
+   * is the kind of thing that ships. One place to add the next site-wide
+   * field, rather than five that have to agree.
+   */
+  const pageMeta = (
+    title: string,
+    url: string,
+    rest: Omit<PageMeta, "title" | "url" | "siteName" | "startTheme"> = {},
+  ): PageMeta => ({
+    title,
+    url,
+    siteName: config.siteName,
+    startTheme: config.startTheme,
+    ...rest,
+  });
+
   const sitePageShell = (
     crumbs?: Array<{ label: string; url?: string }>,
   ): NonNullable<Parameters<typeof buildPage>[0]["shell"]> => ({
@@ -1194,12 +1235,9 @@ export async function buildSite(
     files.push({
       path: page.url,
       content: buildPage({
-        meta: {
-          title: page.title,
-          url: page.url,
-          siteName: config.siteName,
+        meta: pageMeta(page.title, page.url, {
           properties: noteHeader(page, mentions.length, tagUrlByName),
-        },
+        }),
         // The homepage note is somebody's README, so it says nothing about
         // where the rest of the vault is. Below 56rem the panel is gone too,
         // which would leave a short README with no way onward at all.
@@ -1578,11 +1616,7 @@ export async function buildSite(
     files.push({
       path: "index.html",
       content: buildPage({
-        meta: {
-          title: config.siteName,
-          url: "index.html",
-          siteName: config.siteName,
-        },
+        meta: pageMeta(config.siteName, "index.html"),
         content: overviewContent(landing("index.html")),
         headings: [],
         shell: sitePageShell(),
@@ -1593,7 +1627,7 @@ export async function buildSite(
   files.push({
     path: paths.browse,
     content: buildPage({
-      meta: { title: "Browse", url: paths.browse, siteName: config.siteName },
+      meta: pageMeta("Browse", paths.browse),
       content: browseContent(landing(paths.browse), folderSlug),
       headings: [],
       shell: sitePageShell(),
@@ -1603,7 +1637,7 @@ export async function buildSite(
   files.push({
     path: paths.tags,
     content: buildPage({
-      meta: { title: "Tags", url: paths.tags, siteName: config.siteName },
+      meta: pageMeta("Tags", paths.tags),
       content: tagsIndexContent(landing(paths.tags)),
       headings: [],
       shell: sitePageShell(),
@@ -1617,11 +1651,7 @@ export async function buildSite(
     files.push({
       path: tag.url,
       content: buildPage({
-        meta: {
-          title: `#${tag.name}`,
-          url: tag.url,
-          siteName: config.siteName,
-        },
+        meta: pageMeta(`#${tag.name}`, tag.url),
         content: tagPageContent(tag, landing(tag.url)),
         headings: [],
         shell: sitePageShell([
@@ -1847,7 +1877,14 @@ function titleFor(app: App, file: TFile): string {
  * author wrote is a claim about the note; an mtime is a claim about the
  * filesystem.
  */
-function navNoteFor(
+/**
+ * A published note, as navigation sees it, read off its frontmatter.
+ *
+ * Exported for its tests: this is where the "start here" key is turned into
+ * a place in the list and a place in the running order, and that rule is
+ * worth holding somewhere a change has to walk past.
+ */
+export function navNoteFor(
   app: App,
   file: TFile,
   url: string,
@@ -1862,7 +1899,9 @@ function navNoteFor(
     title,
     folder: slash === -1 ? "" : url.slice(0, slash),
     updated: stampFor(frontmatter?.[config.updatedProperty ?? "updated"], file),
-    pinned: frontmatter?.[config.pinnedProperty ?? "pinned"] === true,
+    // Both halves of the key -- whether it is pinned and where it goes --
+    // come back from one place. See `readPin`.
+    ...readPin(frontmatter?.[config.pinnedProperty ?? "pinned"]),
   };
 }
 

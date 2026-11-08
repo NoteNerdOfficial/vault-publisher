@@ -36,6 +36,14 @@ export interface PageMeta {
   /** Site-wide name for the header and OG metadata. */
   siteName: string;
   /**
+   * Which mode the site opens in, or absent to follow the visitor's system.
+   *
+   * Site-wide rather than per page, and here beside `siteName` for the same
+   * reason: the attribute it becomes is on `<html>`, and there is one of
+   * those per page. See `startTheme` in `SiteConfig`.
+   */
+  startTheme?: "light" | "dark";
+  /**
    * Frontmatter worth showing above the note: status, dates, tags.
    *
    * A tag carries the page it belongs to rather than just its name, because
@@ -872,7 +880,7 @@ export function buildPage(options: {
       `</div>`;
 
   return `<!doctype html>
-<html lang="en"${source ? ` data-osp-source` : ""}>
+<html lang="en"${meta.startTheme ? ` data-theme="${meta.startTheme}"` : ""}${source ? ` data-osp-source` : ""}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">

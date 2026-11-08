@@ -206,6 +206,8 @@ export interface SettingsHost {
       updatedProperty?: string;
       pinnedProperty?: string;
       theme?: string;
+      /** "light" | "dark", or unset to follow the visitor's own system. */
+      startTheme?: "light" | "dark";
       publishHtmlFiles?: boolean;
       publishWholeFolders?: { folder: string; at?: string }[];
       excludeFolders?: string[];
@@ -1031,8 +1033,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       .setName("Start here property")
       .setDesc(
         "Frontmatter key that marks a note as a place to begin. Notes with it " +
-          "set to true lead the jump-to panel. Bookmarks are deliberately not " +
-          "used: they can name notes you are not publishing.",
+          "set to true head the vault panel, above the file tree, and the " +
+          "generated homepage. Set it to a number instead to say where one " +
+          "goes: 1 leads, then 2, and anything left on true follows in " +
+          "alphabetical order. Bookmarks are deliberately not used: they can " +
+          "name notes you are not publishing.",
       )
       .addText((text) =>
         text
@@ -1746,6 +1751,37 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           site.theme = value;
           describe(value);
           this.renderThemePreview(preview, value);
+          await this.host.saveSettings();
+        });
+      });
+
+    // Light or dark, as the site opens.
+    //
+    // Under Style because it is the second half of the same question: the
+    // theme picks the palette and this picks which of its two halves a
+    // visitor lands on. Both are about the built site rather than about the
+    // vault, which is what this whole panel is for.
+    //
+    // The default is to follow the visitor's system, and that is deliberate
+    // rather than an empty value nobody filled in: it is what every site
+    // built before this setting existed does, so an upgrade changes nothing.
+    // The two explicit choices are a real override -- the stylesheet guards
+    // its `prefers-color-scheme` block against `data-theme="light"`, so a
+    // site pinned to light stays light on a dark machine.
+    new Setting(root)
+      .setName("Opens in")
+      .setDesc(
+        "Which mode a first-time visitor sees. Following their system is " +
+          "the default. Either of the other two overrides it -- a reader " +
+          "can still switch, and their choice is remembered from then on.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("", "The visitor's system setting");
+        dropdown.addOption("light", "Light");
+        dropdown.addOption("dark", "Dark");
+        dropdown.setValue(site.startTheme ?? "");
+        dropdown.onChange(async (value) => {
+          site.startTheme = value === "light" || value === "dark" ? value : undefined;
           await this.host.saveSettings();
         });
       });

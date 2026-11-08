@@ -4,6 +4,7 @@ import {
   SiteConfig,
   dependencyTally,
   isScopeChosen,
+  navNoteFor,
   resolveHomeNote,
   selectNotes,
   urlForNote,
@@ -402,5 +403,39 @@ describe("dependencyTally", () => {
       config({ folder: "site" }),
     );
     expect(tally).toEqual({ folders: [], files: 0 });
+  });
+});
+
+describe("the start-here key, read off a note", () => {
+  const nav = (frontmatter: Record<string, unknown>, over: Partial<SiteConfig> = {}) => {
+    const app = stubApp([{ path: "notes/a.md", frontmatter }]);
+    const file = { path: "notes/a.md" } as TFile;
+    return navNoteFor(app, file, "notes/a.html", "A note", config(over));
+  };
+
+  it("marks a note the author said true to", () => {
+    const note = nav({ pinned: true });
+    expect(note.pinned).toBe(true);
+    expect(note.pinOrder).toBeUndefined();
+  });
+
+  it("carries the number through as the note's place", () => {
+    expect(nav({ pinned: 2 })).toMatchObject({ pinned: true, pinOrder: 2 });
+  });
+
+  it("leaves a note alone when the key is absent or off", () => {
+    expect(nav({}).pinned).toBe(false);
+    expect(nav({ pinned: false }).pinned).toBe(false);
+    expect(nav({ pinned: 0 }).pinned).toBe(false);
+  });
+
+  it("reads whichever key the author renamed it to", () => {
+    // The setting renames the key; it has never had anything to do with
+    // the order, and now the one key carries both facts.
+    expect(nav({ start: 3 }, { pinnedProperty: "start" })).toMatchObject({
+      pinned: true,
+      pinOrder: 3,
+    });
+    expect(nav({ pinned: 3 }, { pinnedProperty: "start" }).pinned).toBe(false);
   });
 });
