@@ -2,6 +2,16 @@
 
 Publishes an Obsidian vault as a static website, rendered by Obsidian itself.
 
+> [!TIP]
+> **See it running, and read the documentation:**
+> **<https://notenerdofficial.github.io/vault-publisher-guide/>**
+>
+> That site *is* an Obsidian vault published with this plugin, so reading the
+> documentation is also seeing the output. The Start here panel, the file
+> tree, the search field, the tag pages and the rail down the side of every
+> page are all live on it, and the notes behind it are a worked example whose
+> settings you can copy.
+
 ![A published note: the command bar and search across the top; on the left a
 Start here list of the author's pinned notes above the vault tree; the note in
 the middle; and a rail on the right carrying the outline, what links here and
