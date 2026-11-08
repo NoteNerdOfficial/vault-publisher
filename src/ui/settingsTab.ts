@@ -284,6 +284,24 @@ const FRAMEWORK_LABEL: Record<string, string> = {
 export class VaultPublisherSettingsTab extends PluginSettingTab {
   private host: SettingsHost;
   private statusEl: HTMLElement | null = null;
+  /**
+   * Where the action block draws, so it can be redrawn on its own.
+   *
+   * The block reports what is still missing before a preview or a publish
+   * can run, and it used to be computed once per `display()` and then left.
+   * Everything it reads on is edited *below* it: the site name, the token,
+   * the owner and the repository. So pasting a verified token left a Publish
+   * button that stayed dead, with a row underneath still naming the token as
+   * the reason, until the panel happened to be closed and reopened.
+   *
+   * Redrawing the whole panel is what the scope dropdown does, and it can
+   * afford to: a dropdown is not being typed into. A text field cannot, as
+   * `display()` empties the container and the caret goes with it on the
+   * first keystroke. Hence a block that can be rebuilt by itself.
+   */
+  private actionsEl: HTMLElement | null = null;
+  /** What the block last drew from, so an unrelated keystroke redraws nothing. */
+  private actionsKey: string | null = null;
   private progressEl: HTMLElement | null = null;
   private progressBar: HTMLElement | null = null;
   /**
@@ -457,6 +475,45 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * `reach` is what the step unlocks, and is how the list can say that
    * stopping halfway is a sensible place to stop.
    */
+  /**
+   * Redraws the action block, and only when what it says would change.
+   *
+   * Called from every control the block reads on. The key is the four setup
+   * steps plus the two blocked reasons, so typing the second character of a
+   * repository name rebuilds nothing, while typing the first -- which is
+   * what flips "name the repository" to done -- rebuilds once.
+   *
+   * That guard is not only about cost. A rebuild mid-run would replace the
+   * progress readout and put back a button the run had disabled, and keying
+   * on the decision rather than on the keystroke means an edit that changes
+   * no decision cannot do that.
+   */
+  /** Everything the action block says, as one comparable value. */
+  private actionsStateKey(): string {
+    return JSON.stringify([
+      this.setupSteps().map((step) => step.done),
+      this.publishBlocked(),
+      this.previewBlocked(),
+    ]);
+  }
+
+  private refreshActions(): void {
+    const current = this.actionsEl;
+    const container = current?.parentElement;
+    if (!current || !container) return;
+    if (this.actionsStateKey() === this.actionsKey) return;
+
+    // Drawn at the end of the container, then moved into the old block's
+    // place and the old one dropped. A wrapper div to redraw inside would
+    // be simpler and is not allowed: the panel's rule is that nothing puts
+    // a bare div in the container, because it would sit at the outer edge
+    // of a settings row rather than inset with the text in one.
+    this.renderActions(container);
+    const fresh = this.actionsEl;
+    if (fresh && fresh !== current) container.insertBefore(fresh, current);
+    current.remove();
+  }
+
   private setupSteps(): Array<{ done: boolean; text: string; reach: "preview" | "publish" }> {
     const { github, site } = this.host.settings;
     return [
@@ -496,6 +553,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const ready = steps.every((step) => step.done);
 
     const root = this.section(container, ready ? "Preview and publish" : "Get started", true);
+    // The section element, so `refreshActions` can swap this block alone,
+    // and what it was drawn from, so an edit that changes nothing it says
+    // does not redraw it.
+    this.actionsEl = root.parentElement;
+    this.actionsKey = this.actionsStateKey();
 
     if (!ready) this.renderChecklist(root, steps);
 
@@ -786,6 +848,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             if (value.includes("•")) return;
             this.host.setToken(value.trim());
             await this.host.saveSettings();
+            this.refreshActions();
           });
       });
 
@@ -820,6 +883,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
               "error",
             );
           }
+          // Verifying can change `tokenState`, which is the one thing the
+          // action block reports that no field above it edits.
+          this.refreshActions();
         }),
       );
 
@@ -836,6 +902,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             github.owner = value.trim();
             await this.host.saveSettings();
+            this.refreshActions();
           }),
       )
       .addText((text) =>
@@ -845,6 +912,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             github.repo = value.trim();
             await this.host.saveSettings();
+            this.refreshActions();
           }),
       );
 
@@ -909,6 +977,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             site.siteName = value;
             await this.host.saveSettings();
+            this.refreshActions();
           }),
       );
 

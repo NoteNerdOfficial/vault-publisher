@@ -528,3 +528,93 @@ describe("an answer that did not come from the API", () => {
     await expect(client().getRef("gh-pages")).resolves.toBeNull();
   });
 });
+
+/**
+ * The last call of a publish, and the one that used to report a finished
+ * publish as a failed one.
+ *
+ * Everything is committed by the time `enablePages` runs, so an exception
+ * here is a lie about the whole operation, and the remedy it sends a reader
+ * to -- publish again -- is the thing that already worked. Observed live:
+ * enabling Pages on a branch created seconds earlier in the same publish
+ * answered HTTP 500 on a repository that was serving from that branch a
+ * moment later.
+ */
+describe("turning Pages on", () => {
+  const PAGES = {
+    url: "https://api.github.com/repos/o/r/pages",
+    status: "built",
+    source: { branch: "gh-pages", path: "/" },
+  };
+
+  it("takes the POST at its word when it succeeds", async () => {
+    const { calls, restore } = fakeHttp(() => ({ status: 201, json: PAGES }));
+    try {
+      await expect(client().enablePages("gh-pages")).resolves.toMatchObject({
+        status: "built",
+      });
+      // One call: nothing to double-check when nothing went wrong.
+      expect(calls).toHaveLength(1);
+      expect(calls[0].method).toBe("POST");
+    } finally {
+      restore();
+    }
+  });
+
+  it("believes the state over a 500 that did the work anyway", async () => {
+    const { calls, restore } = fakeHttp((call) =>
+      call.method === "POST"
+        ? { status: 500, json: { message: "Internal Server Error" } }
+        : { status: 200, json: PAGES },
+    );
+    try {
+      await expect(client().enablePages("gh-pages")).resolves.toMatchObject({
+        status: "built",
+      });
+      expect(calls.map((c) => c.method)).toEqual(["POST", "GET"]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("still treats 409 as already on", async () => {
+    const { restore } = fakeHttp((call) =>
+      call.method === "POST" ? { status: 409, json: {} } : { status: 200, json: PAGES },
+    );
+    try {
+      await expect(client().enablePages("gh-pages")).resolves.toMatchObject({
+        status: "built",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("raises the original error when Pages really is not on", async () => {
+    // The read fails too, so there is nothing to contradict the POST. The
+    // error raised is the POST's, not the read's: the first one is what
+    // went wrong.
+    const { restore } = fakeHttp(() => ({ status: 403, json: { message: "Forbidden" } }));
+    try {
+      await expect(client().enablePages("gh-pages")).rejects.toMatchObject({ status: 403 });
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not accept Pages that is serving some other branch", async () => {
+    // A repository already publishing from `main` is not this publish
+    // having succeeded, and saying so would hide a branch misconfiguration
+    // behind a green result.
+    const { restore } = fakeHttp((call) =>
+      call.method === "POST"
+        ? { status: 500, json: {} }
+        : { status: 200, json: { ...PAGES, source: { branch: "main", path: "/" } } },
+    );
+    try {
+      await expect(client().enablePages("gh-pages")).rejects.toMatchObject({ status: 500 });
+    } finally {
+      restore();
+    }
+  });
+});

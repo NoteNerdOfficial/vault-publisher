@@ -1174,3 +1174,119 @@ describe("what sits under What to publish", () => {
     }
   });
 });
+
+/**
+ * The action block reads on settings that are edited below it, so it has to
+ * notice when they change.
+ *
+ * Reported from a real vault: a token pasted and verified left the Publish
+ * button dead, with the row under it still naming the missing token as the
+ * reason, until the settings tab was closed and reopened. The block was
+ * computed once per `display()` and the token field only saved.
+ *
+ * The scope dropdown already called `display()` for this reason. A text
+ * field cannot: `display()` empties the container, and the caret would go
+ * with it on the first keystroke. So the block is swapped on its own.
+ */
+describe("keeping the actions in step with the setup below them", () => {
+  /** A host whose `setToken` writes through, the way the plugin's does. */
+  function live(over: Parameters<typeof host>[0] = {}) {
+    const h = host(over);
+    h.setToken = (value: string) => {
+      h.settings.github.token = value;
+    };
+    return h;
+  }
+
+  function type(root: HTMLElement, rowName: string, value: string, which = 0): void {
+    const input = Array.from(
+      row(root, rowName)?.querySelectorAll("input") ?? [],
+    )[which] as HTMLInputElement;
+    input.value = value;
+    input.dispatchEvent(new Event("input"));
+  }
+
+  it("wakes the publish button when a token is pasted", async () => {
+    const tab = new VaultPublisherSettingsTab(
+      app(),
+      live({ github: { token: "", owner: "acme", repo: "handbook" } }),
+    );
+    tab.display();
+    const root = tab.containerEl;
+
+    expect(button(root, "Publish to GitHub")?.disabled).toBe(true);
+
+    type(root, "Personal access token", "github_pat_example");
+    await settle();
+
+    expect(button(root, "Publish to GitHub")?.disabled).toBe(false);
+    expect(desc(root, "Publish to GitHub")).toContain("Renders every selected note");
+  });
+
+  it("wakes it when the repository is named", async () => {
+    const tab = new VaultPublisherSettingsTab(
+      app(),
+      live({ github: { token: "t", owner: "", repo: "" } }),
+    );
+    tab.display();
+    const root = tab.containerEl;
+
+    expect(button(root, "Publish to GitHub")?.disabled).toBe(true);
+
+    type(root, "Repository", "acme", 0);
+    type(root, "Repository", "handbook", 1);
+    await settle();
+
+    expect(button(root, "Publish to GitHub")?.disabled).toBe(false);
+  });
+
+  it("keeps the block where it was, rather than moving it to the end", async () => {
+    // Redrawing by appending would put the actions below every other
+    // section, which is the one thing the block's own comment says must
+    // never happen: it never moves, so nobody has to relearn where it is.
+    const tab = new VaultPublisherSettingsTab(
+      app(),
+      live({ github: { token: "", owner: "acme", repo: "handbook" } }),
+    );
+    tab.display();
+
+    type(tab.containerEl, "Personal access token", "github_pat_example");
+    await settle();
+
+    expect(sections(tab.containerEl)[0]).toBe("Preview and publish");
+    // And exactly one of it, so the old block was removed rather than left.
+    expect(sections(tab.containerEl).filter((n) => n === "Preview and publish")).toHaveLength(1);
+  });
+
+  it("redraws nothing when a keystroke changes no decision", async () => {
+    const tab = new VaultPublisherSettingsTab(
+      app(),
+      live({ github: { token: "t", owner: "acme", repo: "handbook" } }),
+    );
+    tab.display();
+    const root = tab.containerEl;
+    const before = row(root, "Publish to GitHub");
+
+    // Already publishable; editing the owner leaves it publishable. A
+    // rebuild here would be wasted, and mid-publish it would replace the
+    // progress readout and re-enable a button the run had disabled.
+    type(root, "Repository", "acme-team", 0);
+    await settle();
+
+    expect(row(root, "Publish to GitHub")).toBe(before);
+  });
+
+  it("still leaves the preview alone, which never needed GitHub", async () => {
+    const tab = new VaultPublisherSettingsTab(
+      app(),
+      live({ github: { token: "", owner: "", repo: "" } }),
+    );
+    tab.display();
+    const root = tab.containerEl;
+
+    expect(button(root, "Build a preview")?.disabled).toBe(false);
+    type(root, "Personal access token", "github_pat_example");
+    await settle();
+    expect(button(root, "Build a preview")?.disabled).toBe(false);
+  });
+});

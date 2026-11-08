@@ -224,8 +224,31 @@ export class GitHubClient {
         { source: { branch, path } },
       );
     } catch (e) {
-      // 409 means Pages is already on, which is success for our purposes.
-      if (e instanceof GitHubError && e.status === 409) return this.getPages();
+      /*
+       * Ask what is actually true before reporting a failure.
+       *
+       * 409 is the documented "already on", and was the only case handled
+       * here. But this endpoint also answers 500 while having done the work,
+       * which is not a hypothetical: enabling Pages on a branch created
+       * seconds earlier in the same publish returned 500 on a repository
+       * that was serving from that branch a moment later.
+       *
+       * This is the last call of a publish. Everything is committed by the
+       * time it runs, so throwing here reports a publish that succeeded as
+       * one that failed, and the remedy a reader reaches for -- publish
+       * again -- is the thing that already worked. So: read the state back,
+       * and believe that over the status code. If Pages is live on the
+       * branch we asked for, the step is done however it answered.
+       */
+      if (e instanceof GitHubError) {
+        try {
+          const live = await this.getPages();
+          if (live.source?.branch === branch) return live;
+        } catch {
+          // Pages genuinely is not set up; the original error is the honest
+          // one to raise, not whatever the second call said about it.
+        }
+      }
       throw e;
     }
   }
@@ -550,6 +573,15 @@ export interface PagesInfo {
   status: string | null;
   html_url?: string;
   cname?: string | null;
+  /**
+   * What Pages is actually serving from.
+   *
+   * Read by `enablePages` to decide whether a failed POST really failed.
+   * Optional because only the read answers carry it, and because a stub in
+   * a test should not have to invent one to stand in for a response whose
+   * branch is beside the point.
+   */
+  source?: { branch: string; path: string };
 }
 
 interface TreeEntry {
