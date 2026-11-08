@@ -2,13 +2,14 @@
 
 Publishes an Obsidian vault as a static website, rendered by Obsidian itself.
 
-![A published note: the command bar and search across the top, the vault tree
-on the left, the note in the middle, and a rail on the right carrying the
-outline, what links here and what the note is near.](media/site-note.png)
+![A published note: the command bar and search across the top; on the left a
+Start here list of the author's pinned notes above the vault tree; the note in
+the middle; and a rail on the right carrying the outline, what links here and
+what the note is near.](media/site-note.png)
 
 ![The front page the build writes when no note claims it, in dark: the note
-count and tag count, a Start here list from pinned notes, and Most linked
-ordered by how much of the vault points at
+count and tag count, the same Start here list in the same order as the panel
+beside it, and Most linked ordered by how much of the vault points at
 each.](media/site-home-dark.png)
 
 Every page is static HTML with one stylesheet and one script. Light and dark
@@ -56,6 +57,43 @@ not input, dot-folders Obsidian hides are skipped, installed dependencies
 `README.md` is not a note, and `privacy.ts` scans each rendered page for
 content a Dataview query pulled in from a note that is *not* being published —
 the failure mode that makes a publisher dangerous rather than merely buggy.
+
+## Where a reader starts
+
+A vault's front door is not its newest note and not its alphabetically first
+one. It is whatever the author would hand someone who asked where to begin,
+and only the author knows that — so it is one frontmatter key:
+
+```yaml
+---
+pinned: true
+---
+```
+
+Those notes become **Start here**: a short list held above the file tree in
+the left panel, and a section on the generated front page. The key is
+whatever **Appearance → Start here property** names, `pinned` by default.
+
+Set it to a number instead of `true` to say where a note goes:
+
+```yaml
+pinned: 1     # leads
+pinned: 2     # second
+pinned: 1.5   # between those two, without renumbering either
+```
+
+Numbered notes lead in their numbers, then everything left on `true` follows
+in title order. `pinned: 0` and anything that is not a number or `true` mean
+not pinned. One sort runs for both places the list appears, so the panel and
+the front page cannot disagree about the order — which they did when the
+order was whatever the file-path sort happened to return, and a note called
+"Begin here" sitting in `archive/` came last.
+
+The list is capped at five on screen, not five in total: pin as many as you
+like and the rest are behind a **Show more** that expands in place. It is a
+`<details>`, so it opens with JavaScript off, and the block is bounded in CSS
+— thirty pins scroll inside their own section rather than pushing the tree
+off the panel.
 
 ## Publishing a prototype as well as notes
 
@@ -159,6 +197,15 @@ and a path inside the plugin's own output folders is refused before it is read
 The file's own vault path never reaches the output. `assets/site.css` is
 published, so a banner naming the source would hand every reader of the site a
 piece of the vault's folder structure.
+
+Which of the two a visitor lands in is **Appearance → Opens in**. The default
+is their own system setting, which is what every site here has always done.
+Either explicit choice is a real override rather than a preference: it is
+written as `data-theme` on `<html>` at build time, so it holds before the
+first paint and with scripting off, and the stylesheet guards its
+`prefers-color-scheme` block against it so a site pinned to light stays light
+on a dark machine. A reader who works the switch in the bar still wins, on
+that page and every page after it.
 
 ## Locking a site behind a password
 

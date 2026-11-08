@@ -27,8 +27,12 @@ that tag's section on the site's front page, which lists every note carrying
 it.
 
 `pinned` does not appear in the header at all. It puts the note under **Start
-here** in the jump-to panel, ahead of what changed recently, and it is read by
-whatever key the **Start here property** setting names.
+here**: a short list above the file tree in the left panel, and a section on
+the generated front page. It is read by whatever key the **Start here
+property** setting names.
+
+Set it to a number rather than `true` to say where the note goes — `pinned: 1`
+leads, then `pinned: 2`, and anything left on `true` follows in title order.
 
 ## What else the header shows
 
