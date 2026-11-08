@@ -189,3 +189,102 @@ describe("the theme layer", () => {
     expect(both).toEqual([]);
   });
 });
+
+/*
+ * Obsidian's own diagram renderer, which colours itself from custom
+ * properties instead of from literal values.
+ *
+ * It emits `fill="var(--pele-surface,#f3f3f3)"` and leaves the names to the
+ * page. The harvested app stylesheet maps those onto `--mermaid-*` and then
+ * onto `--text-normal` and friends, none of which exists once the page is
+ * published -- so unanswered, every chain falls back to the light default
+ * baked into the attribute. A dark site then got light boxes with the
+ * blanket text rule painting near-white labels on them, which is a diagram
+ * nobody can read rather than a diagram with the wrong palette.
+ *
+ * Both halves of the answer are held here because both are easy to undo by
+ * accident: the names below look unused to anything that greps this repo
+ * for them, and the exclusion looks like a selector that could be
+ * simplified.
+ */
+describe("diagram variables", () => {
+  const css = siteCss(DEFAULT_THEME);
+
+  const COLOURS = [
+    "background",
+    "text-color",
+    "muted-color",
+    "line-color",
+    "surface",
+    "surface-alt",
+    "border-color",
+    "accent",
+  ];
+
+  it("answers both namespaces the renderer might read", () => {
+    for (const name of COLOURS) {
+      expect(css, `--mermaid-${name}`).toContain(`--mermaid-${name}: var(--osp-`);
+    }
+    for (const name of ["bg", "fg", "muted", "line", "surface", "surface-alt", "border", "accent"]) {
+      expect(css, `--pele-${name}`).toContain(`--pele-${name}: var(--osp-`);
+    }
+  });
+
+  /*
+   * On `body`, not on `:root`. The harvested stylesheet declares the same
+   * names on `body`, and a declaration on the element beats one inherited
+   * from its parent -- so at `:root` these would be shadowed and the fix
+   * would quietly do nothing. This is the whole reason it works.
+   */
+  it("declares them where they beat the harvested stylesheet", () => {
+    // Comments first: they hold braces and prose about these very names,
+    // and a selector read out of the raw text picks up whichever sentence
+    // happens to precede the rule.
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    /** The selector of the rule a declaration sits in. */
+    const selectorOf = (declaration: string): string => {
+      const at = bare.indexOf(declaration);
+      expect(at, declaration).toBeGreaterThan(-1);
+      const open = bare.lastIndexOf("{", at);
+      const from = Math.max(bare.lastIndexOf("}", open), bare.lastIndexOf(";", open));
+      return bare.slice(from + 1, open).trim();
+    };
+
+    expect(selectorOf("--mermaid-text-color:")).toBe("body");
+    expect(selectorOf("--pele-fg:")).toBe("body");
+  });
+
+  /*
+   * Every value resolves through `--osp-*`, which is already redeclared for
+   * dark -- that indirection is what makes a diagram follow the light/dark
+   * switch without a second copy of this block under a media query.
+   */
+  it("resolves every value through a theme token", () => {
+    for (const hit of css.matchAll(/^\s*--(?:mermaid|pele)-[a-z-]+:\s*([^;]+);/gm)) {
+      expect(hit[1].trim(), hit[0].trim()).toMatch(/^var\(--osp-[a-z-]+\)$/);
+    }
+  });
+
+  /*
+   * And the blanket text rule stays off this renderer, which uses the fill
+   * of a label to mean something: a pie paints its slice labels in the
+   * background colour so they read against a saturated wedge.
+   */
+  it("keeps the blanket text rule away from it", () => {
+    const rule = css.slice(css.indexOf(".markdown-rendered .mermaid svg:not(.pele) text"));
+    expect(css).toContain(".markdown-rendered .mermaid svg:not(.pele) text");
+    expect(rule.slice(0, rule.indexOf("}"))).not.toMatch(/\.mermaid svg (?!:not)/);
+  });
+
+  /*
+   * The categorical series colours are deliberately not answered: they are
+   * a diagram's data rather than its furniture, and the renderer's own
+   * defaults read on either background. If a palette is ever added, it
+   * belongs in themes.ts per theme rather than mixed from one accent here.
+   */
+  it("leaves the series palette to the renderer", () => {
+    expect(css).not.toContain("--mermaid-color-1");
+    expect(css).not.toContain("--pele-series-1");
+  });
+});
