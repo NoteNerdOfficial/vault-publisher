@@ -1839,7 +1839,12 @@ export default class VaultPublisherPlugin extends Plugin {
       // two tokens beside it.
       const password = this.settings.publishPassword;
       if (password) {
-        const locked = await lockSite(result.files, password);
+        const locked = await lockSite(
+          result.files,
+          password,
+          undefined,
+          this.settings.site.startTheme,
+        );
         result.files.length = 0;
         result.files.push(...locked.files);
         say(

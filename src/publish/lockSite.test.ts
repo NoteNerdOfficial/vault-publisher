@@ -249,3 +249,51 @@ describe("what gets locked", () => {
     expect(staysClear("assets/diagram.png")).toBe(false);
   });
 });
+
+/**
+ * The screen in front of the site opens the way the site does.
+ *
+ * A site pinned to dark used to unlock from a prompt that followed the
+ * visitor's system, so a reader on a light machine got a light page, typed
+ * a password, and was dropped into a dark one. A flash of the wrong page at
+ * the one moment they are looking straight at it.
+ */
+describe("the lock screen's opening mode", () => {
+  const shellFor = async (startTheme?: "light" | "dark") => {
+    const { files } = await lockSite(built(), "open sesame", FAST, startTheme);
+    return String(files.find((file) => file.path === "notes/plan.html")?.content);
+  };
+
+  it("follows the visitor's system when the author chose nothing", async () => {
+    const shell = await shellFor();
+    const tag = shell.slice(shell.indexOf("<html"), shell.indexOf(">", shell.indexOf("<html")) + 1);
+    expect(tag).toBe('<html lang="en">');
+    // The media query is still what answers, so the palette is theirs.
+    expect(shell).toContain("@media (prefers-color-scheme: dark)");
+  });
+
+  it("pins the prompt dark when the site opens dark", async () => {
+    const shell = await shellFor("dark");
+    expect(shell).toContain('<html lang="en" data-theme="dark">');
+    expect(shell).toContain('[data-theme="dark"] { color-scheme: dark;');
+  });
+
+  it("pins it light, which is the half that needs the guard", async () => {
+    // A light-pinned site on a dark machine would otherwise still open dark,
+    // because the media query would answer first.
+    const shell = await shellFor("light");
+    expect(shell).toContain('<html lang="en" data-theme="light">');
+    expect(shell).toContain('@media (prefers-color-scheme: dark) { :root:not([data-theme="light"])');
+  });
+
+  it("gives the two modes the same palette, from one source", async () => {
+    // Emitted twice, so they can drift. They are built from one string.
+    const shell = await shellFor("dark");
+    const media = shell.slice(shell.indexOf(':root:not([data-theme="light"])'));
+    const pinned = shell.slice(shell.indexOf('[data-theme="dark"] { color-scheme'));
+    const tokens = (text: string) =>
+      (text.slice(0, text.indexOf("}")).match(/--[a-z-]+: #[0-9a-f]+/g) ?? []).join(" ");
+    expect(tokens(media)).not.toBe("");
+    expect(tokens(media)).toBe(tokens(pinned));
+  });
+});

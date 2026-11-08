@@ -113,10 +113,29 @@ export function isPage(path: string): boolean {
  * It is inlined into every locked page, so it is kept short on purpose: a
  * three-hundred-note site pays for this stylesheet three hundred times.
  */
-export function lockShell(payload: LockedPayload & { root: string }): string {
+/**
+ * The dark half of the lock screen's palette, emitted twice on purpose.
+ *
+ * Once under a media query for a reader whose system is dark, and once
+ * under an explicit attribute so a site that chose its opening mode can
+ * pin it. `themes.ts` does the same thing for the site itself and for the
+ * same reason; this screen cannot share that stylesheet, because the site's
+ * stylesheet is encrypted along with everything else.
+ *
+ * The media query is guarded against `data-theme="light"`, or a site the
+ * author pinned to light would still open dark on a dark machine.
+ */
+const LOCK_DARK =
+  `--bg: #0f1113; --fg: #e9ecef; --fg-2: #8b949e; --line: #2a2f35; ` +
+  `--field: #16191d; --ink: #e9ecef; --bad: #ff6b5e;`;
+
+export function lockShell(
+  payload: LockedPayload & { root: string; startTheme?: "light" | "dark" },
+): string {
   const json = JSON.stringify(payload).replace(/</g, "\\u003c");
+  const theme = payload.startTheme ? ` data-theme="${payload.startTheme}"` : "";
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${theme}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -126,9 +145,9 @@ export function lockShell(payload: LockedPayload & { root: string }): string {
 :root { color-scheme: light dark;
   --bg: #fbfbfa; --fg: #14171a; --fg-2: #646b74; --line: #dcdfe3;
   --field: #fff; --ink: #15181c; --bad: #b3261e; }
-@media (prefers-color-scheme: dark) { :root {
-  --bg: #0f1113; --fg: #e9ecef; --fg-2: #8b949e; --line: #2a2f35;
-  --field: #16191d; --ink: #e9ecef; --bad: #ff6b5e; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { ${LOCK_DARK} } }
+:root[data-theme="dark"] { color-scheme: dark; ${LOCK_DARK} }
+:root[data-theme="light"] { color-scheme: light; }
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; min-height: 100dvh; display: grid;
   place-items: center; padding: 28px; background: var(--bg); color: var(--fg);
@@ -211,6 +230,14 @@ export async function lockSite(
   files: PublishFile[],
   password: string,
   iterations: number = LOCK_ITERATIONS,
+  /**
+   * The mode the site opens in, so the screen in front of it opens the same
+   * way. Without this a site pinned to dark unlocks from a light prompt,
+   * which is a flash of the wrong page at the one moment a reader is
+   * looking straight at it. Absent means follow the visitor's system, which
+   * is both the default of the setting and what this screen did before it.
+   */
+  startTheme?: "light" | "dark",
 ): Promise<LockResult> {
   const salt = newSalt();
   const key = await deriveKey(password, salt, iterations);
@@ -247,7 +274,7 @@ export async function lockSite(
       const root = pathToRoot(file.path);
       out.push({
         path: file.path,
-        content: lockShell({ ...payload, root }),
+        content: lockShell({ ...payload, root, startTheme }),
       });
       pages++;
       continue;
