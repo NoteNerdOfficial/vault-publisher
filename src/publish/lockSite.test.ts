@@ -68,11 +68,18 @@ describe("lockSite", () => {
     expect(cipher).not.toContain("Q3 Plan");
   });
 
-  it("leaves a shell that explains itself, and says nothing about the site", async () => {
+  it("tells the reader what to do, and says nothing about the site", async () => {
     const { by } = await lockFixture();
     const shell = String(by.get("notes/plan.html")?.content);
 
-    expect(shell).toContain("This page is encrypted.");
+    expect(shell).toContain("Password needed");
+    // The one thing a reader who is stuck can act on.
+    expect(shell).toContain("Ask whoever sent you the link");
+    // Words nobody should have to look up. The first draft of this screen
+    // explained the mechanism and used all three.
+    for (const jargon of ["ciphertext", "decrypt", "AES", "PBKDF2"]) {
+      expect(shell.toLowerCase()).not.toContain(jargon.toLowerCase());
+    }
     expect(shell).toContain("noindex");
     expect(shell).toContain("<title>Protected</title>");
     // Not the site's own name or the page's: both are the author's wording.

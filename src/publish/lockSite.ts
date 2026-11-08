@@ -68,14 +68,23 @@ export function isPage(path: string): boolean {
 /**
  * The shell a locked page is published as.
  *
- * It still says nothing about the site. No name, no description, a generic
- * title and `noindex`, because the author's own wording may be the thing
- * being kept quiet. What changed is that it now says something about
- * *itself*, which costs nothing and is the one thing a reader of this page
- * has no way to find out: the file they downloaded is ciphertext, the
- * password turns it back into a page on their own device, and nothing is
- * sent anywhere when they use it. A password box with no explanation is
- * indistinguishable from a login, and a login is exactly what this is not.
+ * It says nothing about the site. No name, no description, a generic title
+ * and `noindex`, because the author's own wording may be the thing being
+ * kept quiet.
+ *
+ * It says almost nothing about itself either, which is a decision rather
+ * than an omission. A draft of this screen explained that the page is
+ * ciphertext, that the password never leaves the device and that nothing is
+ * sent anywhere: all true, all unusual, and all of it jargon to most of the
+ * people who will ever see this page. Somebody who has been sent a link
+ * wants in. So the screen now names the one thing they can act on -- the
+ * person who sent the link has the password -- and gets out of the way.
+ *
+ * The cost is real and worth stating, in case it is ever revisited: with
+ * the explanation gone this reads like a login, and it is not one. There is
+ * no account, nothing is transmitted, and the decryption happens here. If
+ * that ever needs saying, it belongs in a disclosure under the field rather
+ * than in front of a reader who only wants to read the page.
  *
  * Three decisions, each replacing something that was wrong rather than
  * merely plain.
@@ -126,7 +135,7 @@ body { margin: 0; min-height: 100vh; min-height: 100dvh; display: grid;
   caret-color: var(--ink);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
 ::selection { background: color-mix(in srgb, var(--ink) 18%, transparent); }
-main { width: 100%; max-width: 25rem; }
+main { width: 100%; max-width: 22rem; }
 .mark { color: var(--fg-2); margin-bottom: 18px; }
 h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.016em; }
 .lead { margin: 0 0 20px; color: var(--fg-2); font-size: 14px; }
@@ -161,31 +170,21 @@ form:has(button:disabled) input { border-color: var(--ink); }
   color: var(--bad); font-size: 13px; }
 .err::before { content: ""; flex: none; width: 3px; align-self: stretch;
   border-radius: 2px; background: var(--bad); }
-.facts { margin: 22px 0 0; padding: 16px 0 0; border-top: 1px solid var(--line);
-  list-style: none; display: grid; gap: 7px; }
-.facts li { display: flex; gap: 9px; color: var(--fg-2); font-size: 13px; line-height: 1.5; }
-.facts li::before { content: ""; flex: none; width: 4px; height: 4px; margin-top: 7px;
-  border-radius: 50%; background: var(--fg-2); opacity: .6; }
 noscript { display: block; margin-top: 14px; color: var(--fg-2); font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
 <div class="mark"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg></div>
-<h1>This page is encrypted.</h1>
-<p class="lead">Not hidden behind a login. The file your browser downloaded is ciphertext, and the password turns it back into a page here, on this device.</p>
+<h1>Password needed</h1>
+<p class="lead">This page is locked. Ask whoever sent you the link if you don't have the password.</p>
 <form id="osp-unlock-form">
 <input id="osp-unlock-password" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" required autofocus>
 <button id="osp-unlock-button" type="submit" aria-label="Unlock"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13"/><path d="m12 6 6 6-6 6"/></svg></button>
 <span class="track" aria-hidden="true"><i></i></span>
 </form>
-<p class="err" id="osp-unlock-error" role="alert" hidden><span>That password did not work. Check it and try again.</span></p>
-<ul class="facts">
-<li>Nothing is sent anywhere when you unlock it.</li>
-<li>There is no account, and no record of you reading it.</li>
-<li>Whoever sent you the link has the password.</li>
-</ul>
-<noscript>This page is encrypted, so reading it needs JavaScript.</noscript>
+<p class="err" id="osp-unlock-error" role="alert" hidden><span>That's not the right password. Try again.</span></p>
+<noscript>This page needs JavaScript to unlock.</noscript>
 </main>
 <script id="osp-locked" type="application/json">${json}</script>
 <script src="${payload.root}${UNLOCK_SCRIPT_PATH}"></script>
