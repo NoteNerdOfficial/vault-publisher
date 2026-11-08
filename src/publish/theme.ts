@@ -2061,12 +2061,18 @@ body {
 /* The outline's anchors point at headings that are not on screen. */
 :root[data-osp-view="markdown"] .osp-rail-outline { display: none; }
 
+/* No measure of its own: this row is inside the article, which is already
+   holding the column. Setting it here a second time was how the rule under
+   a note's title came to end short of the callout below it -- the measure
+   used to be in ch, and this row is set in the UI font two steps down from
+   the body, so the same token resolved narrower here than it did one
+   element up. The token is in rem now and the double constraint would be
+   harmless, but it is still a width maintained in two places. */
 .osp-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 1.25rem;
-  max-width: var(--osp-measure);
   margin: 0 0 1.5rem;
   padding: 0 0 1.25rem;
   border-bottom: var(--osp-rule) solid var(--osp-border);

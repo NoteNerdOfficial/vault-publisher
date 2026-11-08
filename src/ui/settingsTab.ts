@@ -1934,7 +1934,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         "  --osp-link: #b4531f;",
         "  --osp-accent: #b4531f;",
         '  --osp-font-body: "Iowan Old Style", Georgia, serif;',
-        "  --osp-measure: 72ch;",
+        "  --osp-measure: 45rem;",
         "}",
       ].join("\n"),
     );

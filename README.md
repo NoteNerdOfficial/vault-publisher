@@ -199,7 +199,7 @@ every build, so redeclaring a token is the whole of it:
 :root {
   --osp-link: #a8431a;
   --osp-font-body: "Iowan Old Style", Georgia, serif;
-  --osp-measure: 64ch;
+  --osp-measure: 40rem;
 }
 ```
 

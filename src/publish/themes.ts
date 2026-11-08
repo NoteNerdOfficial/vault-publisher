@@ -21,6 +21,23 @@
  * scale, rhythm, corner radius and rule weight, because that is what makes a
  * design feel chosen rather than tinted.
  *
+ * **`--osp-measure` is a `rem`, never a `ch`.** It reads like a measure in
+ * characters and it was one, but `ch` is resolved against the font of the
+ * element that uses it, and the measure is applied to a good deal more than
+ * the article: the stats line above a note on a narrow screen, the
+ * mentions, the source pane, the generated lists, and until recently the
+ * properties row. Several of those are set in the UI font, at 0.8125rem or
+ * 0.6875rem, so one token produced three different column widths. The rule
+ * under a note's title ended 133px short of the callout below it, and the
+ * stats line 110px short, both of them written against the same number. A
+ * `rem` is resolved against the root, so every consumer lands on the same
+ * edge whatever type it is set in. The values below are each theme's old
+ * `ch` width resolved in its own body font and rounded to the nearest
+ * quarter rem, so no theme's column moved by more than about a pixel and a
+ * half. They are fixed widths now rather than widths that track the
+ * reader's font: that is the trade, and it is the right way round, because
+ * a token applied in eight places has to mean one width.
+ *
  * **Every colour clears 4.5:1 against the two surfaces it can land on.** Text
  * sits on `--osp-bg` in the article and on `--osp-surface` inside a callout,
  * a table head or a code block, so a palette that only passes against the
@@ -56,7 +73,7 @@ export const THEMES: Theme[] = [
       "--osp-font-body": SANS,
       "--osp-font-ui": SANS,
       "--osp-font-mono": MONO,
-      "--osp-measure": "68ch",
+      "--osp-measure": "42.75rem",
       "--osp-base-size": "1rem",
       "--osp-line-height": "1.7",
       "--osp-title-size": "clamp(1.9rem, 1.4rem + 2vw, 2.5rem)",
@@ -107,7 +124,7 @@ export const THEMES: Theme[] = [
       "--osp-font-body": SANS,
       "--osp-font-ui": SANS,
       "--osp-font-mono": MONO,
-      "--osp-measure": "70ch",
+      "--osp-measure": "44rem",
       "--osp-base-size": "1rem",
       "--osp-line-height": "1.65",
       "--osp-title-size": "clamp(1.9rem, 1.4rem + 2.2vw, 2.75rem)",
@@ -158,7 +175,7 @@ export const THEMES: Theme[] = [
       "--osp-font-body": SANS,
       "--osp-font-ui": SANS,
       "--osp-font-mono": MONO,
-      "--osp-measure": "68ch",
+      "--osp-measure": "42.75rem",
       "--osp-base-size": "1rem",
       "--osp-line-height": "1.68",
       "--osp-title-size": "clamp(1.55rem, 1.25rem + 1.5vw, 2rem)",
@@ -209,7 +226,7 @@ export const THEMES: Theme[] = [
       "--osp-font-body": SANS,
       "--osp-font-ui": SANS,
       "--osp-font-mono": MONO,
-      "--osp-measure": "66ch",
+      "--osp-measure": "44.25rem",
       "--osp-base-size": "1.0625rem",
       "--osp-line-height": "1.72",
       "--osp-title-size": "clamp(1.8rem, 1.35rem + 1.9vw, 2.4rem)",
@@ -260,7 +277,7 @@ export const THEMES: Theme[] = [
       "--osp-font-body": SERIF,
       "--osp-font-ui": SANS,
       "--osp-font-mono": MONO,
-      "--osp-measure": "67ch",
+      "--osp-measure": "43.75rem",
       "--osp-base-size": "1.0625rem",
       "--osp-line-height": "1.72",
       "--osp-title-size": "clamp(1.9rem, 1.4rem + 2vw, 2.6rem)",

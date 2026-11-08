@@ -141,6 +141,13 @@ const config = {
     useMarkdownLinks: false,
     readableLineLength: true,
     showLineNumber: false,
+    // The notes in here are hard wrapped at about 76 columns, for readable
+    // diffs. With Obsidian's default (this off) every one of those newlines
+    // renders as a <br>, in the vault and in anything built from it, so a
+    // published page keeps the source's line breaks and the prose will not
+    // reflow when the reader widens the column. On, a single newline is a
+    // space, which is what the wrapping was ever meant to be.
+    strictLineBreaks: true,
   },
   "appearance.json": { accentColor: "", theme: "system" },
   "core-plugins.json": {
