@@ -10,7 +10,7 @@ demonstrates the broken half rather than the working one.
 
 **Why this file is not called `README.md`.** Once the folder is in your vault
 this file is an ordinary note, and a note called `README.md` at the top of the
-published folder is the site's front page by convention — ahead of `index.md`
+published folder is the site's front page by convention, ahead of `index.md`
 and `Home.md`, and ahead of any hand-written `index.html`. The first version
 of this demo was called `README.md`, which quietly took the front page, pushed
 `index.html` out of it, and so left `app.js` and the four SVGs uncollected:
@@ -69,14 +69,14 @@ folder structure is mirrored, which is what makes `href="styles.css"` and
 pages, with `[[index.html]]` and `[[trend.html]]`. Before this feature those
 were dead text. Note the second form: a wikilink is matched by the shortest
 unique name or by the full path from the vault root, so `[[trend.html]]`
-resolves and `[[charts/trend.html]]` does not — the same rule notes follow,
-and worth knowing before you conclude the link is broken.
+resolves and `[[charts/trend.html]]` does not. That is the same rule notes
+follow, and worth knowing before you conclude the link is broken.
 
 **One link is deliberately wrong.** `index.html` links to
 `page-linked-from-a-note.md`, and a note is published as its `.html` page,
 never as Markdown. The build report names it and says where to point it
 instead. It is in the report rather than fixed in place because the file is
-published as written — that is the whole contract.
+published as written, which is the whole contract.
 
 **The pages are not in the navigation.** No vault panel row, no browse entry,
 no tag page, no graph node, no backlinks. They have no frontmatter, no tags
@@ -102,7 +102,7 @@ file, between a pair of `osp-review` comments, and the overlay hashes the
 page's own blocks in the browser to produce the same anchors the build would
 have written. Drop a pin on a paragraph here and it survives a rebuild.
 
-If the page renders itself — a React or Angular prototype, say — two more
+If the page renders itself (a React or Angular prototype, say) two more
 things apply. The overlay marks the page again whenever the document changes,
 so a pin dropped after the app has rendered holds onto the text it was about
 rather than a spot on the screen. And a pin records the browser's own URL, so
@@ -124,7 +124,7 @@ Two consequences worth knowing:
   `diff` will show it. Turn **Include a review overlay** off for that check,
   or ignore what sits between the two comments.
 
-The site's own generated pages — the browse listing and the tag pages — still
+The site's own generated pages, the browse listing and the tag pages, still
 have no overlay, and that one is not an oversight. A comment is filed against
 a path in the vault, and those pages were not built from a file: there is
 nothing for a comment to be about.
@@ -144,7 +144,7 @@ Two knock-on effects are worth seeing, because neither is obvious. The other
 page's link to `../index.html` is reported as pointing at the page that took
 the path, rather than as a plain 404. And `app.js` and the four SVGs vanish
 from the site, because the only page that referenced them is no longer being
-published — files are carried for a page, not for a folder. Take the note out
+published: files are carried for a page, not for a folder. Take the note out
 again and they come back.
 
 **See the `app://` warning.** Paste this into `index.html` and build:
@@ -154,7 +154,7 @@ again and they come back.
 ```
 
 That is Obsidian's own resource scheme. In a rendered note the publisher
-strips it, because the URL contains the absolute path of the vault — your home
-directory, so your account name — and resolves for nobody but you. An as-is
+strips it, because the URL contains the absolute path of the vault (your home
+directory, so your account name) and resolves for nobody but you. An as-is
 page cannot be touched, so the build report warns about it instead and leaves
 it to you. Take the line out again afterwards.

@@ -15,8 +15,8 @@ of the feature: **a wikilink to an HTML file now resolves.**
 Both of these point at files published as-is, and both should be live links on
 the published page:
 
-- [[index.html]] — the page that styles itself
-- [[trend.html]] — the second page, one folder down
+- [[index.html]]: the page that styles itself
+- [[trend.html]]: the second page, one folder down
 
 Two things about how those are written, both of them the ordinary wikilink
 rules rather than anything new.
@@ -27,14 +27,14 @@ file that is not a note, so `[[index]]` finds nothing at all.
 **The name is the shortest unique one, or the full path from the vault root.**
 `[[trend.html]]` resolves; `[[charts/trend.html]]` does not, even though the
 file really is in a `charts` folder. A partial path has never been one of the
-two forms a wikilink is matched by, for notes any more than for pages — so a
+two forms a wikilink is matched by, for notes any more than for pages, so a
 link written that way degrades to plain text, which is what the next section
 describes.
 
 ## What it looked like before
 
 A link like the two above resolved to nothing, so the build downgraded it to
-plain text with a `osp-unresolved-link` class — the same treatment a link to an
+plain text with a `osp-unresolved-link` class, the same treatment a link to an
 unpublished note gets. That was correct at the time: the file really was not
 being published. Now that it is, the link is a link.
 

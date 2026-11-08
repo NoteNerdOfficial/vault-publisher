@@ -17,7 +17,7 @@ published page will carry a header built from the three keys above.
 `updated` dates the note. It is read by whatever key the **Date property**
 setting names (`updated` by default), accepts `2026-10-24` or
 `2026-10-24T18:40`, and a note without it falls back to the file's own
-modified time — which is why a synced or bulk-edited vault is better off
+modified time, which is why a synced or bulk-edited vault is better off
 setting it by hand. The same date orders **Recently updated** in the jump-to
 panel.
 
@@ -31,13 +31,13 @@ here**: a short list above the file tree in the left panel, and a section on
 the generated front page. It is read by whatever key the **Start here
 property** setting names.
 
-Set it to a number rather than `true` to say where the note goes — `pinned: 1`
+Set it to a number rather than `true` to say where the note goes. `pinned: 1`
 leads, then `pinned: 2`, and anything left on `true` follows in title order.
 
 ## What else the header shows
 
-A **Links** figure — how many published notes link here, and how many this
-note links out to — appears whenever either is more than zero. It is counted
+A **Links** figure (how many published notes link here, and how many this
+note links out to) appears whenever either is more than zero. It is counted
 from the links the build actually resolved, so a link to an unpublished note
 is not in it.
 
@@ -45,7 +45,7 @@ is not in it.
 
 Everything else in the frontmatter is removed before the page is written, and
 removed rather than hidden: a published page carries no trace of the keys it
-was not asked for. Add `status: draft` above and nothing appears, by design —
+was not asked for. Add `status: draft` above and nothing appears, by design:
 a vault that decides what is public in its frontmatter would otherwise publish
 that decision.
 
