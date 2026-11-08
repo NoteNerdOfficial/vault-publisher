@@ -2044,15 +2044,36 @@ body {
  * that would switch it is hidden -- see sourcePane in page.ts.
  * --------------------------------------------------------------------- */
 
-.osp-source { display: none; max-width: var(--osp-measure); }
+/* Wider than the article, on purpose and only here. The measure is a prose
+   measure, counted in a proportional font; this pane is monospace, and a
+   vault whose notes are hard wrapped at 76 to 80 columns does not fit in
+   it. At the reading width the pane held 77.2 columns against source lines
+   of 78, so the file's own lines were soft wrapped a word short of their
+   end and the reader could not tell which breaks were the file's and which
+   were the viewport's -- the one thing a source view has to get right.
+
+   45.5rem is 80 columns of the mono stack at 0.875rem plus the block's
+   padding and border. A floor rather than a width: a theme with a measure
+   wider than that keeps it. It is counted in characters of a font, which
+   is what ch is for and what the measure itself deliberately is not, but
+   the sum is written out as a rem because only this one element uses it --
+   see the note in themes.ts for why a shared token cannot be a ch. */
+.osp-source { display: none; max-width: max(var(--osp-measure), 45.5rem); }
+/* The floor is a floor under the measure, not under the window: wide and
+   full mean no limit here as everywhere else. Stated rather than left to
+   max() going invalid when --osp-measure is none, which lands on the right
+   answer for the wrong reason and only until someone reads it. */
+:root[data-osp-width="wide"] .osp-source,
+:root[data-osp-width="full"] .osp-source { max-width: none; }
 .osp-source .osp-code { margin: 0; }
 /* The bar's label is a file name here, not a language token: it keeps the
    note's own capitals and reads as the file a reader could go and open. */
 .osp-source .osp-code-lang { text-transform: none; letter-spacing: 0.01em; }
-/* A note's source is one long line per paragraph, so the block wraps rather
-   than scrolls sideways. The reader came for the text, not its line breaks,
-   and a paragraph they have to drag a scrollbar through to read is not the
-   note back. */
+/* The block wraps rather than scrolls sideways. A note's source is one long
+   line per paragraph when nobody hard wraps it, and a table or a long link
+   even when they do -- this vault's own notes run to 227 characters. The
+   reader came for the text, not its line breaks, and a paragraph they have
+   to drag a scrollbar through to read is not the note back. */
 .osp-source pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 :root[data-osp-view="markdown"] .osp-source { display: block; }
