@@ -68,17 +68,78 @@ describe("lockSite", () => {
     expect(cipher).not.toContain("Q3 Plan");
   });
 
-  it("leaves a shell that says a password is needed, and nothing else", async () => {
+  it("leaves a shell that explains itself, and says nothing about the site", async () => {
     const { by } = await lockFixture();
     const shell = String(by.get("notes/plan.html")?.content);
 
-    expect(shell).toContain("This page is protected");
+    expect(shell).toContain("This page is encrypted.");
     expect(shell).toContain("noindex");
     expect(shell).toContain("<title>Protected</title>");
     // Not the site's own name or the page's: both are the author's wording.
     expect(shell).not.toContain("Q3 Plan");
+    // Nor anything else a crawler or a shared link could read a title out of.
+    expect(shell).not.toContain('name="description"');
+    expect(shell).not.toContain("og:");
     // Relative to the page, so a page one folder down reaches the reader.
     expect(shell).toContain('src="../assets/unlock.js"');
+  });
+
+  it("asks nobody else for anything", async () => {
+    // The stylesheet and the script of the real site are encrypted, so this
+    // page carries its own. A web font would be a request to someone else's
+    // server from the one page whose whole purpose is privacy.
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+
+    expect(shell).not.toMatch(/https?:\/\//);
+    expect(shell).not.toContain("@import");
+    expect(shell).not.toContain("<link");
+  });
+
+  it("keeps every hook the unlock script reaches for", async () => {
+    // `unlockScript.ts` finds exactly these by id. A redesign that renamed
+    // one would publish a lock screen that cannot be unlocked.
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+
+    for (const id of [
+      'id="osp-locked"',
+      'id="osp-unlock-form"',
+      'id="osp-unlock-password"',
+      'id="osp-unlock-error"',
+      'id="osp-unlock-button"',
+    ]) {
+      expect(shell).toContain(id);
+    }
+    expect(shell).toContain("<noscript>");
+  });
+
+  it("ships the failure hidden, and keeps it hidden", async () => {
+    // `[hidden]` is a UA rule at attribute specificity, so the class that
+    // lays this row out beats it unless the stylesheet says otherwise. It
+    // did, once, and put "that password did not work" on a page nobody had
+    // typed into.
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+
+    expect(shell).toMatch(/id="osp-unlock-error"[^>]*hidden/);
+    expect(shell).toContain(".err[hidden] { display: none; }");
+    expect(shell.indexOf(".err[hidden]")).toBeLessThan(shell.indexOf(".err { display: flex"));
+  });
+
+  it("separates the action from the failure, and reports the wait", async () => {
+    const { by } = await lockFixture();
+    const shell = String(by.get("notes/plan.html")?.content);
+
+    // One colour for what is wrong, another for what to press. They used
+    // to be the same `--ink`.
+    expect(shell).toContain("--bad:");
+    expect(shell).toContain(".err { display: flex");
+    expect(shell).toContain("color: var(--bad)");
+    // Deriving the key is 600,000 iterations. `disabled` on the button is
+    // the only hook the script sets, so everything else hangs off it.
+    expect(shell).toContain("form:has(button:disabled) .track");
+    expect(shell).toContain("prefers-reduced-motion");
   });
 
   it("gives the real document back to the right password", async () => {

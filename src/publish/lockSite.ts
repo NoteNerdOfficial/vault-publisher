@@ -68,11 +68,41 @@ export function isPage(path: string): boolean {
 /**
  * The shell a locked page is published as.
  *
- * Deliberately plain, and deliberately says nothing. No title but a
- * generic one, no description, `noindex` so a crawler does not keep a
- * record of a page it cannot read, and no mention of the site's name --
- * which is the author's wording and may itself be the thing being kept
- * quiet.
+ * It still says nothing about the site. No name, no description, a generic
+ * title and `noindex`, because the author's own wording may be the thing
+ * being kept quiet. What changed is that it now says something about
+ * *itself*, which costs nothing and is the one thing a reader of this page
+ * has no way to find out: the file they downloaded is ciphertext, the
+ * password turns it back into a page on their own device, and nothing is
+ * sent anywhere when they use it. A password box with no explanation is
+ * indistinguishable from a login, and a login is exactly what this is not.
+ *
+ * Three decisions, each replacing something that was wrong rather than
+ * merely plain.
+ *
+ * **The action and the failure no longer share a colour.** They both used
+ * `--ink`, so the button a reader is meant to press and the sentence
+ * telling them it did not work were the same red.
+ *
+ * **The wait is reported.** Deriving the key is 600,000 PBKDF2 iterations:
+ * close to a second on a laptop and several on a phone, and until now the
+ * whole of the feedback was `opacity: 0.6` on a disabled button. The only
+ * hook `unlockScript.ts` offers is `disabled` on that button, so the rest
+ * is reached from there in CSS: `:has()` lifts it to the form and fills a
+ * rule under the field. Where `:has()` is missing the button still dims,
+ * which is exactly what the page did before.
+ *
+ * **The surfaces the browser draws are themed too** -- the caret, the
+ * selection, the focus ring -- and the viewport is `100dvh`, because
+ * `100vh` on a phone is measured through the browser chrome.
+ *
+ * The palette is deliberately neutral rather than accented. This page runs
+ * in front of a site that may be built in any of five themes, and an
+ * accent chosen here would promise a colour the site does not have. Red is
+ * reserved for the one thing that is actually wrong.
+ *
+ * It is inlined into every locked page, so it is kept short on purpose: a
+ * three-hundred-note site pays for this stylesheet three hundred times.
  */
 export function lockShell(payload: LockedPayload & { root: string }): string {
   const json = JSON.stringify(payload).replace(/</g, "\\u003c");
@@ -80,39 +110,81 @@ export function lockShell(payload: LockedPayload & { root: string }): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>Protected</title>
 <style>
-:root { color-scheme: light dark; --fg: #15181c; --fg-2: #596069; --bg: #fdfdfc; --line: #e1e4e8; --ink: #d4421e; }
-@media (prefers-color-scheme: dark) { :root { --fg: #e6e9ed; --fg-2: #9ba3ac; --bg: #16181c; --line: #2e333a; --ink: #f2603a; } }
-* { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
-  background: var(--bg); color: var(--fg);
-  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-main { width: 100%; max-width: 22rem; text-align: center; }
-h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
-p { margin: 0 0 18px; color: var(--fg-2); font-size: 13px; }
-form { display: flex; gap: 8px; }
-input { flex: 1; min-width: 0; height: 38px; padding: 0 12px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
-input:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-button { height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--ink);
-  color: #fff; font: inherit; font-size: 14px; font-weight: 550; cursor: pointer; }
-button[disabled] { opacity: 0.6; cursor: default; }
-.err { margin: 14px 0 0; color: var(--ink); font-size: 13px; }
+:root { color-scheme: light dark;
+  --bg: #fbfbfa; --fg: #14171a; --fg-2: #646b74; --line: #dcdfe3;
+  --field: #fff; --ink: #15181c; --bad: #b3261e; }
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0f1113; --fg: #e9ecef; --fg-2: #8b949e; --line: #2a2f35;
+  --field: #16191d; --ink: #e9ecef; --bad: #ff6b5e; } }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; min-height: 100dvh; display: grid;
+  place-items: center; padding: 28px; background: var(--bg); color: var(--fg);
+  caret-color: var(--ink);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+::selection { background: color-mix(in srgb, var(--ink) 18%, transparent); }
+main { width: 100%; max-width: 25rem; }
+.mark { color: var(--fg-2); margin-bottom: 18px; }
+h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -0.016em; }
+.lead { margin: 0 0 20px; color: var(--fg-2); font-size: 14px; }
+form { position: relative; }
+input { width: 100%; height: 46px; padding: 0 46px 0 14px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--field); color: var(--fg); font: inherit;
+  font-size: 15px; letter-spacing: 0.06em; transition: border-color 140ms ease, box-shadow 140ms ease; }
+input::placeholder { color: var(--fg-2); letter-spacing: 0; }
+input:focus { outline: none; border-color: var(--ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 15%, transparent); }
+button { position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  display: grid; place-items: center; width: 34px; height: 34px; border: 0;
+  border-radius: 8px; background: transparent; color: var(--fg-2); cursor: pointer;
+  transition: background 130ms ease, color 130ms ease; }
+button:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--fg); }
+button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+button:disabled { cursor: default; color: var(--fg-2); background: transparent; }
+/* Busy, from the one hook the unlock script sets. */
+.track { position: absolute; left: 1px; right: 1px; bottom: 1px; height: 2px;
+  border-radius: 0 0 9px 9px; overflow: hidden; opacity: 0; transition: opacity 120ms ease; }
+.track i { display: block; height: 100%; width: 0; background: var(--ink); }
+form:has(button:disabled) .track { opacity: 1; }
+form:has(button:disabled) .track i { animation: osp-fill 2.4s cubic-bezier(.16,1,.3,1) forwards; }
+form:has(button:disabled) input { border-color: var(--ink); }
+@keyframes osp-fill { from { width: 0 } to { width: 100% } }
+@media (prefers-reduced-motion: reduce) {
+  form:has(button:disabled) .track i { animation: none; width: 100%; opacity: .5 } }
+/* [hidden] is a UA rule at attribute specificity; a class that sets
+   display beats it, which would put the failure on screen before one. */
+.err[hidden] { display: none; }
+.err { display: flex; gap: 7px; align-items: flex-start; margin: 12px 0 0;
+  color: var(--bad); font-size: 13px; }
+.err::before { content: ""; flex: none; width: 3px; align-self: stretch;
+  border-radius: 2px; background: var(--bad); }
+.facts { margin: 22px 0 0; padding: 16px 0 0; border-top: 1px solid var(--line);
+  list-style: none; display: grid; gap: 7px; }
+.facts li { display: flex; gap: 9px; color: var(--fg-2); font-size: 13px; line-height: 1.5; }
+.facts li::before { content: ""; flex: none; width: 4px; height: 4px; margin-top: 7px;
+  border-radius: 50%; background: var(--fg-2); opacity: .6; }
 noscript { display: block; margin-top: 14px; color: var(--fg-2); font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
-<h1>This page is protected</h1>
-<p>Enter the password to read it.</p>
+<div class="mark"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg></div>
+<h1>This page is encrypted.</h1>
+<p class="lead">Not hidden behind a login. The file your browser downloaded is ciphertext, and the password turns it back into a page here, on this device.</p>
 <form id="osp-unlock-form">
-<input id="osp-unlock-password" type="password" autocomplete="current-password" aria-label="Password" required>
-<button id="osp-unlock-button" type="submit">Unlock</button>
+<input id="osp-unlock-password" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" required autofocus>
+<button id="osp-unlock-button" type="submit" aria-label="Unlock"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13"/><path d="m12 6 6 6-6 6"/></svg></button>
+<span class="track" aria-hidden="true"><i></i></span>
 </form>
-<p class="err" id="osp-unlock-error" hidden>That password did not work.</p>
+<p class="err" id="osp-unlock-error" role="alert" hidden><span>That password did not work. Check it and try again.</span></p>
+<ul class="facts">
+<li>Nothing is sent anywhere when you unlock it.</li>
+<li>There is no account, and no record of you reading it.</li>
+<li>Whoever sent you the link has the password.</li>
+</ul>
 <noscript>This page is encrypted, so reading it needs JavaScript.</noscript>
 </main>
 <script id="osp-locked" type="application/json">${json}</script>
