@@ -1757,6 +1757,36 @@ body {
   z-index: 1;
   background: var(--osp-surface);
 }
+.osp-browse-title { align-items: center; gap: 0.35rem; }
+.osp-browse-name {
+  flex: none;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+/* Collapse all and reveal, after the count, as quiet as the label they sit
+   beside until pointed at. */
+.osp-tree-tools { display: flex; flex: none; gap: 0.1rem; }
+.osp-tree-tools[hidden] { display: none; }
+.osp-tree-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: max(5px, var(--osp-radius));
+  background: transparent;
+  color: var(--osp-text-muted);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.osp-tree-tool:hover { color: var(--osp-text); background: var(--osp-hover); }
+.osp-tree-tool[aria-pressed="true"] { color: var(--osp-accent); }
+.osp-tree-tool:focus-visible { outline: 2px solid var(--osp-accent); outline-offset: 1px; }
 
 /* --- Start here -------------------------------------------------------
  * The author's starting points, pinned above the tree.
@@ -2900,6 +2930,55 @@ body {
      the bar. */
   :root { --osp-crumb-h: 0rem; --osp-inpage-h: 0rem; }
 }
+
+/* --- back to top ------------------------------------------------------
+ * A circle in the corner of the content column, there only once the top
+ * of the page is a screen away. The dock is a zero-height strip at the end
+ * of <main> that sticks to the bottom of the window, so the button keeps
+ * to the column's right edge, clear of the right-hand panel, and takes no
+ * room in the page. Below the drawer's scrim, so an open drawer covers it.
+ * -------------------------------------------------------------------- */
+.osp-to-top-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 50;
+  height: 0;
+}
+.osp-to-top {
+  position: absolute;
+  right: max(1.25rem, env(safe-area-inset-right));
+  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid var(--osp-border);
+  border-radius: 50%;
+  /* The page's own colour with a hairline round it, so it reads as part of
+     the column rather than something floating over it. */
+  background: var(--osp-bg);
+  color: var(--osp-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(0.5rem);
+  transition: opacity 160ms ease, transform 160ms ease, visibility 0s linear 160ms,
+    color 120ms ease, border-color 120ms ease;
+}
+.osp-to-top.osp-to-top-on {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 160ms ease, transform 160ms ease, visibility 0s,
+    color 120ms ease, border-color 120ms ease;
+}
+.osp-to-top:hover { color: var(--osp-text); border-color: var(--osp-accent); }
+.osp-to-top:focus-visible { outline: 2px solid var(--osp-accent); outline-offset: 2px; }
+.osp-to-top[hidden] { display: none; }
+.osp-main:focus { outline: none; }
+@media print { .osp-to-top-dock, .osp-tree-tools { display: none !important; } }
 
 /* An outline link jumps rather than teleports, so the reader keeps their
    place in the page. */

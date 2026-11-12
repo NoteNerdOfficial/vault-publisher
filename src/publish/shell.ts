@@ -152,6 +152,12 @@ const PATHS: Record<string, string> = {
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
   // Down, not right: this one drops a panel rather than walking into a tree.
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  // The tree's two tools, as Obsidian's file explorer draws them: two
+  // chevrons folding shut, and a target for "show me where I am".
+  collapseAll: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
+  reveal:
+    '<path d="M2 12h3M19 12h3M12 2v3M12 19v3"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>',
+  arrowUp: '<path d="M12 19V5"/><path d="m6 11 6-6 6 6"/>',
 };
 
 export function icon(name: string, className = "osp-icon"): string {
@@ -681,10 +687,58 @@ export function vaultPanel(input: ShellInput): string {
     // while the tree scrolls. See `pinnedSection`.
     pinnedSection(input) +
     `<div class="osp-panel-body osp-scroll">` +
-    `<h2 class="osp-group-title osp-browse-title">Browse` +
-    `<span class="osp-count">${input.noteCount}</span></h2>` +
+    browseHead(input) +
     `<ul class="osp-tree">${treeMarkup(input.nav, input, 0)}</ul>` +
     `</div></aside>`
+  );
+}
+
+/**
+ * The tree's label and its two tools, held at the top of the list it names.
+ *
+ * The tools sit right after the label, as Obsidian's sit at the head of
+ * its file explorer, with the count still at the far end. They are
+ * beside the heading rather than in it, so the heading's
+ * name stays "Browse" and not every button label read out after it. They
+ * are hidden in the markup and shown by the script: both of them work on
+ * the open folders, which is state only the script keeps, and a button
+ * that does nothing with scripting off is worse than no button.
+ *
+ * Reveal is a switch, as in Obsidian: on, every page opens the folders down
+ * to itself and scrolls its row into sight; off, the tree stays as the
+ * reader left it. It starts on, which is how the tree has always behaved.
+ */
+function browseHead(input: ShellInput): string {
+  const tool = (attr: string, glyph: string, label: string, extra = "") =>
+    `<button type="button" class="osp-tree-tool" ${attr}${extra} aria-label="${label}" ` +
+    `title="${label}">${icon(glyph, "osp-icon-sm")}</button>`;
+  return (
+    `<div class="osp-group-title osp-browse-title">` +
+    `<h2 class="osp-browse-name">Browse</h2>` +
+    `<span class="osp-tree-tools" data-osp-tree-tools hidden>` +
+    tool("data-osp-collapse-all", "collapseAll", "Collapse all") +
+    tool("data-osp-reveal", "reveal", "Auto-reveal current file", ` aria-pressed="true"`) +
+    `</span>` +
+    `<span class="osp-count">${input.noteCount}</span></div>`
+  );
+}
+
+/**
+ * The way back up a long page: a circle with an arrow, in the corner of the
+ * content column, once the top of the page is out of sight. Hidden until
+ * the script shows it, since scrolling is the script's to watch.
+ *
+ * It goes at the end of `<main>`, in a dock that sticks to the bottom of the
+ * window, rather than being fixed to the window itself: fixed, its corner
+ * would be the right-hand panel's, and it would sit on top of that instead
+ * of beside the text it takes you to the top of.
+ */
+export function backToTop(): string {
+  return (
+    `<div class="osp-to-top-dock">` +
+    `<button type="button" class="osp-to-top" data-osp-to-top hidden ` +
+    `aria-label="Back to top" title="Back to top">${icon("arrowUp", "osp-icon")}</button>` +
+    `</div>`
   );
 }
 
@@ -871,7 +925,7 @@ function treeMarkup(nodes: NavNode[], input: ShellInput, depth: number): string 
       // arrives at a tree that does not show where they are.
       const open = input.url.startsWith(`${node.path}/`);
       return (
-        `<li class="osp-folder"><details${open ? " open" : ""}>` +
+        `<li class="osp-folder"><details data-osp-folder="${escapeHtml(node.path)}"${open ? " open" : ""}>` +
         `<summary class="osp-row">` +
         icon("chevron", "osp-icon-sm osp-chev") +
         icon("folder", "osp-icon-sm") +

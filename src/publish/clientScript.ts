@@ -639,9 +639,31 @@ export const CLIENT_SCRIPT = `(function () {
 
   var queued = false;
 
+  /* --- back to top -------------------------------------------------- */
+
+  var toTop = document.querySelector("[data-osp-to-top]");
+  if (toTop) {
+    toTop.hidden = false;
+    toTop.addEventListener("click", function () {
+      /* The stylesheet's scroll-behavior decides smooth or not, so reduced
+         motion is honoured without asking here. */
+      window.scrollTo(0, 0);
+      /* The button hides once the top is reached, so focus goes to the start
+         of the page rather than nowhere, without scrolling a second time. */
+      var main = document.getElementById("osp-main");
+      if (main) {
+        if (!main.hasAttribute("tabindex")) main.setAttribute("tabindex", "-1");
+        try { main.focus({ preventScroll: true }); } catch (e) { main.focus(); }
+      }
+    });
+  }
+
   function update() {
     queued = false;
     if (crumb) crumb.classList.toggle("osp-scrolled", window.scrollY > 8);
+    /* Back to top once the top is a screen or more away: before that, the
+       reader can see where it would take them. */
+    if (toTop) toTop.classList.toggle("osp-to-top-on", window.scrollY > window.innerHeight * 0.75);
     if (!targets.length) return;
 
     /* A heading counts as reached once it has passed a line near the top of
@@ -702,6 +724,83 @@ export const CLIENT_SCRIPT = `(function () {
   }, { passive: true });
   window.addEventListener("resize", update, { passive: true });
   update();
+
+  /* --- the tree's tools: collapse all, and reveal ------------------- *
+     The same two Obsidian's file explorer has. Which folders are open is
+     kept for the visit, so a tree collapsed on one page is still collapsed
+     on the next; reveal is a setting, kept like the theme. On, each page
+     opens the folders down to itself and brings its row into sight; off,
+     the tree is left exactly as the reader had it. */
+  var treeTools = document.querySelector("[data-osp-tree-tools]");
+  var treeBody = document.querySelector(".osp-panel-body");
+  if (treeTools && treeBody) {
+    var OPEN_KEY = "osp-tree-open";
+    var REVEAL_KEY = "osp-tree-reveal";
+    var folders = treeBody.querySelectorAll(".osp-tree details[data-osp-folder]");
+    var revealBtn = treeTools.querySelector("[data-osp-reveal]");
+    var collapseBtn = treeTools.querySelector("[data-osp-collapse-all]");
+    var restoring = false;
+
+    var saveOpen = function () {
+      if (restoring) return;
+      var open = [];
+      for (var f = 0; f < folders.length; f++) {
+        if (folders[f].open) open.push(folders[f].getAttribute("data-osp-folder"));
+      }
+      try { sessionStorage.setItem(OPEN_KEY, JSON.stringify(open)); } catch (e) {}
+    };
+    var revealOn = function () {
+      try { return localStorage.getItem(REVEAL_KEY) !== "off"; } catch (e) { return true; }
+    };
+    var reveal = function () {
+      var here = treeBody.querySelector(".osp-tree .osp-current");
+      if (!here) return;
+      for (var d = here.closest("details"); d; d = d.parentElement.closest("details")) {
+        d.open = true;
+      }
+      /* Scrolled by hand inside the panel: scrollIntoView would also move
+         the page, and the reader came here to read the page. */
+      var box = here.getBoundingClientRect();
+      var frame = treeBody.getBoundingClientRect();
+      if (box.top < frame.top + 32 || box.bottom > frame.bottom) {
+        treeBody.scrollTop += box.top - frame.top - frame.height / 2 + box.height / 2;
+      }
+    };
+
+    restoring = true;
+    var saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(OPEN_KEY)); } catch (e) {}
+    if (saved && saved.length !== undefined) {
+      for (var o = 0; o < folders.length; o++) {
+        folders[o].open = saved.indexOf(folders[o].getAttribute("data-osp-folder")) >= 0;
+      }
+    }
+    if (revealOn()) reveal();
+    restoring = false;
+    saveOpen();
+
+    revealBtn.setAttribute("aria-pressed", String(revealOn()));
+    treeTools.hidden = false;
+
+    /* toggle does not bubble, so it is caught on the way down. */
+    treeBody.addEventListener("toggle", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-osp-folder")) saveOpen();
+    }, true);
+
+    collapseBtn.addEventListener("click", function () {
+      restoring = true;
+      for (var c = 0; c < folders.length; c++) folders[c].open = false;
+      restoring = false;
+      saveOpen();
+    });
+    revealBtn.addEventListener("click", function () {
+      var on = !revealOn();
+      try { localStorage.setItem(REVEAL_KEY, on ? "on" : "off"); } catch (e) {}
+      revealBtn.setAttribute("aria-pressed", String(on));
+      /* Switching it on is also asking for it now. */
+      if (on) { reveal(); saveOpen(); }
+    });
+  }
 
   /* --- callouts ---------------------------------------------------- */
 

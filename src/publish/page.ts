@@ -26,6 +26,7 @@ import {
   icon,
   mentionsBelow,
   vaultPanel,
+  backToTop,
 } from "./shell";
 
 export interface PageMeta {
@@ -870,6 +871,7 @@ export function buildPage(options: {
       breadcrumb(shell) +
       inPageMenu(shell) +
       doc +
+      backToTop() +
       `</main>` +
       contextRail(shell) +
       `</div>`
