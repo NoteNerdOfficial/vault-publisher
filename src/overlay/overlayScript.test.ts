@@ -5089,18 +5089,20 @@ describe("moving the notch", () => {
       expect(shadow.querySelector(".co-panel")?.getAttribute("data-side")).toBe("left");
     });
 
-    it("centres a centred notch in the space the open panel leaves", () => {
+    it("keeps a centred notch centred when the panel opens and changes side", () => {
       mountPage();
       const shadow = run();
       const notch = shadow.querySelector(".co-notch") as HTMLElement;
-      expect(notch.style.getPropertyValue("--co-notch-shift")).toBe("0px");
+      const at = () => [notch.getAttribute("data-dock"), notch.style.left, notch.style.transform];
+      const before = at();
 
       mode(shadow, "review");
-      // Half of the 320px panel and its 8px margin, away from the panel.
-      expect(notch.style.getPropertyValue("--co-notch-shift")).toBe("-164px");
+      expect(at()).toEqual(before);
 
-      mode(shadow, "view");
-      expect(notch.style.getPropertyValue("--co-notch-shift")).toBe("0px");
+      const sideBtn = shadow.querySelector('.co-panel [title^="Move to the"]') as HTMLButtonElement;
+      sideBtn.click();
+      expect(shadow.querySelector(".co-panel")?.getAttribute("data-side")).toBe("left");
+      expect(at()).toEqual(before);
     });
   });
 });

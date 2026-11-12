@@ -2006,14 +2006,6 @@ export const OVERLAY_SCRIPT = `(function () {
     };
   }
 
-  // How far a centred notch moves to sit in the middle of the space the open
-  // panel leaves, rather than in the middle of the window.
-  function centreShift() {
-    if (panel.hidden || dockSide(dock)) return 0;
-    var room = (width + 8) / 2;
-    return side === "right" ? -room : room;
-  }
-
   // The dock nearest a point: thirds across, halves down.
   function nearestDock(x, y) {
     var size = viewportSize();
@@ -2030,7 +2022,7 @@ export const OVERLAY_SCRIPT = `(function () {
         ? NOTCH_INSET
         : s === "right"
           ? size.w - NOTCH_INSET - w
-          : size.w / 2 + centreShift() - w / 2;
+          : size.w / 2 - w / 2;
     var top = /^top/.test(name) ? NOTCH_INSET : size.h - NOTCH_INSET - h;
     return { left: left, top: top };
   }
@@ -2043,7 +2035,6 @@ export const OVERLAY_SCRIPT = `(function () {
     notch.style.right = "";
     notch.style.bottom = "";
     notch.style.transform = "";
-    notch.style.setProperty("--co-notch-shift", centreShift() + "px");
   }
 
   // Holds the notch at a pixel position, for a drag or a slide.

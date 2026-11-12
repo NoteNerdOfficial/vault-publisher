@@ -193,15 +193,15 @@ export const OVERLAY_CSS = `
 }
 
 /* The six docks, each a fixed inset from the window's edges. A centred dock
-   is moved by --co-notch-shift to sit in the middle of the space an open
-   panel leaves, rather than under the panel. */
+   stays in the middle of the window whether the panel is open or not; a
+   reader who wants it elsewhere drags it. */
 .osp-overlay .co-notch[data-dock^="bottom"] { bottom: 24px; }
 .osp-overlay .co-notch[data-dock^="top"] { top: 24px; }
 .osp-overlay .co-notch[data-dock$="-left"] { left: 24px; }
 .osp-overlay .co-notch[data-dock$="-right"] { right: 24px; }
 .osp-overlay .co-notch[data-dock="top"],
 .osp-overlay .co-notch[data-dock="bottom"] {
-  left: calc(50% + var(--co-notch-shift, 0px));
+  left: 50%;
   transform: translateX(-50%);
 }
 .osp-overlay .co-notch[data-dragging] { cursor: grabbing; }
