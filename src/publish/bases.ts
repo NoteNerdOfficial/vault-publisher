@@ -57,6 +57,8 @@ export interface BasesStats {
    * "emitted/claimed" so a publish can refuse rather than quietly truncate.
    */
   truncated: string[];
+  /** Views whose rows were read from Bases' own data, not from its grid. */
+  fromApi: number;
 }
 
 export function emptyBasesStats(): BasesStats {
@@ -69,7 +71,109 @@ export function emptyBasesStats(): BasesStats {
     inputValues: 0,
     measurementDropped: 0,
     truncated: [],
+    fromApi: 0,
   };
+}
+
+/**
+ * The Bases view type the plugin registers to read a view's rows from Bases'
+ * data rather than from its rendered grid. See render/basesCaptureView.ts.
+ */
+export const CAPTURE_VIEW_TYPE = "vault-publisher-capture";
+
+/** Marks the figure a capture view builds, so it can be found and unwrapped. */
+const CAPTURED_FIGURE = "figure.osp-base[data-osp-capture]";
+
+/** A table read from Bases' data, ready to be written out. */
+export interface CapturedTable {
+  name: string;
+  columns: { id: string; label: string }[];
+  /** One group when the view is not grouped; `label` is null then. */
+  groups: { label: string | null; rows: CapturedRow[] }[];
+}
+
+export interface CapturedRow {
+  /** Vault path of the row's file, which `file.name` links to. */
+  path: string;
+  /** The file's name as Bases shows it. */
+  title: string;
+  /** Writes the value of `columnId` into `cell`. */
+  render(cell: HTMLElement, columnId: string): void;
+}
+
+/**
+ * Builds the same figure `reemitBases` produces from a rendered grid, from
+ * data instead.
+ *
+ * The file name column is written as Bases' own cells write a document value:
+ * a span carrying the vault path in `data-href`, which the link rewriter
+ * already turns into a link to the published page.
+ */
+export function buildCapturedTable(doc: Document, input: CapturedTable): HTMLElement {
+  const figure = buildFigure(doc, "table", input.name);
+  figure.dataset.ospCapture = "";
+  const table = doc.createElement("table");
+  table.className = "osp-base-table";
+
+  const thead = doc.createElement("thead");
+  const headRow = doc.createElement("tr");
+  for (const column of input.columns) {
+    const th = doc.createElement("th");
+    th.scope = "col";
+    th.textContent = column.label;
+    headRow.append(th);
+  }
+  thead.append(headRow);
+  table.append(thead);
+
+  let count = 0;
+  for (const group of input.groups) {
+    const tbody = doc.createElement("tbody");
+    if (group.label !== null) {
+      const groupRow = doc.createElement("tr");
+      groupRow.className = "osp-base-group";
+      const th = doc.createElement("th");
+      th.scope = "rowgroup";
+      th.colSpan = input.columns.length;
+      th.textContent = group.label;
+      groupRow.append(th);
+      tbody.append(groupRow);
+    }
+    for (const row of group.rows) {
+      const tr = doc.createElement("tr");
+      for (const column of input.columns) {
+        const td = doc.createElement("td");
+        td.dataset.property = column.id;
+        if (column.id === "file.name") {
+          const link = doc.createElement("span");
+          link.className = "internal-link";
+          link.setAttribute("data-href", row.path);
+          link.textContent = row.title;
+          td.append(link);
+        } else {
+          row.render(td, column.id);
+        }
+        tr.append(td);
+      }
+      tbody.append(tr);
+      count++;
+    }
+    table.append(tbody);
+  }
+
+  figure.append(table);
+  figure.dataset.ospRows = String(count);
+  return figure;
+}
+
+/** True for a view whose rows come from Bases' data, through our view type. */
+export function isCaptureView(view: Element): boolean {
+  return view.getAttribute("data-view-type") === CAPTURE_VIEW_TYPE;
+}
+
+/** The figure a capture view has built, once it has. */
+export function capturedFigure(view: Element): HTMLElement | null {
+  return view.querySelector<HTMLElement>(CAPTURED_FIGURE);
 }
 
 /** Chrome that exists to be clicked, and so has no meaning on a static page. */
@@ -105,6 +209,32 @@ export function reemitBasesView(view: Element, stats: BasesStats): void {
   const type = view.getAttribute("data-view-type") ?? "";
   const name = view.getAttribute("data-view-name") ?? "";
   const claimed = claimedResultCount(view);
+
+  // Already built from Bases' data: every row is there, wherever the view sat
+  // on the page. All that is left is to tidy its cells and lift it out.
+  const captured = isCaptureView(view) ? capturedFigure(view) : null;
+  if (captured) {
+    for (const cell of Array.from(captured.querySelectorAll("td"))) {
+      cleanCell(cell, stats);
+    }
+    const emitted = Number(captured.dataset.ospRows ?? "0");
+    stats.tables++;
+    stats.fromApi++;
+    stats.rows += emitted;
+    if (emitted === 0 && claimed === 0) {
+      const note = doc.createElement("p");
+      note.className = "osp-base-empty";
+      note.textContent = "No results.";
+      captured.append(note);
+    } else if (claimed !== null && emitted < claimed) {
+      stats.truncated.push(`${name || type}: ${emitted}/${claimed}`);
+      noteTruncation(captured, emitted, claimed);
+    }
+    delete captured.dataset.ospRows;
+    delete captured.dataset.ospCapture;
+    replaceView(view, captured);
+    return;
+  }
 
   if (!REEMITTED_TYPES.has(type)) {
     // We would be guessing at a shape we have never seen, so we do not
@@ -220,8 +350,9 @@ function unsupportedFigure(doc: Document, type: string, name: string): HTMLEleme
  * embed, which puts a block table inside an inline box.
  */
 function replaceView(view: Element, figure: HTMLElement): void {
-  const embed = view.closest(".bases-embed");
-  const host = embed ?? view;
+  // An embed's wrapper, or a `base` code block's: either holds the toolbar,
+  // and either would be left behind holding it if only the view were swapped.
+  const host = view.closest(".bases-embed, .block-language-base") ?? view;
 
   for (const chrome of Array.from(host.querySelectorAll(CHROME_SELECTOR))) {
     chrome.remove();
@@ -295,6 +426,9 @@ export function isBasesViewUnfinished(view: Element): boolean {
   // is available immediately, while the toolbar still reads "Results" with
   // no number in it.
   if (view.querySelector(".is-loading")) return true;
+
+  // Ours: finished once it has built its figure from the data.
+  if (isCaptureView(view)) return capturedFigure(view) === null;
 
   // A view type we cannot read rows from cannot be judged by its rows, and
   // waiting for rows it will never have in a shape we recognise ran out the
@@ -491,8 +625,20 @@ function headerLabel(cell: Element): string {
  * elements afterwards.
  */
 function moveValue(source: Element, target: Element, stats: BasesStats): void {
-  const doc = target.ownerDocument;
   const cell = source.querySelector(".bases-table-cell") ?? source;
+  cleanCell(cell, stats);
+  while (cell.firstChild) target.append(cell.firstChild);
+  collapseIfEmpty(target);
+}
+
+/**
+ * Resolves, in place, anything in a cell whose content is not in its markup:
+ * form controls become their values, editor wrappers are dropped, and icons
+ * and buttons that only work inside Obsidian are removed. Used both on cells
+ * moved out of Bases' grid and on cells a capture view rendered from data.
+ */
+function cleanCell(cell: Element, stats: BasesStats): void {
+  const doc = cell.ownerDocument;
 
   // Form controls first: their value is a property, so serializing the markup
   // loses it. This is the fix for the blank number columns.
@@ -514,12 +660,16 @@ function moveValue(source: Element, target: Element, stats: BasesStats): void {
     noise.remove();
   }
 
-  while (cell.firstChild) target.append(cell.firstChild);
+  collapseIfEmpty(cell);
+}
 
-  // A genuinely empty property is empty, not broken. Collapsing it to nothing
-  // keeps the placeholder counter from treating it as unfinished work.
-  if (!(target.textContent ?? "").trim() && !target.querySelector("img")) {
-    target.textContent = "";
+/**
+ * A genuinely empty property is empty, not broken. Collapsing it to nothing
+ * keeps the placeholder counter from treating it as unfinished work.
+ */
+function collapseIfEmpty(cell: Element): void {
+  if (!(cell.textContent ?? "").trim() && !cell.querySelector("img")) {
+    cell.textContent = "";
   }
 }
 

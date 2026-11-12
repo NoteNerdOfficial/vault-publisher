@@ -1,7 +1,9 @@
 import {
   BasesStats,
   basesDataRowCount,
+  capturedFigure,
   isBasesViewUnfinished,
+  isCaptureView,
   reemitBasesView,
 } from "../publish/bases";
 
@@ -86,6 +88,9 @@ async function waitForRows(
 
   while (performance.now() - started < options.timeoutMs) {
     const view = viewOf(target);
+    // Built from Bases' data, so complete the moment it exists: there are no
+    // rows arriving one frame at a time to wait out.
+    if (view && isCaptureView(view) && capturedFigure(view)) return view;
     if (view && !isBasesViewUnfinished(view)) {
       const rows = basesDataRowCount(view);
       const now = performance.now();

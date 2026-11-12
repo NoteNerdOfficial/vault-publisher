@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from "vitest";
-import { isBasesViewUnfinished, reemitBases } from "./bases";
+import { installObsidianDom } from "../../test/obsidian-stub";
+import {
+  CAPTURE_VIEW_TYPE,
+  CapturedTable,
+  buildCapturedTable,
+  isBasesViewUnfinished,
+  reemitBases,
+} from "./bases";
 
 /**
  * A Bases table view as it reaches us from the app.
@@ -183,5 +190,151 @@ describe("reemitBases never leaves raw Bases markup", () => {
     const note = root.querySelector(".osp-base-unsupported-note");
     expect(note?.textContent).toContain("list view cannot be shown");
     expect(root.querySelector(".osp-base-name")?.textContent).toBe("Reading queue");
+  });
+});
+
+/** A table as a capture view would hand it over, with plain-text values. */
+function captured(rows: number, extra: Partial<CapturedTable> = {}): CapturedTable {
+  return {
+    name: "Shelf",
+    columns: [
+      { id: "file.name", label: "file name" },
+      { id: "note.author", label: "Author" },
+    ],
+    groups: [
+      {
+        label: null,
+        rows: Array.from({ length: rows }, (_, i) => ({
+          path: `shelf/book-${i + 1}.md`,
+          title: `book-${i + 1}`,
+          render: (cell: HTMLElement, columnId: string) => {
+            cell.textContent = `${columnId} ${i + 1}`;
+          },
+        })),
+      },
+    ],
+    ...extra,
+  };
+}
+
+/**
+ * A capture view as it sits on the page once it has built its figure, inside
+ * either wrapper Bases uses: an embed's span or a `base` code block's div.
+ */
+function captureView(options: { claimed: number; rows: number; wrapper: "embed" | "block" }): HTMLElement {
+  const root = document.createElement("div");
+  const wrapper = document.createElement(options.wrapper === "embed" ? "span" : "div");
+  wrapper.className =
+    options.wrapper === "embed" ? "internal-embed bases-embed" : "block-language-base";
+  wrapper.innerHTML =
+    `<div class="bases-toolbar"><span class="bases-toolbar-result-count">${options.claimed} results</span></div>` +
+    `<div class="bases-view" data-view-type="${CAPTURE_VIEW_TYPE}" data-view-name="Shelf"></div>`;
+  wrapper.querySelector(".bases-view")!.append(buildCapturedTable(document, captured(options.rows)));
+  root.append(wrapper);
+  return root;
+}
+
+describe("buildCapturedTable", () => {
+  it("writes the header from the display names and a row per entry", () => {
+    const figure = buildCapturedTable(document, captured(3));
+
+    expect(Array.from(figure.querySelectorAll("thead th")).map((th) => th.textContent)).toEqual([
+      "file name",
+      "Author",
+    ]);
+    expect(figure.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(figure.querySelector("figcaption")?.textContent).toBe("Shelf");
+  });
+
+  // The link rewriter turns exactly this shape into a link to the published
+  // page, the same as a document value in Bases' own grid.
+  it("writes the file name as a link to the row's file", () => {
+    const figure = buildCapturedTable(document, captured(1));
+
+    const link = figure.querySelector("td[data-property='file.name'] .internal-link");
+    expect(link?.getAttribute("data-href")).toBe("shelf/book-1.md");
+    expect(link?.textContent).toBe("book-1");
+  });
+
+  it("lets each row render its other values", () => {
+    const figure = buildCapturedTable(document, captured(2));
+
+    expect(figure.querySelector("tbody tr:nth-child(2) td[data-property='note.author']")?.textContent)
+      .toBe("note.author 2");
+  });
+
+  it("heads each group of a grouped table", () => {
+    const base = captured(2);
+    const figure = buildCapturedTable(document, {
+      ...base,
+      groups: [
+        { label: "Fiction", rows: base.groups[0].rows.slice(0, 1) },
+        { label: "Essays", rows: base.groups[0].rows.slice(1) },
+      ],
+    });
+
+    const headings = Array.from(figure.querySelectorAll("tr.osp-base-group th"));
+    expect(headings.map((th) => th.textContent)).toEqual(["Fiction", "Essays"]);
+    expect(headings[0].getAttribute("colspan")).toBe("2");
+    expect(figure.querySelectorAll("tbody")).toHaveLength(2);
+  });
+});
+
+describe("reemitBases with a view read from data", () => {
+  it.each(["embed", "block"] as const)("lifts the figure out of its %s wrapper and counts it", (wrapper) => {
+    const root = captureView({ claimed: 201, rows: 201, wrapper });
+
+    const stats = reemitBases(root);
+
+    expect(root.querySelector(".bases-toolbar, .bases-view, .bases-embed, .block-language-base")).toBeNull();
+    expect(root.querySelectorAll("figure.osp-base tbody tr")).toHaveLength(201);
+    expect(stats).toMatchObject({ views: 1, tables: 1, fromApi: 1, rows: 201, truncated: [], unhandled: [] });
+    expect(root.querySelector("figure")!.hasAttribute("data-osp-capture")).toBe(false);
+    expect(root.querySelector("figure")!.hasAttribute("data-osp-rows")).toBe(false);
+  });
+
+  it("still says so if it holds fewer rows than Bases reports", () => {
+    const root = captureView({ claimed: 10, rows: 7, wrapper: "embed" });
+
+    const stats = reemitBases(root);
+
+    expect(stats.truncated).toEqual(["Shelf: 7/10"]);
+    expect(root.querySelector(".osp-base-truncated")?.textContent).toContain("7 of 10");
+  });
+
+  it("says a view with no results has none", () => {
+    const root = captureView({ claimed: 0, rows: 0, wrapper: "block" });
+
+    reemitBases(root);
+
+    expect(root.querySelector(".osp-base-empty")?.textContent).toBe("No results.");
+  });
+
+  // A value Obsidian renders as a form control, such as a checkbox, has its
+  // content in a property, not in the markup.
+  it("resolves form controls in rendered values", () => {
+    installObsidianDom();
+    const root = captureView({ claimed: 1, rows: 1, wrapper: "embed" });
+    const cell = root.querySelector("td[data-property='note.author']")!;
+    cell.innerHTML = `<input type="checkbox">`;
+    (cell.querySelector("input") as HTMLInputElement).checked = true;
+
+    const stats = reemitBases(root);
+
+    expect(root.querySelector("td[data-property='note.author']")?.textContent).toBe("Yes");
+    expect(stats.inputValues).toBe(1);
+  });
+});
+
+describe("isBasesViewUnfinished with a capture view", () => {
+  it("is unfinished until the view has built its figure", () => {
+    const root = captureView({ claimed: 3, rows: 3, wrapper: "embed" });
+    const view = root.querySelector(".bases-view")!;
+    const figure = view.querySelector("figure")!;
+
+    figure.remove();
+    expect(isBasesViewUnfinished(view)).toBe(true);
+    view.append(figure);
+    expect(isBasesViewUnfinished(view)).toBe(false);
   });
 });

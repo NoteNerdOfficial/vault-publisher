@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it } from "vitest";
-import { emptyBasesStats } from "../publish/bases";
+import { CAPTURE_VIEW_TYPE, buildCapturedTable, emptyBasesStats } from "../publish/bases";
 import { captureBasesInView } from "./basesCapture";
 
 const FAST = { quietMs: 20, timeoutMs: 300, pollMs: 5 };
@@ -138,5 +138,30 @@ describe("captureBasesInView", () => {
 
     expect(result).toEqual({ captured: 0, leftUnfinished: 0 });
     expect(host.style.top).toBe("0px");
+  });
+});
+
+describe("captureBasesInView with a view read from data", () => {
+  // Built from data, the view is complete when it appears: waiting for its
+  // row count to hold still would only add the quiet period to every note.
+  it("converts it as soon as its figure exists", async () => {
+    const { host, container } = setup([]);
+    container.innerHTML =
+      `<span class="internal-embed bases-embed"><div class="bases-view" data-view-type="${CAPTURE_VIEW_TYPE}" data-view-name="Shelf"></div></span>`;
+    container.querySelector(".bases-view")!.append(
+      buildCapturedTable(document, {
+        name: "Shelf",
+        columns: [{ id: "file.name", label: "file name" }],
+        groups: [{ label: null, rows: [{ path: "a.md", title: "a", render: () => {} }] }],
+      }),
+    );
+
+    const stats = emptyBasesStats();
+    const started = performance.now();
+    const result = await captureBasesInView(host, container, stats, { ...FAST, quietMs: 1000, timeoutMs: 2000 });
+
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(result.captured).toBe(1);
+    expect(stats.fromApi).toBe(1);
   });
 });

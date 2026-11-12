@@ -101,6 +101,7 @@ import {
   suspendBackgroundThrottling,
 } from "./platform/backgroundThrottling";
 import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
+import { registerCaptureView } from "./render/basesCaptureView";
 
 /**
  * Renders a vault through Obsidian, builds a static site from the result,
@@ -394,6 +395,11 @@ export default class VaultPublisherPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+
+    // Reads every row of a Bases table from its data rather than from the
+    // grid, which only holds what fits in the window. Needs Obsidian 1.10;
+    // without it the build reads the grid as before.
+    registerCaptureView(this);
 
     this.addCommand({
       id: "report-render-timings",
@@ -2349,13 +2355,13 @@ export default class VaultPublisherPlugin extends Plugin {
     if (basesPages.length) {
       lines.push("", "## Bases", "");
       lines.push(
-        "| Page | views | tables | cards | rows | input values recovered | measurement rows dropped | unhandled |",
+        "| Page | views | read from data | tables | cards | rows | input values recovered | measurement rows dropped | unhandled |",
       );
-      lines.push("|---|---|---|---|---|---|---|---|");
+      lines.push("|---|---|---|---|---|---|---|---|---|");
       for (const p of basesPages) {
         const b = p.bases;
         lines.push(
-          `| ${p.title} | ${b.views} | ${b.tables} | ${b.cards} | ${b.rows} | ${b.inputValues} | ${b.measurementDropped} | ${b.unhandled.join(", ") || "-"} |`,
+          `| ${p.title} | ${b.views} | ${b.fromApi} | ${b.tables} | ${b.cards} | ${b.rows} | ${b.inputValues} | ${b.measurementDropped} | ${b.unhandled.join(", ") || "-"} |`,
         );
       }
       if (result.basesTruncated.length) {

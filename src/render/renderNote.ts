@@ -42,6 +42,13 @@ export interface RenderOptions {
    * decides how many rows a view has.
    */
   bases?: BasesStats;
+  /**
+   * Rewrites the note's markdown before it is rendered. Used to point Bases
+   * tables at the view type that reads every row; see
+   * publish/basesSource.ts. The source pane is read separately, so it still
+   * shows what the author wrote.
+   */
+  prepareMarkdown?: (markdown: string, sourcePath: string) => Promise<string>;
 }
 
 export interface RenderedNote {
@@ -202,6 +209,9 @@ export async function renderFile(
   host: HTMLElement,
   options: RenderOptions = {},
 ): Promise<RenderedNote> {
-  const markdown = await app.vault.cachedRead(file);
+  const source = await app.vault.cachedRead(file);
+  const markdown = options.prepareMarkdown
+    ? await options.prepareMarkdown(source, file.path)
+    : source;
   return renderMarkdownToHtml(app, markdown, file.path, host, options);
 }

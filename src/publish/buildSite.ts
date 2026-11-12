@@ -132,6 +132,8 @@ import { stampBlockIds } from "../overlay/anchor";
 import { siteCss } from "./theme";
 import { readCustomCss, withCustomCss } from "./customCss";
 import { PublishFile } from "../github/client";
+import { basesCaptureAvailable, basesSourceDeps } from "../render/basesCaptureView";
+import { rewriteBasesForCapture } from "./basesSource";
 
 /**
  * Turning a vault into a set of files ready to commit.
@@ -976,6 +978,8 @@ export async function buildSite(
   const oversizedAssets = new Map<string, string>();
 
   const host = createRenderHost();
+  // Built once: it resolves `.base` links and parses YAML for every note.
+  const basesDeps = basesSourceDeps(app);
   try {
     const renderAll = async () => {
       for (const [index, file] of selected.entries()) {
@@ -1006,6 +1010,12 @@ export async function buildSite(
         let assets = emptyAssetStats();
         const renderedNote = await renderFile(app, file, host, {
           bases,
+          // Tables read from Bases' data get every row; without the API the
+          // grid is read instead, which holds only what fits in the window.
+          prepareMarkdown: basesCaptureAvailable()
+            ? async (markdown, sourcePath) =>
+                (await rewriteBasesForCapture(markdown, sourcePath, basesDeps)).markdown
+            : undefined,
           transform: (container) => {
             // First, before anything else reads the tree: the frontmatter is
             // not content, and nothing downstream should be deciding what to
