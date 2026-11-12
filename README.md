@@ -55,6 +55,40 @@ This is about *publishing*. The tests do run in CI, in `.github/workflows/test.y
 
 The plugin commits the *built* site through the Git Data API and points GitHub Pages at the branch. No git binary, no workflow file, no `workflow` token scope.
 
+## How Bases views are published
+
+Bases draws only the rows of a view that fit in the window, so a view read
+back out of the rendered page has as many rows as the screen had room for.
+On Obsidian **1.10** or later the plugin does not read the page at all. It
+registers a view type of its own, and for a build each table, cards or list
+view is pointed at it, with everything else about the view carried over:
+filters, formulas, sort, grouping, column order and display names. Obsidian
+hands that view the query's full result, so every row is published, wherever
+the view sits in the note and however small the window is.
+
+What each layout keeps:
+
+- **Tables** keep the summary row (Sum, Average, Earliest and the rest) under
+  their columns.
+- **Cards** keep their cover images, which are copied into the site like any
+  other attachment, and the view's card size, image shape and image fit.
+- **Lists** keep their markers (bullets, numbers or none), their separator
+  and indented properties.
+- **Links** in property values become links to the published pages, in all
+  three.
+
+While the plugin is enabled, the view type appears in Bases' own view picker
+as **Static view (Vault Publisher)**. Picking it by hand is harmless: it
+draws the same static view the site gets.
+
+Other view types, such as one another plugin adds, and every view on an
+Obsidian older than 1.10, still go through the rendered page. For those the
+plugin scrolls each view to the top of the window before reading it, which
+gets as many rows as the window allows, and a view that still came out
+short stops the publish rather than going out incomplete. The message names
+each page and why. A view with no rows is published as "No results.", not
+as an empty frame, and a view type the site cannot show says so in its place.
+
 ## What decides whether a note is published
 
 Three settings, of three different shapes, because a vault that keeps
@@ -115,6 +149,25 @@ like and the rest are behind a **Show more** that expands in place. It is a
 `<details>`, so it opens with JavaScript off, and the block is bounded in
 CSS: thirty pins scroll inside their own section rather than pushing the
 tree off the panel.
+
+## Reading a published page
+
+A few things a reader gets on every page, all added by the page's one script
+and absent, rather than broken, with JavaScript off:
+
+- **The tree's own tools.** Beside the **Browse** label, as in Obsidian's file
+  explorer: **Collapse all**, and **Auto-reveal current file**, a switch that
+  opens the folders down to the page being read and scrolls its row into
+  view. The tree keeps its open folders from page to page for the visit, so a
+  collapsed tree stays collapsed with reveal off. Reveal starts on.
+- **Back to top.** A round button in the corner of the content column, shown
+  once the top of the page is most of a screen away.
+- **Zooming diagrams.** A Mermaid diagram has zoom in, zoom out, reset and full
+  screen controls that appear on hover (and stay visible on touch screens).
+  Ctrl or Cmd with the scroll wheel zooms in place, a zoomed diagram can be
+  dragged, and two fingers pinch. Full screen fills the window, where the
+  wheel zooms without a modifier, `+`, `-` and `0` zoom in, out and reset,
+  and Escape closes it.
 
 ## Publishing a prototype as well as notes
 
@@ -274,6 +327,14 @@ paragraph, which outlines it and opens a draft box with a priority chooser,
 typing, sending, and the comment appearing in the review
 panel.](media/review-flow.gif)
 
+The toolbar that switches between viewing, commenting and reviewing can be
+dragged to any of six places: the top or bottom of the window, at the left,
+the centre or the right. It snaps to the nearest one and stays there across
+pages. The review panel keeps clear of it: with the toolbar in a left or
+right corner, the panel opens on the other side, and sending the panel to
+the toolbar's side moves the toolbar across instead. A centred toolbar stays
+centred.
+
 A pin remembers the point it was dropped on twice, in document coordinates
 and as a fraction across the block it landed on, so it survives a rebuild
 that reflows the page. The panel sorts by time or by priority, filters open
@@ -308,6 +369,9 @@ src/render/     rendering a note through Obsidian and knowing when it is done
   cssProbe.ts     which stylesheets are readable, and whose they are
   dataviewRefresh.ts  holding Dataview still while we photograph it
   diagnose.ts     samples a render over time when something renders incomplete
+  basesCaptureView.ts  the Bases view type that reads every row from the data
+  basesCapture.ts      reading a view from the rendered page, at the top of
+                       the window, where the data route is not available
 src/publish/    turning rendered HTML into a site
   normalize.ts    repairs markup that a browser would rearrange on reparse
   links.ts        wikilinks to relative URLs; unpublished targets degrade safely
@@ -334,7 +398,12 @@ src/publish/    turning rendered HTML into a site
   theme.ts        the site's own stylesheet, written against those names
   customCss.ts    a stylesheet of the author's own, added to the end of it
   harvestCss.ts   lifts layout-critical rules from the running app
-  bases.ts        re-emits Bases views as semantic tables and cards
+  bases.ts        Bases views as static tables, cards and lists, and the
+                  guard against a view that came out incomplete
+  basesSource.ts  pointing a note's Bases views at the capture view before
+                  it is rendered
+  basesValues.ts  property values, links, card covers and view options, as
+                  markup
   clientScript.ts the one script a published page carries
   stableIds.ts    deterministic ids in place of Obsidian's per-render random ones
   incremental.ts  hashes rendered output, so a publish uploads only what changed
@@ -467,8 +536,9 @@ rather than trusted: anchoring in `overlayScript.test.ts`, labelling in
   published under its vault path at `assets/files/…`. Same for a file an
   as-is HTML page references. For anything that must not go out, use the
   frontmatter flag.
-- **Bases interactivity.** Views are re-emitted as our own tables and cards, which fixed the layout and recovered numeric values that were publishing blank. Sorting and view switching are gone, as with all interactivity.
-- **Bases virtualization.** The grid renders only visible rows, so a long base could publish truncated. A guard compares emitted rows against the count Bases reports and aborts the publish; it is written but not yet exercised against a large base.
+- **Bases interactivity.** Views are published as static tables, cards and lists. Sorting and view switching are gone, as with all interactivity.
+- **Some Bases views are limited by the window.** Views of a type the plugin does not draw (from another plugin, say), and every view on Obsidian before 1.10, are read from the rendered page and get only the rows that fit in the window. A long one stops the publish rather than going out short; a taller window, or Obsidian 1.10, fixes it.
+- **Bases list values are plain text.** A list property such as tags reads as words separated by spaces rather than as Obsidian's chips, and a summary over dates shows a time as well as the date.
 - **Mermaid is light-themed.** Diagrams serialize with resolved colours from Mermaid's default light theme, so a dark site needs a re-render or a colour rewrite.
 - **Mermaid needs vault consent.** Obsidian 1.14 gates diagrams per vault; the plugin detects this rather than bypassing it.
 - **dataviewjs is off by default** in Dataview's settings, and its errors would publish verbatim.
