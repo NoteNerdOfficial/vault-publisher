@@ -1166,6 +1166,7 @@ export const OVERLAY_SCRIPT = `(function () {
           side: side,
           width: width,
           sort: sortBy,
+          dock: dock,
         })
       );
     } catch (e) {}
@@ -1202,6 +1203,13 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   var width = typeof prefs.width === "number" ? prefs.width : 320;
   var sortBy = prefs.sort === "priority" ? "priority" : "time";
+  /*
+   * Where the notch is docked. Six places, each a fixed inset from the
+   * window's edges, so a docked notch stays put through a resize and can
+   * never be left half off screen by one.
+   */
+  var DOCKS = ["top-left", "top", "top-right", "bottom-left", "bottom", "bottom-right"];
+  var dock = DOCKS.indexOf(prefs.dock) >= 0 ? prefs.dock : "bottom";
 
   /* --- the vault, when it is reachable ------------------------------ */
 
@@ -1953,6 +1961,192 @@ export const OVERLAY_SCRIPT = `(function () {
   }
   notch.appendChild(modes);
   wrap.appendChild(notch);
+
+  /* --- moving the notch ---------------------------------------------- */
+
+  /*
+   * The notch can be dragged out of the way of whatever it covers, and it
+   * always comes to rest in one of six docks: top or bottom, at the left,
+   * the centre or the right. While it is held it follows the pointer
+   * freely; let go, it slides to the dock nearest where it was dropped,
+   * judged by thirds across the window and halves down it.
+   *
+   * It is picked up by the bar, not by its buttons, so every button still
+   * clicks; and a press only becomes a drag once it has moved a few pixels,
+   * so a click with a slightly unsteady hand is still a click.
+   *
+   * The comment panel and the notch never share a side. Dock the notch on
+   * the side the panel is on and the panel moves across; move the panel
+   * onto the notch's side with its own button and the notch moves instead.
+   * A notch docked in the centre is centred in the space the panel leaves
+   * rather than in the window, so it cannot end up underneath the panel
+   * either.
+   */
+  var NOTCH_INSET = 24;
+  var DRAG_THRESHOLD = 3;
+  var snapTimer = null;
+
+  function dockSide(name) {
+    if (/-left$/.test(name)) return "left";
+    if (/-right$/.test(name)) return "right";
+    return null;
+  }
+
+  function mirrorDock(name) {
+    if (/-left$/.test(name)) return name.replace(/-left$/, "-right");
+    if (/-right$/.test(name)) return name.replace(/-right$/, "-left");
+    return name;
+  }
+
+  function viewportSize() {
+    var root = document.documentElement;
+    return {
+      w: root.clientWidth || window.innerWidth,
+      h: root.clientHeight || window.innerHeight,
+    };
+  }
+
+  // How far a centred notch moves to sit in the middle of the space the open
+  // panel leaves, rather than in the middle of the window.
+  function centreShift() {
+    if (panel.hidden || dockSide(dock)) return 0;
+    var room = (width + 8) / 2;
+    return side === "right" ? -room : room;
+  }
+
+  // The dock nearest a point: thirds across, halves down.
+  function nearestDock(x, y) {
+    var size = viewportSize();
+    var col = x < size.w / 3 ? "-left" : x > (size.w * 2) / 3 ? "-right" : "";
+    return (y < size.h / 2 ? "top" : "bottom") + col;
+  }
+
+  // Where a notch of this size sits in a dock, as left and top in pixels.
+  function dockPoint(name, w, h) {
+    var size = viewportSize();
+    var s = dockSide(name);
+    var left =
+      s === "left"
+        ? NOTCH_INSET
+        : s === "right"
+          ? size.w - NOTCH_INSET - w
+          : size.w / 2 + centreShift() - w / 2;
+    var top = /^top/.test(name) ? NOTCH_INSET : size.h - NOTCH_INSET - h;
+    return { left: left, top: top };
+  }
+
+  // Hands the notch back to the stylesheet's dock rules.
+  function placeNotch() {
+    notch.setAttribute("data-dock", dock);
+    notch.style.left = "";
+    notch.style.top = "";
+    notch.style.right = "";
+    notch.style.bottom = "";
+    notch.style.transform = "";
+    notch.style.setProperty("--co-notch-shift", centreShift() + "px");
+  }
+
+  // Holds the notch at a pixel position, for a drag or a slide.
+  function holdNotch(left, top) {
+    notch.style.left = left + "px";
+    notch.style.top = top + "px";
+    notch.style.right = "auto";
+    notch.style.bottom = "auto";
+    notch.style.transform = "none";
+  }
+
+  // The panel moves off the notch's side, never the other way round here.
+  function clearPanelOfNotch() {
+    var s = dockSide(dock);
+    if (s && s === side) {
+      side = s === "right" ? "left" : "right";
+      panel.setAttribute("data-side", side);
+    }
+  }
+
+  // Slides the notch from wherever it is now into a dock.
+  function snapNotch(next) {
+    var rect = notch.getBoundingClientRect();
+    holdNotch(rect.left, rect.top);
+    dock = next;
+    clearPanelOfNotch();
+    writePrefs();
+    var to = dockPoint(next, rect.width, rect.height);
+    // A frame at the old position first, or the browser has nothing to
+    // animate from and simply jumps.
+    void notch.offsetWidth;
+    notch.setAttribute("data-snapping", "");
+    holdNotch(to.left, to.top);
+    if (snapTimer !== null) clearTimeout(snapTimer);
+    snapTimer = setTimeout(function () {
+      snapTimer = null;
+      notch.removeAttribute("data-snapping");
+      placeNotch();
+    }, 220);
+  }
+
+  notch.addEventListener("pointerdown", function (event) {
+    if (event.button !== 0) return;
+    if (event.target && event.target.closest && event.target.closest("button, .co-menu")) return;
+    var rect = notch.getBoundingClientRect();
+    var startX = event.clientX;
+    var startY = event.clientY;
+    var offsetX = startX - rect.left;
+    var offsetY = startY - rect.top;
+    var dragging = false;
+    var pointerId = event.pointerId;
+    // No text selection while the bar is held.
+    event.preventDefault();
+
+    function move(moveEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
+      if (!dragging) {
+        if (
+          Math.abs(moveEvent.clientX - startX) < DRAG_THRESHOLD &&
+          Math.abs(moveEvent.clientY - startY) < DRAG_THRESHOLD
+        ) {
+          return;
+        }
+        dragging = true;
+        closeMenu();
+        if (snapTimer !== null) {
+          clearTimeout(snapTimer);
+          snapTimer = null;
+          notch.removeAttribute("data-snapping");
+        }
+        notch.setAttribute("data-dragging", "");
+        // Pointer capture keeps the drag alive over an iframe, which would
+        // otherwise swallow the moves. Not every environment has it.
+        if (notch.setPointerCapture) {
+          try {
+            notch.setPointerCapture(pointerId);
+          } catch (e) {}
+        }
+      }
+      var size = viewportSize();
+      var left = Math.max(0, Math.min(size.w - rect.width, moveEvent.clientX - offsetX));
+      var top = Math.max(0, Math.min(size.h - rect.height, moveEvent.clientY - offsetY));
+      holdNotch(left, top);
+    }
+
+    function up(upEvent) {
+      if (upEvent.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+      if (!dragging) return;
+      notch.removeAttribute("data-dragging");
+      var now = notch.getBoundingClientRect();
+      snapNotch(nearestDock(now.left + now.width / 2, now.top + now.height / 2));
+    }
+
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+  });
+
+  clearPanelOfNotch();
+  placeNotch();
 
   var menu = null;
 
@@ -4009,6 +4203,8 @@ export const OVERLAY_SCRIPT = `(function () {
       else modeBtns[i].removeAttribute("data-active");
     }
     modeSlider.setAttribute("data-at", String(indexOfMode(next)));
+    clearPanelOfNotch();
+    placeNotch();
     render();
   }
 
@@ -4047,6 +4243,10 @@ export const OVERLAY_SCRIPT = `(function () {
   sideBtn.addEventListener("click", function () {
     side = side === "right" ? "left" : "right";
     panel.setAttribute("data-side", side);
+    // Asked for on purpose, so the panel stays where it was sent and the
+    // notch is the one that makes way.
+    if (dockSide(dock) === side) snapNotch(mirrorDock(dock));
+    else placeNotch();
     writePrefs();
     renderPanel();
   });
@@ -4064,6 +4264,7 @@ export const OVERLAY_SCRIPT = `(function () {
       // The floor is where the order row stops fitting beside its label.
       width = Math.max(260, Math.min(560, startWidth + delta));
       panel.style.width = width + "px";
+      placeNotch();
     }
 
     function stop() {

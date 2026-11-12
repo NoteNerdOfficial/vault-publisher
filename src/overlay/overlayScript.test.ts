@@ -4928,3 +4928,179 @@ describe("an anchor whose suffix renumbered", () => {
     expect(shadow.textContent).not.toContain("Anchor lost");
   });
 });
+
+describe("moving the notch", () => {
+  // jsdom lays nothing out, so the notch gets a 200 by 40 box that follows
+  // whatever position it is held at, and sits bottom-centre otherwise. The
+  // window is jsdom's 1024 by 768.
+  function notchOf(shadow: ShadowRoot): HTMLElement {
+    const notch = shadow.querySelector(".co-notch") as HTMLElement;
+    notch.getBoundingClientRect = () => {
+      const left = notch.style.left ? parseFloat(notch.style.left) : 412;
+      const top = notch.style.top ? parseFloat(notch.style.top) : 704;
+      return { left, top, width: 200, height: 40, right: left + 200, bottom: top + 40, x: left, y: top } as DOMRect;
+    };
+    return notch;
+  }
+
+  function pointer(type: string, target: EventTarget, x: number, y: number): void {
+    target.dispatchEvent(
+      new PointerEvent(type, { bubbles: true, composed: true, clientX: x, clientY: y, button: 0, pointerId: 1 }),
+    );
+  }
+
+  /** Picks the notch up by its bar, moves it to a point and lets go. */
+  async function drag(shadow: ShadowRoot, x: number, y: number, from?: Element): Promise<void> {
+    const notch = notchOf(shadow);
+    pointer("pointerdown", from ?? notch, 414, 724);
+    pointer("pointermove", window, (414 + x) / 2, (724 + y) / 2);
+    pointer("pointermove", window, x, y);
+    pointer("pointerup", window, x, y);
+    // The slide into the dock takes 0.2s before the dock is handed back.
+    await new Promise((resolve) => setTimeout(resolve, 260));
+  }
+
+  function prefs(): Record<string, unknown> {
+    return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+  }
+
+  it("starts docked at the bottom centre", () => {
+    mountPage();
+    const shadow = run();
+
+    expect(shadow.querySelector(".co-notch")?.getAttribute("data-dock")).toBe("bottom");
+  });
+
+  it.each([
+    [100, 100, "top-left"],
+    [512, 100, "top"],
+    [950, 100, "top-right"],
+    [100, 700, "bottom-left"],
+    [512, 600, "bottom"],
+    [950, 700, "bottom-right"],
+  ])("comes to rest in the dock nearest a drop at %i,%i (%s)", async (x, y, expected) => {
+    mountPage();
+    const shadow = run();
+
+    await drag(shadow, x, y);
+
+    const notch = shadow.querySelector(".co-notch") as HTMLElement;
+    expect(notch.getAttribute("data-dock")).toBe(expected);
+    // Handed back to the stylesheet's dock rules, not left at a pixel.
+    expect(notch.style.left).toBe("");
+    expect(notch.hasAttribute("data-dragging")).toBe(false);
+  });
+
+  it("follows the pointer while it is held, and stays on screen", () => {
+    mountPage();
+    const shadow = run();
+    const notch = notchOf(shadow);
+
+    pointer("pointerdown", notch, 414, 724);
+    pointer("pointermove", window, 5000, -300);
+
+    expect(notch.hasAttribute("data-dragging")).toBe(true);
+    expect(notch.style.left).toBe("824px");
+    expect(notch.style.top).toBe("0px");
+    pointer("pointerup", window, 5000, -300);
+  });
+
+  it("remembers its dock for the next page", async () => {
+    mountPage();
+    await drag(run(), 100, 100);
+    expect(prefs().dock).toBe("top-left");
+
+    document.body.innerHTML = "";
+    mountPage();
+    const shadow = run();
+
+    expect(shadow.querySelector(".co-notch")?.getAttribute("data-dock")).toBe("top-left");
+  });
+
+  // A slightly unsteady click is still a click.
+  it("does not move for a press that barely moves", async () => {
+    mountPage();
+    const shadow = run();
+
+    await drag(shadow, 416, 725);
+
+    expect(shadow.querySelector(".co-notch")?.getAttribute("data-dock")).toBe("bottom");
+    expect(prefs().dock).toBeUndefined();
+  });
+
+  it("is not picked up by its buttons, which still work", async () => {
+    mountPage();
+    const shadow = run();
+    const commentBtn = shadow.querySelector('.co-mode[data-mode="comment"]')!;
+
+    await drag(shadow, 100, 100, commentBtn);
+    click(commentBtn);
+
+    expect(shadow.querySelector(".co-notch")?.getAttribute("data-dock")).toBe("bottom");
+    expect(commentBtn.hasAttribute("data-active")).toBe(true);
+  });
+
+  describe("and the comment panel", () => {
+    it("sends the panel to the other side when docked on its side", async () => {
+      mountPage();
+      const shadow = run();
+      mode(shadow, "review");
+      const panel = shadow.querySelector(".co-panel")!;
+      expect(panel.getAttribute("data-side")).toBe("right");
+
+      await drag(shadow, 950, 700);
+
+      expect(panel.getAttribute("data-side")).toBe("left");
+      expect(prefs().side).toBe("left");
+    });
+
+    it("leaves the panel where it is when docked on the other side or the centre", async () => {
+      mountPage();
+      const shadow = run();
+      mode(shadow, "review");
+      const panel = shadow.querySelector(".co-panel")!;
+
+      await drag(shadow, 100, 700);
+      expect(panel.getAttribute("data-side")).toBe("right");
+      await drag(shadow, 512, 100);
+      expect(panel.getAttribute("data-side")).toBe("right");
+    });
+
+    // The panel was sent there on purpose, so the notch is what makes way.
+    it("moves the notch across when the panel is sent to its side", async () => {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ side: "right", dock: "bottom-left" }));
+      mountPage();
+      const shadow = run();
+      notchOf(shadow);
+      mode(shadow, "review");
+
+      click(shadow.querySelector(".co-panel-acts .co-icon-btn"));
+      await new Promise((resolve) => setTimeout(resolve, 260));
+
+      expect(shadow.querySelector(".co-panel")?.getAttribute("data-side")).toBe("left");
+      expect(shadow.querySelector(".co-notch")?.getAttribute("data-dock")).toBe("bottom-right");
+    });
+
+    it("settles a saved clash on load, in the notch's favour", () => {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ side: "right", dock: "top-right" }));
+      mountPage();
+      const shadow = run();
+
+      expect(shadow.querySelector(".co-panel")?.getAttribute("data-side")).toBe("left");
+    });
+
+    it("centres a centred notch in the space the open panel leaves", () => {
+      mountPage();
+      const shadow = run();
+      const notch = shadow.querySelector(".co-notch") as HTMLElement;
+      expect(notch.style.getPropertyValue("--co-notch-shift")).toBe("0px");
+
+      mode(shadow, "review");
+      // Half of the 320px panel and its 8px margin, away from the panel.
+      expect(notch.style.getPropertyValue("--co-notch-shift")).toBe("-164px");
+
+      mode(shadow, "view");
+      expect(notch.style.getPropertyValue("--co-notch-shift")).toBe("0px");
+    });
+  });
+});

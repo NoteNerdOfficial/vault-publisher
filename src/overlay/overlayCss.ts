@@ -176,9 +176,6 @@ export const OVERLAY_CSS = `
 
 .osp-overlay .co-notch {
   position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -189,7 +186,29 @@ export const OVERLAY_CSS = `
   border-radius: 24px;
   box-shadow: var(--co-shadow);
   z-index: 1;
+  /* Picked up by the bar itself; its buttons keep their own cursor. */
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
+
+/* The six docks, each a fixed inset from the window's edges. A centred dock
+   is moved by --co-notch-shift to sit in the middle of the space an open
+   panel leaves, rather than under the panel. */
+.osp-overlay .co-notch[data-dock^="bottom"] { bottom: 24px; }
+.osp-overlay .co-notch[data-dock^="top"] { top: 24px; }
+.osp-overlay .co-notch[data-dock$="-left"] { left: 24px; }
+.osp-overlay .co-notch[data-dock$="-right"] { right: 24px; }
+.osp-overlay .co-notch[data-dock="top"],
+.osp-overlay .co-notch[data-dock="bottom"] {
+  left: calc(50% + var(--co-notch-shift, 0px));
+  transform: translateX(-50%);
+}
+.osp-overlay .co-notch[data-dragging] { cursor: grabbing; }
+.osp-overlay .co-notch[data-snapping] {
+  transition: left 0.2s var(--co-ease), top 0.2s var(--co-ease);
+}
+.osp-overlay .co-notch button { cursor: pointer; }
 
 .osp-overlay .co-notch-btn {
   width: 32px;
@@ -268,6 +287,10 @@ export const OVERLAY_CSS = `
   animation: co-rise 0.16s var(--co-ease);
   z-index: 1;
 }
+/* A notch docked at the top opens its menu downwards, and one docked at the
+   right lines the menu up with its right edge, so it stays on screen. */
+.osp-overlay .co-notch[data-dock^="top"] .co-menu { bottom: auto; top: calc(100% + 8px); }
+.osp-overlay .co-notch[data-dock$="-right"] .co-menu { left: auto; right: 0; }
 .osp-overlay .co-menu-item {
   display: flex;
   align-items: center;
