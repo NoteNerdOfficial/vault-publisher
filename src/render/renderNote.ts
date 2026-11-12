@@ -1,6 +1,8 @@
 import { App, Component, MarkdownRenderer, TFile } from "obsidian";
 import { DEFAULT_SETTLE, SettleOptions, SettleResult, waitForSettle } from "./settle";
 import { NormalizeStats, normalizeParagraphNesting } from "../publish/normalize";
+import type { BasesStats } from "../publish/bases";
+import { BasesCaptureResult, captureBasesInView } from "./basesCapture";
 
 /**
  * Rendering one note the way Obsidian would, then taking the HTML.
@@ -33,6 +35,13 @@ export interface RenderOptions {
    * trip that would have to be proven lossless.
    */
   transform?: (container: HTMLElement) => void;
+  /**
+   * When given, each Bases view is brought to the top of the window, waited
+   * for and converted to static markup before the general settle wait, with
+   * what that did added here. See render/basesCapture.ts for why position
+   * decides how many rows a view has.
+   */
+  bases?: BasesStats;
 }
 
 export interface RenderedNote {
@@ -52,6 +61,8 @@ export interface RenderedNote {
   error: string | null;
   /** What the pre-serialization cleanup had to fix. */
   normalize: NormalizeStats;
+  /** What capturing Bases views in view did, when it ran. */
+  basesCapture: BasesCaptureResult | null;
 }
 
 /**
@@ -73,8 +84,9 @@ export function createRenderHost(widthPx = HOST_WIDTH_PX): HTMLElement {
       "left: 0",
       "top: 0",
       `width: ${widthPx}px`,
-      // Unbounded height: a clipped host could let a virtualizing view decide
-      // most of its rows are off screen and never build them.
+      // Unbounded height, though it turned out not to be enough for Bases:
+      // it builds rows only down to the bottom of the window, whatever the
+      // host's height. render/basesCapture.ts moves the host to deal with it.
       "height: auto",
       "overflow: visible",
       // Invisible without being undetectable: opacity and a negative z-index
@@ -132,13 +144,20 @@ export async function renderMarkdownToHtml(
   let renderMs = 0;
   let normalizeMs = 0;
   let serializeMs = 0;
+  let basesCapture: BasesCaptureResult | null = null;
 
   try {
     const renderStart = performance.now();
     await MarkdownRenderer.render(app, markdown, container, sourcePath, component);
     renderMs = performance.now() - renderStart;
 
-    settle = await waitForSettle(container, { ...DEFAULT_SETTLE, ...options.settle });
+    // Before the general wait, so a view the capture could not finish is
+    // still there for it to wait on, judge and name.
+    if (options.bases) {
+      basesCapture = await captureBasesInView(host, container, options.bases);
+    }
+
+    settle =await waitForSettle(container, { ...DEFAULT_SETTLE, ...options.settle });
 
     // Must happen on the live tree, before innerHTML: once serialized, the
     // information about what belonged inside which paragraph is already gone.
@@ -172,6 +191,7 @@ export async function renderMarkdownToHtml(
     totalMs: performance.now() - started,
     error,
     normalize,
+    basesCapture,
   };
 }
 

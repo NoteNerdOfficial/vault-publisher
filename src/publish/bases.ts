@@ -84,49 +84,64 @@ const CHROME_SELECTOR = [
 /**
  * Rewrites every Bases view under `root`. Returns what it did, so the build
  * can assert on it rather than trust it.
+ *
+ * Pass `stats` to add to a tally already started: views converted early, while
+ * the note was still rendering, are counted there, and the rest are added here.
  */
-export function reemitBases(root: HTMLElement): BasesStats {
-  const stats = emptyBasesStats();
-  const doc = root.ownerDocument;
-
+export function reemitBases(
+  root: HTMLElement,
+  stats: BasesStats = emptyBasesStats(),
+): BasesStats {
   for (const view of Array.from(root.querySelectorAll(".bases-view"))) {
-    stats.views++;
-    const type = view.getAttribute("data-view-type") ?? "";
-    const name = view.getAttribute("data-view-name") ?? "";
-    const claimed = claimedResultCount(view);
+    reemitBasesView(view, stats);
+  }
+  return stats;
+}
 
-    if (!REEMITTED_TYPES.has(type)) {
-      // We would be guessing at a shape we have never seen, so we do not
-      // convert it. Leaving it in place was the old answer, and it published
-      // Bases' toolbar with nothing under it, which reads as an empty result
-      // rather than an unsupported one. Saying so is the honest version.
-      stats.unhandled.push(`${name || "(unnamed)"} (${type || "no type"})`);
-      replaceView(view, unsupportedFigure(doc, type, name));
-      continue;
-    }
+/** Rewrites one Bases view in place, adding what it did to `stats`. */
+export function reemitBasesView(view: Element, stats: BasesStats): void {
+  const doc = view.ownerDocument;
+  stats.views++;
+  const type = view.getAttribute("data-view-type") ?? "";
+  const name = view.getAttribute("data-view-name") ?? "";
+  const claimed = claimedResultCount(view);
 
-    // A view with no data rows still gets a figure. Returning nothing here
-    // used to file it under `unhandled` and leave the raw toolbar in place,
-    // which is how a view whose only row was Bases' measurement row
-    // published as "N results" and no data, without an error.
-    const figure =
-      (type === "table"
-        ? buildTable(doc, view, name, stats)
-        : buildCards(doc, view, name, stats)) ?? emptyFigure(doc, type, name, claimed);
-    if (type === "table") stats.tables++;
-    else stats.cards++;
-
-    const emitted = Number(figure.dataset.ospRows ?? "0");
-    if (claimed !== null && emitted < claimed) {
-      stats.truncated.push(`${name || type}: ${emitted}/${claimed}`);
-      noteTruncation(figure, emitted, claimed);
-    }
-    delete figure.dataset.ospRows;
-
-    replaceView(view, figure);
+  if (!REEMITTED_TYPES.has(type)) {
+    // We would be guessing at a shape we have never seen, so we do not
+    // convert it. Leaving it in place was the old answer, and it published
+    // Bases' toolbar with nothing under it, which reads as an empty result
+    // rather than an unsupported one. Saying so is the honest version.
+    stats.unhandled.push(`${name || "(unnamed)"} (${type || "no type"})`);
+    replaceView(view, unsupportedFigure(doc, type, name));
+    return;
   }
 
-  return stats;
+  // A view with no data rows still gets a figure. Returning nothing here
+  // used to file it under `unhandled` and leave the raw toolbar in place,
+  // which is how a view whose only row was Bases' measurement row
+  // published as "N results" and no data, without an error.
+  const figure =
+    (type === "table"
+      ? buildTable(doc, view, name, stats)
+      : buildCards(doc, view, name, stats)) ?? emptyFigure(doc, type, name, claimed);
+  if (type === "table") stats.tables++;
+  else stats.cards++;
+
+  const emitted = Number(figure.dataset.ospRows ?? "0");
+  if (claimed !== null && emitted < claimed) {
+    stats.truncated.push(`${name || type}: ${emitted}/${claimed}`);
+    noteTruncation(figure, emitted, claimed);
+  }
+  delete figure.dataset.ospRows;
+
+  replaceView(view, figure);
+}
+
+/** Rows of real data in a view, leaving out Bases' measurement row. */
+export function basesDataRowCount(view: Element): number {
+  return Array.from(
+    view.querySelectorAll(".bases-tbody > .bases-tr, .bases-cards-item"),
+  ).filter((row) => !isMeasurementRow(row)).length;
 }
 
 /**
@@ -292,10 +307,7 @@ export function isBasesViewUnfinished(view: Element): boolean {
   // Data rows only. Bases renders a hidden measurement row before any real
   // ones, and counting it called a view finished with no data in it. The
   // converter then dropped that row and had nothing left to publish.
-  const rows = Array.from(
-    view.querySelectorAll(".bases-tbody > .bases-tr, .bases-cards-item"),
-  ).filter((row) => !isMeasurementRow(row)).length;
-  if (rows > 0) return false;
+  if (basesDataRowCount(view) > 0) return false;
 
   // No rows. The only reading of that which means "finished" is a view whose
   // own toolbar says there are none to show.

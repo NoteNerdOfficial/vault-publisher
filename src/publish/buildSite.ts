@@ -999,10 +999,13 @@ export async function buildSite(
         // does its own `cachedRead`, so this is a cache hit, and the render
         // path stays about rendering.
         const source = noteSource(await app.vault.cachedRead(file));
-        let bases = emptyBasesStats();
+        // Started here and handed to the render, which converts each Bases
+        // view while it is in view and counts it; the transform adds the rest.
+        const bases = emptyBasesStats();
         let privacy = emptyPrivacyReport();
         let assets = emptyAssetStats();
         const renderedNote = await renderFile(app, file, host, {
+          bases,
           transform: (container) => {
             // First, before anything else reads the tree: the frontmatter is
             // not content, and nothing downstream should be deciding what to
@@ -1013,7 +1016,7 @@ export async function buildSite(
             // Before link rewriting: re-emitting moves cell nodes rather than
             // flattening them to text, so the `.internal-link` elements a
             // Bases cell contains are still there for the rewriter to find.
-            bases = reemitBases(container);
+            reemitBases(container, bases);
             // After the Bases re-emitter, so its tables are wrapped and its
             // numeric columns found by the same pass as everyone else's.
             prepareCodeBlocks(container);
