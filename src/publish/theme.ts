@@ -784,6 +784,85 @@ body {
 .markdown-rendered .mermaid { margin: 0 0 1.5rem; text-align: center; }
 .markdown-rendered .mermaid svg { max-width: 100%; height: auto; }
 
+/* --- diagrams: zoom and full screen ---------------------------------- *
+ * The controls appear when a diagram is pointed at or focused, and stay
+ * on a screen that cannot hover. A diagram at its normal size lets a touch
+ * scroll the page; a zoomed one takes the touch for itself, to pan. */
+.markdown-rendered .mermaid[data-osp-diagram] {
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-x pan-y;
+}
+.markdown-rendered .mermaid[data-osp-zoomed] { touch-action: none; cursor: grab; }
+.markdown-rendered .mermaid[data-osp-panning],
+.osp-diagram-stage[data-osp-panning] { cursor: grabbing; }
+.osp-diagram-canvas { transform-origin: 0 0; }
+
+.osp-diagram-tools {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--osp-bg);
+  border: 1px solid var(--osp-border);
+  border-radius: var(--osp-radius);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 1;
+}
+.markdown-rendered .mermaid[data-osp-diagram]:hover .osp-diagram-tools,
+.markdown-rendered .mermaid[data-osp-diagram]:focus-within .osp-diagram-tools,
+.markdown-rendered .mermaid[data-osp-zoomed] .osp-diagram-tools { opacity: 1; }
+@media (hover: none) {
+  .osp-diagram-tools { opacity: 1; }
+}
+
+.osp-diagram-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--osp-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: max(4px, calc(var(--osp-radius) - 2px));
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.osp-diagram-btn:hover { background: var(--osp-hover); color: var(--osp-text); }
+.osp-diagram-btn:active { background: var(--osp-press); }
+
+/* Full screen: the page is out of the way, so the wheel zooms and a drag
+   pans without asking. Above the site's own layers. */
+.osp-diagram-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  background: var(--osp-bg);
+}
+.osp-diagram-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
+.osp-diagram-stage .mermaid { margin: 0; }
+.osp-diagram-viewer .osp-diagram-tools {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  opacity: 1;
+}
+:root[data-osp-viewing] body { overflow: hidden; }
+
 .markdown-rendered .mermaid rect.actor,
 .markdown-rendered .mermaid rect.labelBox,
 .markdown-rendered .mermaid .node rect,
@@ -2809,6 +2888,7 @@ html { scroll-behavior: smooth; }
   /* Paper does not scroll: nothing may be left outside the edge of a block,
      and no control may be printed that could not be pressed. */
   .osp-code-tools { display: none; }
+  .osp-diagram-tools { display: none; }
   .osp-heading-link { display: none; }
   .osp-code pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
   .osp-scroller {
