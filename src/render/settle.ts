@@ -330,6 +330,12 @@ export interface SettleResult {
   /** Placeholders still unfilled when the wait ended. Above zero means the
    * page serialized with visibly incomplete content. */
   pendingAtEnd: number;
+  /**
+   * What was still unfinished when the wait ended, from `incompleteReason`,
+   * or null when nothing was. With it an abort can say which page was
+   * unfinished and why, not only how many were.
+   */
+  pendingReason: string | null;
 }
 
 /**
@@ -394,6 +400,7 @@ export async function waitForSettle(
       lastMutationAtMs: null,
       skipped: true,
       pendingAtEnd: 0,
+      pendingReason: null,
       reason: "fast-path",
     };
   }
@@ -410,6 +417,7 @@ export async function waitForSettle(
       lastMutationAtMs: null,
       skipped: false,
       pendingAtEnd: 0,
+      pendingReason: null,
       reason: "content-complete",
     };
   }
@@ -435,6 +443,7 @@ export async function waitForSettle(
         lastMutationAtMs,
         skipped: false,
         pendingAtEnd: countPendingPlaceholders(el),
+        pendingReason: incompleteReason(el),
         reason,
       });
     };

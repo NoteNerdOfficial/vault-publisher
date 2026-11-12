@@ -2014,6 +2014,15 @@ export default class VaultPublisherPlugin extends Plugin {
         for (const view of result.basesTruncated) say(`  shortened: ${view}`);
       }
 
+      // Published as a note saying the view cannot be shown, which is honest
+      // on the page but easy to miss from here, so it is named here too.
+      if (result.basesUnhandled.length) {
+        say(
+          `${result.basesUnhandled.length} bases view(s) of an unsupported type published as a notice, see the build report`,
+        );
+        for (const view of result.basesUnhandled) say(`  unsupported: ${view}`);
+      }
+
       if (this.settings.site.failOnTruncatedBase && result.basesTruncated.length) {
         say(
           `ABORTED: refusing to publish with ${result.basesTruncated.length} shortened bases view(s)`,
@@ -2030,6 +2039,13 @@ export default class VaultPublisherPlugin extends Plugin {
         say(
           `ABORTED: ${result.invalidNesting} blocks would break on reparse, ${result.incompletePages} pages serialized incomplete, ${result.loadingPlaceholders} blocks still loading`,
         );
+        for (const page of result.culprits.incomplete) say(`  incomplete: ${page}`);
+        for (const page of result.culprits.loadingPlaceholders) {
+          say(`  still loading: ${page}`);
+        }
+        for (const page of result.culprits.invalidNesting) {
+          say(`  would break on reparse: ${page}`);
+        }
         await this.writePublishLog(log);
         return;
       }
@@ -2133,6 +2149,7 @@ export default class VaultPublisherPlugin extends Plugin {
     lines.push(`Total: ${Math.round(result.totalMs)}ms`);
     lines.push(`Blocks that would break on reparse: ${result.invalidNesting}`);
     lines.push(`Pages serialized incomplete: ${result.incompletePages}`);
+    for (const page of result.culprits.incomplete) lines.push(`- ${page}`);
     lines.push(`Blocks still showing a loading placeholder: ${result.loadingPlaceholders}`);
     // Said whether or not it worked. A stylesheet that did not load looks
     // from the site exactly like one whose rules do not work, and the
@@ -2344,6 +2361,10 @@ export default class VaultPublisherPlugin extends Plugin {
       if (result.basesTruncated.length) {
         lines.push("", "Truncated views (emitted/total):", "");
         for (const v of result.basesTruncated) lines.push(`- ${v}`);
+      }
+      if (result.basesUnhandled.length) {
+        lines.push("", "Unsupported views, published as a notice:", "");
+        for (const v of result.basesUnhandled) lines.push(`- ${v}`);
       }
     }
 

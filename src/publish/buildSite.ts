@@ -480,6 +480,8 @@ export interface PageResult {
    * that must not publish.
    */
   incomplete: boolean;
+  /** What was still unfinished when an incomplete page gave up, else null. */
+  incompleteReason: string | null;
   /** What re-emitting the note's Bases views did. */
   bases: BasesStats;
   /** Content from unpublished notes found on this page. */
@@ -506,6 +508,16 @@ export interface BuildResult {
   /** Pages that serialized with unfilled content. Must be zero. */
   incompletePages: number;
   /**
+   * The pages behind each of the three counts above, so an abort can name
+   * them rather than give only a count.
+   * Incomplete pages carry the reason as "path: reason".
+   */
+  culprits: {
+    invalidNesting: string[];
+    loadingPlaceholders: string[];
+    incomplete: string[];
+  };
+  /**
    * Bases views whose rows did not all reach the page, as "name: emitted/total".
    *
    * Bases virtualizes its grid, so a base with more rows than the render host
@@ -514,7 +526,10 @@ export interface BuildResult {
    * rather than left in a per-page field.
    */
   basesTruncated: string[];
-  /** Bases view types we do not re-emit, so they published as raw app DOM. */
+  /**
+   * Bases views of a type we do not re-emit, as "path name (type)". Each is
+   * published as a note saying it cannot be shown, not as raw app DOM.
+   */
   basesUnhandled: string[];
   /** Every unpublished note whose content reached a page, with where. */
   privacyLeaks: (Leak & { page: string })[];
@@ -1072,6 +1087,11 @@ export async function buildSite(
           incomplete:
             !renderedNote.settle.settled &&
             renderedNote.settle.pendingAtEnd > 0,
+          incompleteReason:
+            !renderedNote.settle.settled && renderedNote.settle.pendingAtEnd > 0
+              ? (renderedNote.settle.pendingReason ??
+                `${renderedNote.settle.pendingAtEnd} unfilled placeholders`)
+              : null,
           bases,
           privacy,
           assets,
@@ -1684,14 +1704,16 @@ export async function buildSite(
   const ourPages = files.filter(
     (f) => f.path.endsWith(".html") && !publishedAsIs.has(f.path),
   );
-  const invalidNesting = ourPages.reduce(
-    (sum, f) => sum + countInvalidNesting(f.content as string),
-    0,
-  );
-  const loadingPlaceholders = ourPages.reduce(
-    (sum, f) => sum + countLoadingPlaceholders(f.content as string),
-    0,
-  );
+  const nestingByPage = ourPages.map((f) => ({
+    path: f.path,
+    count: countInvalidNesting(f.content as string),
+  }));
+  const loadingByPage = ourPages.map((f) => ({
+    path: f.path,
+    count: countLoadingPlaceholders(f.content as string),
+  }));
+  const invalidNesting = nestingByPage.reduce((sum, p) => sum + p.count, 0);
+  const loadingPlaceholders = loadingByPage.reduce((sum, p) => sum + p.count, 0);
 
   return {
     files,
@@ -1701,11 +1723,22 @@ export async function buildSite(
     invalidNesting,
     loadingPlaceholders,
     incompletePages: pages.filter((p) => p.incomplete).length,
+    culprits: {
+      invalidNesting: nestingByPage
+        .filter((p) => p.count > 0)
+        .map((p) => `${p.path} (${p.count})`),
+      loadingPlaceholders: loadingByPage
+        .filter((p) => p.count > 0)
+        .map((p) => `${p.path} (${p.count})`),
+      incomplete: pages
+        .filter((p) => p.incomplete)
+        .map((p) => `${p.sourcePath}: ${p.incompleteReason ?? "unknown"}`),
+    },
     basesTruncated: pages.flatMap((p) =>
       p.bases.truncated.map((t) => `${p.sourcePath} ${t}`),
     ),
-    basesUnhandled: Array.from(
-      new Set(pages.flatMap((p) => p.bases.unhandled)),
+    basesUnhandled: pages.flatMap((p) =>
+      p.bases.unhandled.map((u) => `${p.sourcePath} ${u}`),
     ),
     privacyLeaks: pages.flatMap((p) =>
       p.privacy.leaks.map((leak) => ({ ...leak, page: p.url })),

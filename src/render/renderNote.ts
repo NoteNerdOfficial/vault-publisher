@@ -124,6 +124,7 @@ export async function renderMarkdownToHtml(
     lastMutationAtMs: null,
     skipped: false,
     pendingAtEnd: 0,
+    pendingReason: null,
     reason: "fast-path",
   };
   let html = "";

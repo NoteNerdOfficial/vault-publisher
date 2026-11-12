@@ -35,7 +35,14 @@ export interface BasesStats {
   /** Views re-emitted, by kind. */
   tables: number;
   cards: number;
-  /** View types we do not know how to re-emit, left untouched. */
+  /**
+   * Views of a type we do not know how to re-emit, as "name (type)".
+   *
+   * These used to be left in place, which published Bases' own toolbar and
+   * nothing else: a "N results" label over an empty space. They are now
+   * replaced with a note saying the view is not supported, and listed here
+   * so the publish log can name them.
+   */
   unhandled: string[];
   rows: number;
   /** Cells whose value came from a form control and would have published blank. */
@@ -88,22 +95,26 @@ export function reemitBases(root: HTMLElement): BasesStats {
     const name = view.getAttribute("data-view-name") ?? "";
     const claimed = claimedResultCount(view);
 
-    let figure: HTMLElement | null = null;
-    if (type === "table") {
-      figure = buildTable(doc, view, name, stats);
-      if (figure) stats.tables++;
-    } else if (type === "cards") {
-      figure = buildCards(doc, view, name, stats);
-      if (figure) stats.cards++;
-    }
-
-    if (!figure) {
-      // Leaving an unknown view alone is worse-looking but honest: we would
-      // otherwise be guessing at a shape we have never seen, and silently
-      // dropping whatever did not fit the guess.
-      stats.unhandled.push(type || "(no type)");
+    if (!REEMITTED_TYPES.has(type)) {
+      // We would be guessing at a shape we have never seen, so we do not
+      // convert it. Leaving it in place was the old answer, and it published
+      // Bases' toolbar with nothing under it, which reads as an empty result
+      // rather than an unsupported one. Saying so is the honest version.
+      stats.unhandled.push(`${name || "(unnamed)"} (${type || "no type"})`);
+      replaceView(view, unsupportedFigure(doc, type, name));
       continue;
     }
+
+    // A view with no data rows still gets a figure. Returning nothing here
+    // used to file it under `unhandled` and leave the raw toolbar in place,
+    // which is how a view whose only row was Bases' measurement row
+    // published as "N results" and no data, without an error.
+    const figure =
+      (type === "table"
+        ? buildTable(doc, view, name, stats)
+        : buildCards(doc, view, name, stats)) ?? emptyFigure(doc, type, name, claimed);
+    if (type === "table") stats.tables++;
+    else stats.cards++;
 
     const emitted = Number(figure.dataset.ospRows ?? "0");
     if (claimed !== null && emitted < claimed) {
@@ -143,6 +154,46 @@ function noteTruncation(
     `Showing ${emitted} of ${claimed} rows. ` +
     "This view is interactive in Obsidian.";
   figure.append(note);
+}
+
+/** View types `reemitBases` knows how to convert. */
+const REEMITTED_TYPES = new Set(["table", "cards"]);
+
+/**
+ * The figure for a supported view that reached us with no data rows.
+ *
+ * When Bases itself reports none, that is a finished, empty result and says
+ * so. Otherwise the rows are missing, and the truncation note added by the
+ * caller says how many.
+ */
+function emptyFigure(
+  doc: Document,
+  type: string,
+  name: string,
+  claimed: number | null,
+): HTMLElement {
+  const figure = buildFigure(doc, type, name);
+  figure.dataset.ospRows = "0";
+  if (claimed === 0) {
+    const note = doc.createElement("p");
+    note.className = "osp-base-empty";
+    note.textContent = "No results.";
+    figure.append(note);
+  }
+  return figure;
+}
+
+/** The figure that stands in for a view type we do not convert. */
+function unsupportedFigure(doc: Document, type: string, name: string): HTMLElement {
+  const figure = buildFigure(doc, type || "unknown", name);
+  figure.classList.add("osp-base-unsupported");
+  const note = doc.createElement("p");
+  note.className = "osp-base-unsupported-note";
+  note.textContent =
+    `This ${type || "Bases"} view cannot be shown on the published site. ` +
+    "It is interactive in Obsidian.";
+  figure.append(note);
+  return figure;
 }
 
 /**
@@ -230,9 +281,20 @@ export function isBasesViewUnfinished(view: Element): boolean {
   // no number in it.
   if (view.querySelector(".is-loading")) return true;
 
-  const rows = view.querySelectorAll(
-    ".bases-tbody > .bases-tr, .bases-cards-item",
-  ).length;
+  // A view type we cannot read rows from cannot be judged by its rows, and
+  // waiting for rows it will never have in a shape we recognise ran out the
+  // full timer on every list view and then aborted the publish. Once Bases
+  // stops saying it is loading, `reemitBases` replaces it and reports it.
+  if (!REEMITTED_TYPES.has(view.getAttribute("data-view-type") ?? "")) {
+    return false;
+  }
+
+  // Data rows only. Bases renders a hidden measurement row before any real
+  // ones, and counting it called a view finished with no data in it. The
+  // converter then dropped that row and had nothing left to publish.
+  const rows = Array.from(
+    view.querySelectorAll(".bases-tbody > .bases-tr, .bases-cards-item"),
+  ).filter((row) => !isMeasurementRow(row)).length;
   if (rows > 0) return false;
 
   // No rows. The only reading of that which means "finished" is a view whose

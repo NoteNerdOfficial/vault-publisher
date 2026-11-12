@@ -1018,8 +1018,11 @@ body {
 
 /* A view showing fewer rows than it found. Quieter than an error, because it
    is not one, but it has to be visible: a partial table that says nothing is
-   indistinguishable from a complete one. */
-.markdown-rendered .osp-base-truncated {
+   indistinguishable from a complete one. The same goes for an empty result
+   and for a view type the site cannot show. */
+.markdown-rendered .osp-base-truncated,
+.markdown-rendered .osp-base-empty,
+.markdown-rendered .osp-base-unsupported-note {
   font-family: var(--osp-font-ui);
   font-size: 0.78rem;
   color: var(--osp-text-muted);
