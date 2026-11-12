@@ -8,8 +8,10 @@ const shelf: BaseConfig = {
   properties: { author: { displayName: "Author" } },
   views: [
     { type: "table", name: "All", order: ["file.name", "author"] },
-    { type: "cards", name: "Covers" },
-    { type: "table", name: "Short", limit: 5 },
+    { type: "cards", name: "Covers", image: "note.cover" },
+    { type: "table", name: "Short", limit: 5, summaries: { pages: "Sum" } },
+    { type: "list", name: "Plain", markers: "number" },
+    { type: "kanban", name: "Board" },
   ],
 };
 
@@ -47,7 +49,7 @@ describe("rewriteBasesForCapture", () => {
     expect(result.markdown.endsWith("```\n\nAfter.")).toBe(true);
     const config = blockConfig(result.markdown);
     expect(config.views).toEqual([
-      { type: CAPTURE_VIEW_TYPE, name: "All", order: ["file.name", "author"] },
+      { type: CAPTURE_VIEW_TYPE, "osp-layout": "table", name: "All", order: ["file.name", "author"] },
     ]);
   });
 
@@ -66,8 +68,16 @@ describe("rewriteBasesForCapture", () => {
   it("uses the view a #fragment names", async () => {
     const result = await rewriteBasesForCapture("![[Shelf.base#Short]]", "n.md", deps());
 
+    // Summaries are copied where the capture view can read them.
     expect(blockConfig(result.markdown).views).toEqual([
-      { type: CAPTURE_VIEW_TYPE, name: "Short", limit: 5 },
+      {
+        type: CAPTURE_VIEW_TYPE,
+        "osp-layout": "table",
+        "osp-summaries": { pages: "Sum" },
+        name: "Short",
+        limit: 5,
+        summaries: { pages: "Sum" },
+      },
     ]);
   });
 
@@ -78,9 +88,20 @@ describe("rewriteBasesForCapture", () => {
     expect(d.loads).toEqual(["lists/Shelf.base"]);
   });
 
+  it.each([
+    ["Covers", "cards", { image: "note.cover" }],
+    ["Plain", "list", { markers: "number" }],
+  ])("points the %s %s view at the capture view, options and all", async (name, layout, options) => {
+    const result = await rewriteBasesForCapture(`![[Shelf.base#${name}]]`, "n.md", deps());
+
+    expect(blockConfig(result.markdown).views).toEqual([
+      { type: CAPTURE_VIEW_TYPE, "osp-layout": layout, name, ...options },
+    ]);
+  });
+
   describe("leaves alone what it cannot safely rewrite", () => {
     it.each([
-      ["a cards view", "![[Shelf.base#Covers]]"],
+      ["a view of a layout it does not draw", "![[Shelf.base#Board]]"],
       ["a view the file does not have", "![[Shelf.base#Missing]]"],
       ["a file that does not resolve", "![[Gone.base]]"],
       ["an embed inside a sentence", "See ![[Shelf.base]] here."],
@@ -127,14 +148,14 @@ describe("rewriteBasesForCapture", () => {
 
       expect(result.rewritten).toBe(1);
       expect(blockConfig(result.markdown).views).toEqual([
-        { type: CAPTURE_VIEW_TYPE, name: "All", order: ["file.name", "author"] },
+        { type: CAPTURE_VIEW_TYPE, "osp-layout": "table", name: "All", order: ["file.name", "author"] },
       ]);
       expect(result.markdown.startsWith("Before\n\n```base\n")).toBe(true);
       expect(result.markdown.endsWith("```\n\nAfter")).toBe(true);
     });
 
-    it("leaves a block whose first view is not a table", async () => {
-      const markdown = block({ views: [{ type: "list", name: "L" }] });
+    it("leaves a block whose first view is of a layout it does not draw", async () => {
+      const markdown = block({ views: [{ type: "kanban", name: "K" }] });
       const result = await rewriteBasesForCapture(markdown, "n.md", deps());
 
       expect(result.markdown).toBe(markdown);
@@ -148,11 +169,11 @@ describe("rewriteBasesForCapture", () => {
     });
   });
 
-  it("rewrites every table in the note and counts them", async () => {
-    const markdown = "![[Shelf.base]]\n\ntext\n\n![[Shelf.base#Short]]\n\n![[Shelf.base#Covers]]";
+  it("rewrites every view it can draw and counts them", async () => {
+    const markdown = "![[Shelf.base]]\n\ntext\n\n![[Shelf.base#Short]]\n\n![[Shelf.base#Board]]";
     const result = await rewriteBasesForCapture(markdown, "n.md", deps());
 
     expect(result.rewritten).toBe(2);
-    expect(result.markdown).toContain("![[Shelf.base#Covers]]");
+    expect(result.markdown).toContain("![[Shelf.base#Board]]");
   });
 });

@@ -8,15 +8,21 @@ import { CAPTURE_VIEW_TYPE } from "./bases";
  * reading a table back out of the rendered page gets as many rows as the
  * screen has room for. A view type registered by a plugin is instead handed
  * the query's full result, every row, wherever the view sits. So for a
- * publish, a table view is rewritten as a `base` code block whose one view is
- * that type, with everything else about it -- filters, formulas, column
- * order, sort, display names -- carried over unchanged. Measured: 201 of 201
- * rows, at the top of a note and 150 paragraphs down alike.
+ * publish, a table, cards or list view is rewritten as a `base` code block
+ * whose one view is that type, with everything else about it -- filters,
+ * formulas, column order, sort, display names, the card and list options --
+ * carried over unchanged. Measured: 201 of 201 rows, at the top of a note
+ * and 150 paragraphs down alike.
+ *
+ * Two things are added, because a registered view cannot read them any
+ * other way: `osp-layout`, the layout the view had, and `osp-summaries`, a
+ * copy of its summary row. A view reads its own options through the public
+ * API, but the summaries live where only Bases' own views can see them.
  *
  * Only what is safe to rewrite is rewritten, and everything else is left for
  * the grid reader, which still works, just less completely:
  *
- *  - Only table views. Cards and lists are not built from data yet.
+ *  - Only table, cards and list views; anything else is left as it is.
  *  - Only an embed alone on its line. A fenced block cannot sit inside a
  *    sentence, a list item or a callout without changing what surrounds it.
  *  - Nothing inside code, fenced or inline: that is text about an embed, not
@@ -53,15 +59,18 @@ export interface BasesSourceDeps {
 
 export interface BasesSourceResult {
   markdown: string;
-  /** Table views pointed at the capture view. */
+  /** Views pointed at the capture view. */
   rewritten: number;
 }
+
+/** The layouts the capture view can draw, by Bases' own type names. */
+export const CAPTURED_LAYOUTS = ["table", "cards", "list"];
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 /** An embed of a `.base` file, alone on its line. */
 const LONE_BASE_EMBED = /^ {0,3}!\[\[([^\]|#]+?\.base)(?:#([^\]|]*))?(?:\|[^\]]*)?\]\]\s*$/;
 
-/** Rewrites the note's own table views to be read from Bases' data. */
+/** Rewrites the note's own views to be read from Bases' data. */
 export async function rewriteBasesForCapture(
   markdown: string,
   sourcePath: string,
@@ -128,13 +137,25 @@ function captureBlockFor(body: string, deps: BasesSourceDeps): string | null {
 
 /**
  * The configuration with only the chosen view left, its type swapped for the
- * capture view, as a `base` code block. Null when the view is not a table or
- * cannot be found.
+ * capture view, as a `base` code block. Null when the view is of a layout we
+ * do not draw, or cannot be found.
  */
 function captureBlock(config: BaseConfig, viewName: string | null): string | null {
   const views = Array.isArray(config.views) ? config.views : [];
   const view = viewName === null ? views[0] : views.find((v) => v?.name === viewName);
-  if (!view || view.type !== "table") return null;
-  const captured: BaseConfig = { ...config, views: [{ ...view, type: CAPTURE_VIEW_TYPE }] };
+  if (!view || !CAPTURED_LAYOUTS.includes(view.type ?? "")) return null;
+  const captured: BaseConfig = {
+    ...config,
+    views: [
+      {
+        ...view,
+        type: CAPTURE_VIEW_TYPE,
+        "osp-layout": view.type,
+        ...(view.summaries && typeof view.summaries === "object"
+          ? { "osp-summaries": view.summaries }
+          : {}),
+      },
+    ],
+  };
   return "```base\n" + JSON.stringify(captured, null, 2) + "\n```";
 }

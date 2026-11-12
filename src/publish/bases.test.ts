@@ -5,6 +5,8 @@ import { installObsidianDom } from "../../test/obsidian-stub";
 import {
   CAPTURE_VIEW_TYPE,
   CapturedTable,
+  buildCapturedCards,
+  buildCapturedList,
   buildCapturedTable,
   isBasesViewUnfinished,
   reemitBases,
@@ -336,5 +338,124 @@ describe("isBasesViewUnfinished with a capture view", () => {
     expect(isBasesViewUnfinished(view)).toBe(true);
     view.append(figure);
     expect(isBasesViewUnfinished(view)).toBe(false);
+  });
+});
+
+describe("summaries, cards and lists read from data", () => {
+  it("writes a table's summary row under the columns that have one", () => {
+    const figure = buildCapturedTable(document, {
+      ...captured(2),
+      summaries: [
+        { columnId: "note.author", label: "Filled", render: (cell) => (cell.textContent = "2") },
+      ],
+    });
+
+    const cells = Array.from(figure.querySelectorAll("tfoot tr.osp-base-summary td"));
+    expect(cells.map((td) => td.textContent)).toEqual(["", "Filled 2"]);
+    expect(cells[1].querySelector(".osp-base-summary-label")?.textContent).toBe("Filled");
+    // The footer is not a row of data.
+    expect(figure.querySelectorAll("tbody tr")).toHaveLength(2);
+  });
+
+  it("writes cards with a cover, a linked title and the other values", () => {
+    const base = captured(2);
+    base.groups[0].rows[0].cover = { src: "app://local/img/a.png", alt: "book-1" };
+    const figure = buildCapturedCards(document, { ...base, size: 240, aspect: 0.75, fit: "contain" });
+
+    expect(figure.dataset.baseView).toBe("cards");
+    const list = figure.querySelector("ul.osp-base-cards") as HTMLElement;
+    expect(list.style.getPropertyValue("--osp-card-size")).toBe("240px");
+    const cards = figure.querySelectorAll("li.osp-base-card");
+    expect(cards).toHaveLength(2);
+
+    const cover = cards[0].querySelector("img.osp-base-card-cover") as HTMLImageElement;
+    expect(cover.getAttribute("src")).toBe("app://local/img/a.png");
+    expect(cover.getAttribute("alt")).toBe("book-1");
+    expect(cover.style.objectFit).toBe("contain");
+    expect(cards[1].querySelector("img")).toBeNull();
+
+    expect(cards[0].querySelector(".osp-base-card-title .internal-link")?.getAttribute("data-href")).toBe(
+      "shelf/book-1.md",
+    );
+    // The file name is the title, not a field repeated under it.
+    expect(Array.from(cards[0].querySelectorAll("dt")).map((dt) => dt.textContent)).toEqual(["Author"]);
+    expect(cards[0].querySelector("dd")?.textContent).toBe("note.author 1");
+  });
+
+  it("names each group of a grouped view above its cards, without a heading", () => {
+    const base = captured(2);
+    const figure = buildCapturedCards(document, {
+      ...base,
+      groups: [
+        { label: "Fiction", rows: base.groups[0].rows.slice(0, 1) },
+        { label: "Essays", rows: base.groups[0].rows.slice(1) },
+      ],
+      size: 200,
+      aspect: 1,
+      fit: "cover",
+    });
+
+    expect(Array.from(figure.querySelectorAll(".osp-base-group-name")).map((p) => p.textContent)).toEqual([
+      "Fiction",
+      "Essays",
+    ]);
+    expect(figure.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+  });
+
+  it("writes a list a line per row, values joined by the separator", () => {
+    const figure = buildCapturedList(document, {
+      ...captured(2),
+      markers: "number",
+      separator: " | ",
+      indent: false,
+    });
+
+    expect(figure.querySelector("ol.osp-base-list")).not.toBeNull();
+    const items = figure.querySelectorAll("li.osp-base-list-item");
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toBe("book-1 | note.author 1");
+    expect(items[0].querySelector(".internal-link")?.getAttribute("data-href")).toBe("shelf/book-1.md");
+  });
+
+  it("puts the other values under the first when the view indents them", () => {
+    const figure = buildCapturedList(document, {
+      ...captured(1),
+      columns: [
+        { id: "file.name", label: "file name" },
+        { id: "note.author", label: "Author" },
+        { id: "note.year", label: "Year" },
+      ],
+      markers: "none",
+      separator: ", ",
+      indent: true,
+    });
+
+    const item = figure.querySelector("li")!;
+    expect(figure.querySelector("ul")?.getAttribute("data-markers")).toBe("none");
+    expect(item.querySelector(":scope > .osp-base-list-value")?.textContent).toBe("book-1");
+    expect(item.querySelector(".osp-base-list-more")?.textContent).toBe("note.author 1, note.year 1");
+  });
+
+  it("leaves an empty value out of a line rather than writing two separators", () => {
+    const base = captured(1);
+    base.groups[0].rows[0].render = () => {};
+    const figure = buildCapturedList(document, { ...base, markers: "bullet", separator: ", ", indent: false });
+
+    expect(figure.querySelector("li")?.textContent).toBe("book-1");
+  });
+
+  it.each([
+    ["cards", (b: CapturedTable) => buildCapturedCards(document, { ...b, size: 200, aspect: 1, fit: "cover" as const })],
+    ["lists", (b: CapturedTable) => buildCapturedList(document, { ...b, markers: "bullet" as const, separator: ", ", indent: false })],
+  ])("lifts %s out of their wrapper and counts them", (kind, build) => {
+    const root = captureView({ claimed: 3, rows: 3, wrapper: "embed" });
+    const view = root.querySelector(".bases-view")!;
+    view.replaceChildren(build(captured(3)));
+
+    const stats = reemitBases(root);
+
+    expect(stats).toMatchObject({ views: 1, fromApi: 1, rows: 3, tables: 0, truncated: [], unhandled: [] });
+    expect(stats[kind as "cards" | "lists"]).toBe(1);
+    expect(root.querySelector(".bases-toolbar, .bases-view")).toBeNull();
   });
 });

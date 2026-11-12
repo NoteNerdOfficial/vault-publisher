@@ -1044,7 +1044,9 @@ body {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  /* A view read from data says how wide its cards are; one read from the
+     grid does not, and gets the width this always had. */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--osp-card-size, 15rem)), 1fr));
   gap: 1rem;
 }
 
@@ -1083,6 +1085,51 @@ body {
 }
 
 .markdown-rendered .osp-base-card-fields dd:last-child { margin-bottom: 0; }
+
+/* The cover runs to the card's edges, above its title. Its shape and fit are
+   the view's own, set on the image itself. */
+.markdown-rendered .osp-base-card:has(> .osp-base-card-cover) { padding-top: 0; overflow: hidden; }
+.markdown-rendered .osp-base-card-cover {
+  display: block;
+  width: calc(100% + 2rem);
+  max-width: none;
+  margin: 0 -1rem 0.8rem;
+  background: var(--osp-surface);
+  border-bottom: var(--osp-rule) solid var(--osp-border);
+}
+
+/* A grouped view's group, above its cards or lines. */
+.markdown-rendered .osp-base-group-name {
+  font-family: var(--osp-font-ui);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--osp-text-muted);
+  margin: 1rem 0 0.5rem;
+}
+.markdown-rendered .osp-base > .osp-base-group-name:first-of-type { margin-top: 0; }
+
+/* A list view: one line per row, under the markers the view asked for. */
+.markdown-rendered .osp-base-list { margin: 0; }
+.markdown-rendered .osp-base-list[data-markers="none"] { list-style: none; padding-inline-start: 0; }
+.markdown-rendered .osp-base-list-sep { color: var(--osp-text-muted); }
+.markdown-rendered .osp-base-list-more {
+  color: var(--osp-text-muted);
+  font-size: 0.9em;
+  padding-inline-start: 1rem;
+}
+
+/* A table's summary row. The label is quieter than the value it names. */
+.markdown-rendered .osp-base-table tfoot td {
+  border-top: var(--osp-rule) solid var(--osp-border);
+  font-weight: 600;
+}
+.markdown-rendered .osp-base-summary-label {
+  color: var(--osp-text-muted);
+  font-size: 0.75em;
+  font-weight: 500;
+}
 
 /* A base that failed to evaluate. Shown rather than swallowed: a reader
    seeing nothing cannot tell an empty result from a broken query. */

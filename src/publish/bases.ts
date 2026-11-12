@@ -35,6 +35,8 @@ export interface BasesStats {
   /** Views re-emitted, by kind. */
   tables: number;
   cards: number;
+  /** List views, which only the data route can re-emit. */
+  lists: number;
   /**
    * Views of a type we do not know how to re-emit, as "name (type)".
    *
@@ -66,6 +68,7 @@ export function emptyBasesStats(): BasesStats {
     views: 0,
     tables: 0,
     cards: 0,
+    lists: 0,
     unhandled: [],
     rows: 0,
     inputValues: 0,
@@ -90,6 +93,36 @@ export interface CapturedTable {
   columns: { id: string; label: string }[];
   /** One group when the view is not grouped; `label` is null then. */
   groups: { label: string | null; rows: CapturedRow[] }[];
+  /**
+   * The view's summary row, one entry per column that has one, in no
+   * particular order. A column without an entry gets an empty cell.
+   */
+  summaries?: CapturedSummary[];
+}
+
+export interface CapturedSummary {
+  columnId: string;
+  /** What the summary is, as Bases names it: "Sum", "Average", "Earliest". */
+  label: string;
+  render(cell: HTMLElement): void;
+}
+
+/** A cards view: a table's rows, laid out as cards with an optional cover. */
+export interface CapturedCards extends CapturedTable {
+  /** Bases' `cardSize`: the width a card is laid out at, in pixels. */
+  size: number;
+  /** Bases' `imageAspectRatio`: cover height over width. */
+  aspect: number;
+  /** Bases' `imageFit`. */
+  fit: "cover" | "contain";
+}
+
+/** A list view: one line per row, its values joined by a separator. */
+export interface CapturedList extends CapturedTable {
+  markers: "bullet" | "number" | "none";
+  separator: string;
+  /** Bases' `indentProperties`: the first value on its line, the rest below it. */
+  indent: boolean;
 }
 
 export interface CapturedRow {
@@ -99,6 +132,36 @@ export interface CapturedRow {
   title: string;
   /** Writes the value of `columnId` into `cell`. */
   render(cell: HTMLElement, columnId: string): void;
+  /** The card's cover image, when the view names an image property. */
+  cover?: { src: string; alt: string } | null;
+}
+
+/** The row's file name, as Bases' own cells write a document value. */
+function fileLink(doc: Document, row: CapturedRow): HTMLElement {
+  const link = doc.createElement("span");
+  link.className = "internal-link";
+  link.setAttribute("data-href", row.path);
+  link.textContent = row.title;
+  return link;
+}
+
+/** Writes one row's value for a column, the file name as a link. */
+function writeValue(doc: Document, cell: HTMLElement, row: CapturedRow, columnId: string): void {
+  cell.dataset.property = columnId;
+  if (columnId === "file.name") cell.append(fileLink(doc, row));
+  else row.render(cell, columnId);
+}
+
+/**
+ * A group's name, above its cards or lines. A paragraph, not a heading:
+ * a group of a view is data, and as a heading it would land in the page's
+ * table of contents as though it were a section.
+ */
+function groupName(doc: Document, label: string): HTMLElement {
+  const name = doc.createElement("p");
+  name.className = "osp-base-group-name";
+  name.textContent = label;
+  return name;
 }
 
 /**
@@ -143,16 +206,7 @@ export function buildCapturedTable(doc: Document, input: CapturedTable): HTMLEle
       const tr = doc.createElement("tr");
       for (const column of input.columns) {
         const td = doc.createElement("td");
-        td.dataset.property = column.id;
-        if (column.id === "file.name") {
-          const link = doc.createElement("span");
-          link.className = "internal-link";
-          link.setAttribute("data-href", row.path);
-          link.textContent = row.title;
-          td.append(link);
-        } else {
-          row.render(td, column.id);
-        }
+        writeValue(doc, td, row, column.id);
         tr.append(td);
       }
       tbody.append(tr);
@@ -161,7 +215,135 @@ export function buildCapturedTable(doc: Document, input: CapturedTable): HTMLEle
     table.append(tbody);
   }
 
+  const summaries = input.summaries ?? [];
+  if (summaries.length) {
+    const tfoot = doc.createElement("tfoot");
+    const row = doc.createElement("tr");
+    row.className = "osp-base-summary";
+    for (const column of input.columns) {
+      const td = doc.createElement("td");
+      const summary = summaries.find((s) => s.columnId === column.id);
+      if (summary) {
+        td.dataset.property = column.id;
+        const label = doc.createElement("span");
+        label.className = "osp-base-summary-label";
+        label.textContent = summary.label;
+        const value = doc.createElement("span");
+        value.className = "osp-base-summary-value";
+        summary.render(value);
+        td.append(label, " ", value);
+      }
+      row.append(td);
+    }
+    tfoot.append(row);
+    table.append(tfoot);
+  }
+
   figure.append(table);
+  figure.dataset.ospRows = String(count);
+  return figure;
+}
+
+/**
+ * A cards view from data: the same card markup the grid reader writes, plus
+ * the cover image the grid reader cannot recover, since Bases draws it as a
+ * CSS background rather than an image.
+ */
+export function buildCapturedCards(doc: Document, input: CapturedCards): HTMLElement {
+  const figure = buildFigure(doc, "cards", input.name);
+  figure.dataset.ospCapture = "";
+  let count = 0;
+
+  for (const group of input.groups) {
+    if (group.label !== null) figure.append(groupName(doc, group.label));
+    const list = doc.createElement("ul");
+    list.className = "osp-base-cards";
+    list.style.setProperty("--osp-card-size", `${input.size}px`);
+    for (const row of group.rows) {
+      const card = doc.createElement("li");
+      card.className = "osp-base-card";
+      if (row.cover) {
+        const cover = doc.createElement("img");
+        cover.className = "osp-base-card-cover";
+        cover.setAttribute("src", row.cover.src);
+        cover.setAttribute("alt", row.cover.alt);
+        cover.setAttribute("loading", "lazy");
+        cover.style.aspectRatio = String(1 / input.aspect);
+        cover.style.objectFit = input.fit;
+        card.append(cover);
+      }
+      const title = doc.createElement("div");
+      title.className = "osp-base-card-title";
+      writeValue(doc, title, row, "file.name");
+      card.append(title);
+
+      const fields = doc.createElement("dl");
+      fields.className = "osp-base-card-fields";
+      for (const column of input.columns) {
+        if (column.id === "file.name") continue;
+        const term = doc.createElement("dt");
+        term.textContent = column.label;
+        const value = doc.createElement("dd");
+        writeValue(doc, value, row, column.id);
+        fields.append(term, value);
+      }
+      if (fields.childElementCount) card.append(fields);
+      list.append(card);
+      count++;
+    }
+    figure.append(list);
+  }
+
+  figure.dataset.ospRows = String(count);
+  return figure;
+}
+
+/**
+ * A list view from data: one line per row, its values in column order and
+ * joined by the view's separator, under the markers it asks for.
+ */
+export function buildCapturedList(doc: Document, input: CapturedList): HTMLElement {
+  const figure = buildFigure(doc, "list", input.name);
+  figure.dataset.ospCapture = "";
+  let count = 0;
+
+  for (const group of input.groups) {
+    if (group.label !== null) figure.append(groupName(doc, group.label));
+    const list = doc.createElement(input.markers === "number" ? "ol" : "ul");
+    list.className = "osp-base-list";
+    list.dataset.markers = input.markers;
+    for (const row of group.rows) {
+      const item = doc.createElement("li");
+      item.className = "osp-base-list-item";
+      const values = input.columns.map((column) => {
+        const value = doc.createElement("span");
+        value.className = "osp-base-list-value";
+        writeValue(doc, value, row, column.id);
+        return value;
+      });
+      const first = values.shift();
+      if (first) item.append(first);
+      const rest = values.filter((v) => (v.textContent ?? "").trim() || v.querySelector("img"));
+      if (rest.length) {
+        const holder = input.indent ? doc.createElement("div") : item;
+        if (input.indent) holder.className = "osp-base-list-more";
+        rest.forEach((value, i) => {
+          if (i > 0 || !input.indent) {
+            const sep = doc.createElement("span");
+            sep.className = "osp-base-list-sep";
+            sep.textContent = input.separator;
+            holder.append(sep);
+          }
+          holder.append(value);
+        });
+        if (input.indent) item.append(holder);
+      }
+      list.append(item);
+      count++;
+    }
+    figure.append(list);
+  }
+
   figure.dataset.ospRows = String(count);
   return figure;
 }
@@ -214,11 +396,14 @@ export function reemitBasesView(view: Element, stats: BasesStats): void {
   // on the page. All that is left is to tidy its cells and lift it out.
   const captured = isCaptureView(view) ? capturedFigure(view) : null;
   if (captured) {
-    for (const cell of Array.from(captured.querySelectorAll("td"))) {
+    for (const cell of Array.from(captured.querySelectorAll("[data-property]"))) {
       cleanCell(cell, stats);
     }
     const emitted = Number(captured.dataset.ospRows ?? "0");
-    stats.tables++;
+    const layout = captured.dataset.baseView;
+    if (layout === "cards") stats.cards++;
+    else if (layout === "list") stats.lists++;
+    else stats.tables++;
     stats.fromApi++;
     stats.rows += emitted;
     if (emitted === 0 && claimed === 0) {

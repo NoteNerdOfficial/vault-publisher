@@ -2355,13 +2355,13 @@ export default class VaultPublisherPlugin extends Plugin {
     if (basesPages.length) {
       lines.push("", "## Bases", "");
       lines.push(
-        "| Page | views | read from data | tables | cards | rows | input values recovered | measurement rows dropped | unhandled |",
+        "| Page | views | read from data | tables | cards | lists | rows | input values recovered | measurement rows dropped | unhandled |",
       );
-      lines.push("|---|---|---|---|---|---|---|---|---|");
+      lines.push("|---|---|---|---|---|---|---|---|---|---|");
       for (const p of basesPages) {
         const b = p.bases;
         lines.push(
-          `| ${p.title} | ${b.views} | ${b.fromApi} | ${b.tables} | ${b.cards} | ${b.rows} | ${b.inputValues} | ${b.measurementDropped} | ${b.unhandled.join(", ") || "-"} |`,
+          `| ${p.title} | ${b.views} | ${b.fromApi} | ${b.tables} | ${b.cards} | ${b.lists} | ${b.rows} | ${b.inputValues} | ${b.measurementDropped} | ${b.unhandled.join(", ") || "-"} |`,
         );
       }
       if (result.basesTruncated.length) {
