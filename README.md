@@ -160,6 +160,10 @@ and absent, rather than broken, with JavaScript off:
   opens the folders down to the page being read and scrolls its row into
   view. The tree keeps its open folders from page to page for the visit, so a
   collapsed tree stays collapsed with reveal off. Reveal starts on.
+- **Collapse all on the outline.** Beside **On this page** in the right-hand
+  rail, when the page has subsections: it folds every section down to its own
+  heading, and pressed again (**Expand all**) unfolds them. Folding is kept
+  for the visit.
 - **Back to top.** A round button in the corner of the content column, shown
   once the top of the page is most of a screen away.
 - **Zooming diagrams.** A Mermaid diagram has zoom in, zoom out, reset and full

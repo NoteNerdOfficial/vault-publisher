@@ -2396,6 +2396,12 @@ body {
 }
 .osp-rail-title .osp-num { margin-left: auto; font-weight: 600; }
 
+/* "On this page" with its collapse-all, set like the tree's tools: right
+   after the label, centred on it rather than on its baseline. Folded, only
+   each section's own heading is listed. */
+.osp-outline-title { align-items: center; gap: 0.35rem; }
+.osp-outline-collapsed .osp-lvl3 { display: none; }
+
 /* A table of contents, behaving as one: a rail down the margin with the
    section being read marked on it, and nothing else moving while the note is
    being read. The mark is a segment of the rail rather than a colour on the

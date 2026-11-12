@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { CLIENT_SCRIPT } from "./clientScript";
-import { backToTop } from "./shell";
+import { backToTop, contextRail } from "./shell";
 
 /**
  * The tree's two tools and the way back to the top of the page.
@@ -106,5 +106,85 @@ describe("back to top", () => {
     button("data-osp-to-top").click();
     expect(to).toEqual([0, 0]);
     expect(document.activeElement?.id).toBe("osp-main");
+  });
+});
+
+/**
+ * A page with an outline in the rail, as the build writes it: two sections,
+ * each with a subheading, and the window scrolled into the second subsection.
+ */
+function outlinePage(): void {
+  const headings = [
+    { level: 2, id: "one", text: "One" },
+    { level: 3, id: "one-a", text: "One A" },
+    { level: 2, id: "two", text: "Two" },
+    { level: 3, id: "two-a", text: "Two A" },
+  ];
+  const input = {
+    headings,
+    stats: { words: 0, readingMinutes: 0, sections: 0 },
+    backlinks: [],
+    related: [],
+    root: "",
+    graph: { nodes: [], edges: [] },
+  } as unknown as Parameters<typeof contextRail>[0];
+  document.body.innerHTML =
+    `<main class="osp-main" id="osp-main">` +
+    headings.map((h) => `<h${h.level} id="${h.id}">${h.text}</h${h.level}>`).join("") +
+    `</main>` +
+    contextRail(input);
+  // Every heading has passed the reading line but the last one.
+  const tops: Record<string, number> = { one: -400, "one-a": -300, two: -200, "two-a": 100 };
+  for (const id of Object.keys(tops)) {
+    document.getElementById(id)!.getBoundingClientRect = () => ({ top: tops[id] }) as DOMRect;
+  }
+  new Function(CLIENT_SCRIPT)();
+}
+
+const row = (id: string) =>
+  document.querySelector(`[data-osp-outline] [data-osp-spy="${id}"]`)!.parentElement as HTMLElement;
+const listed = () =>
+  Array.from(document.querySelectorAll<HTMLElement>("[data-osp-outline] li"))
+    .filter((li) => !li.classList.contains("osp-lvl3") ||
+      !li.parentElement!.classList.contains("osp-outline-collapsed"))
+    .map((li) => li.querySelector("a")!.getAttribute("data-osp-spy"));
+
+describe("the outline's collapse-all", () => {
+  it("sits beside On this page and is shown once the script runs", () => {
+    outlinePage();
+    const tools = document.querySelector("[data-osp-outline-tools]") as HTMLElement;
+    expect(tools.hidden).toBe(false);
+    expect(tools.closest(".osp-outline-title")?.textContent).toContain("On this page");
+    expect(document.querySelector("[data-osp-outline-reveal]")).toBeNull();
+  });
+
+  it("folds to the section headings and puts the mark on the section being read", () => {
+    outlinePage();
+    button("data-osp-outline-collapse").click();
+    expect(listed()).toEqual(["one", "two"]);
+    expect(row("two").querySelector("a")!.classList.contains("osp-active")).toBe(true);
+    expect(button("data-osp-outline-collapse").getAttribute("aria-label")).toBe("Expand all");
+  });
+
+  it("unfolds again, and stays folded on the next page", () => {
+    outlinePage();
+    button("data-osp-outline-collapse").click();
+    outlinePage();
+    expect(button("data-osp-outline-collapse").getAttribute("aria-pressed")).toBe("true");
+    button("data-osp-outline-collapse").click();
+    expect(listed()).toEqual(["one", "one-a", "two", "two-a"]);
+  });
+
+  it("is left out when there are no subsections to fold", () => {
+    document.body.innerHTML = contextRail({
+      headings: [{ level: 2, id: "one", text: "One" }],
+      stats: { words: 0, readingMinutes: 0, sections: 0 },
+      backlinks: [],
+      related: [],
+      root: "",
+      graph: { nodes: [], edges: [] },
+    } as unknown as Parameters<typeof contextRail>[0]);
+    expect(document.querySelector("[data-osp-outline-tools]")).toBeNull();
+    expect(document.body.textContent).toContain("On this page");
   });
 });

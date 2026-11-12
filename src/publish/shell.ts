@@ -1061,7 +1061,7 @@ function outlineSection(input: ShellInput): string {
   // that are not on screen, so the stylesheet takes it away with them.
   return (
     `<section class="osp-rail-section osp-rail-outline">` +
-    `<h2 class="osp-rail-title">On this page</h2>` +
+    outlineHead(outline.some((h) => h.level === 3)) +
     `<ul class="osp-outline" data-osp-outline>` +
     outline
       .map(
@@ -1072,6 +1072,28 @@ function outlineSection(input: ShellInput): string {
       )
       .join("") +
     `</ul></section>`
+  );
+}
+
+/**
+ * "On this page", and beside it the tree's collapse-all, when there is
+ * anything to fold.
+ *
+ * Collapse folds every section down to its own heading, hiding the
+ * subheadings under it; pressed again it unfolds them, since the outline
+ * has no per-section disclosure to open them one at a time. An outline with
+ * no subheadings has nothing to fold and gets a plain title. Hidden until
+ * the script shows it, like the tree's tools.
+ */
+function outlineHead(foldable: boolean): string {
+  if (!foldable) return `<h2 class="osp-rail-title">On this page</h2>`;
+  return (
+    `<div class="osp-rail-title osp-outline-title">` +
+    `<h2 class="osp-browse-name">On this page</h2>` +
+    `<span class="osp-tree-tools" data-osp-outline-tools hidden>` +
+    `<button type="button" class="osp-tree-tool" data-osp-outline-collapse aria-pressed="false" ` +
+    `aria-label="Collapse all" title="Collapse all">${icon("collapseAll", "osp-icon-sm")}</button>` +
+    `</span></div>`
   );
 }
 

@@ -639,6 +639,56 @@ export const CLIENT_SCRIPT = `(function () {
 
   var queued = false;
 
+  /* --- the outline's collapse-all -------------------------------- *
+     The tree's tool, on "On this page". It folds every section down to its
+     own heading and is a switch, because the outline has no disclosure per
+     section to unfold them one by one. Kept for the visit, like the tree's
+     open folders. */
+  var outlineList = document.querySelector("[data-osp-outline]");
+  var outlineTools = document.querySelector("[data-osp-outline-tools]");
+  var OUTLINE_FOLD_KEY = "osp-outline-collapsed";
+
+  if (outlineList && outlineTools) {
+    var foldBtn = outlineTools.querySelector("[data-osp-outline-collapse]");
+    var setFolded = function (folded) {
+      outlineList.classList.toggle("osp-outline-collapsed", folded);
+      var label = folded ? "Expand all" : "Collapse all";
+      foldBtn.setAttribute("aria-pressed", String(folded));
+      foldBtn.setAttribute("aria-label", label);
+      foldBtn.setAttribute("title", label);
+    };
+    var wasFolded = false;
+    try { wasFolded = sessionStorage.getItem(OUTLINE_FOLD_KEY) === "1"; } catch (e) {}
+    setFolded(wasFolded);
+    outlineTools.hidden = false;
+
+    foldBtn.addEventListener("click", function () {
+      var folded = !outlineList.classList.contains("osp-outline-collapsed");
+      setFolded(folded);
+      try { sessionStorage.setItem(OUTLINE_FOLD_KEY, folded ? "1" : "0"); } catch (e) {}
+      update();
+    });
+  }
+
+  /* The rail's row for the section being read. Folded, a subheading's row
+     is hidden, so its section's heading stands in for it and the mark is
+     never on something out of sight. */
+  function outlineRow(id) {
+    if (!outlineList) return null;
+    var folded = outlineList.classList.contains("osp-outline-collapsed");
+    var items = outlineList.children;
+    var head = null;
+    for (var k = 0; k < items.length; k++) {
+      if (items[k].classList.contains("osp-lvl2")) head = items[k];
+      var a = items[k].querySelector("[data-osp-spy]");
+      if (a && a.getAttribute("data-osp-spy") === id) {
+        var item = folded && head && !items[k].classList.contains("osp-lvl2") ? head : items[k];
+        return item.querySelector("[data-osp-spy]");
+      }
+    }
+    return null;
+  }
+
   /* --- back to top -------------------------------------------------- */
 
   var toTop = document.querySelector("[data-osp-to-top]");
@@ -694,6 +744,9 @@ export const CLIENT_SCRIPT = `(function () {
       else targets[j].link.removeAttribute("aria-current");
     }
 
+    var railLink = active ? outlineRow(active.link.getAttribute("data-osp-spy")) : null;
+    if (railLink && railLink !== active.link) railLink.classList.add("osp-active");
+
     /* Shut, the in-page row says where in the note the reader is, which is
        the question a long page on a small screen stops answering first. */
     if (inpageNow && active) {
@@ -708,11 +761,12 @@ export const CLIENT_SCRIPT = `(function () {
        not: it sits under the note as part of the page, and scrolling a row
        of it into view would scroll the document, dragging the reader out of
        the article they were reading and down to its own table of contents. */
-    if (rail && active && rail.scrollHeight > rail.clientHeight) {
-      var box = active.link.getBoundingClientRect();
+    var keep = railLink || (active && active.link);
+    if (rail && keep && rail.scrollHeight > rail.clientHeight) {
+      var box = keep.getBoundingClientRect();
       var frame = rail.getBoundingClientRect();
       if (box.top < frame.top + 8 || box.bottom > frame.bottom - 8) {
-        active.link.scrollIntoView({ block: "nearest" });
+        keep.scrollIntoView({ block: "nearest" });
       }
     }
   }
