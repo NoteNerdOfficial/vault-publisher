@@ -1,6 +1,6 @@
 {
   "name": "vault-publisher",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Publish an Obsidian vault as a static website, rendered by Obsidian itself.",
   "main": "main.js",
   "scripts": {
