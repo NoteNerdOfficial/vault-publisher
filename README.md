@@ -201,6 +201,15 @@ application unmounts, so one click turns the whole page blank. Point it at
 published as rendered pages rather than as Markdown source, and every file
 left out is reported with the reason.
 
+**The build report says when a page is missing something.** A file in an
+as-is page's folder that nothing published is listed under the page, with a
+pointer to **Publish folders whole**. That is what catches the picture a
+script builds a path to (`"img/" + name + ".jpg"`): the page's HTML never
+names it, so it is not carried, and without the list the first sign was a
+broken image on the live site. Files the page asks for from the server root
+are left off this list, because they are reported already with the fix that
+works: build with a relative base.
+
 **And it can be published somewhere other than its vault path.** Each folder
 has a second field saying where it lands:
 
@@ -313,6 +322,18 @@ stylesheet names) is put in place *before* the document is written, because
 a script element whose load has already failed does not try again; pictures
 are swapped in afterwards, so a page is readable before its images arrive.
 
+That only repairs what is in the page when it is written, so a locked site
+also publishes a service worker, `osp-sw.js`, at its root. Once a page has
+unlocked, every request it makes for a locked file goes through the worker,
+which fetches the `.enc` beside it, decrypts it, and answers with the plain
+file: a picture a script adds later, a `fetch()` for data, a module's lazily
+loaded chunk. While the worker is in charge the page is written exactly as
+published, with no blob URLs, so a code-split application runs on a locked
+site. The worker never stores the key. It asks the page that made the
+request, which answers from the tab's `sessionStorage`, so the key still
+lasts no longer than the tab. A site published without a password after
+being locked replaces the worker with one that removes itself.
+
 It remains a shared secret rather than access control: one password for
 everyone, no revocation short of republishing, and anyone who has it can pass
 it on. Two consequences worth knowing before turning it on are in
@@ -416,6 +437,9 @@ src/publish/    turning rendered HTML into a site
   encrypt.ts      PBKDF2 and AES-GCM, and the shape of a locked payload
   lockSite.ts     turning a finished build into an encrypted one
   unlockScript.ts the reader that turns an encrypted page back into a page
+  serviceWorker.ts the worker that serves a locked site's files to whatever
+                  asks for them after the page is written
+  lockHelpers.ts  the decrypting and file typing those two scripts share
   buildSite.ts    selection, render, assemble
 src/overlay/    reviewing a built site, and getting the comments back
   overlayScript.ts  the overlay as it runs in the browser
@@ -522,12 +546,13 @@ rather than trusted: anchoring in `overlayScript.test.ts`, labelling in
 - **An application that computes a path at runtime still breaks.** Publishing
   a folder whole carries every file, but `fetch('/api/' + id)` is asking for a
   server, and a static host has none. Nothing here can fix that.
-- **A locked site cannot serve a code-split application.** An as-is build
-  published into a locked site runs from a blob URL, and a module that
-  `import()`s another chunk resolves that import against its own URL, which
-  a blob URL does not have. Single-bundle output works, as do the stylesheets
-  and images a page names; a build that splits its code, or fetches its own
-  data at runtime, needs the site published without a password.
+- **A locked site needs service workers for files a script asks for.**
+  Pictures a script adds, `fetch()`ed data and lazily loaded chunks are served
+  by the site's service worker, which needs https (GitHub Pages has it) and a
+  browser that allows service workers. Where one is not available (some
+  private windows, a site opened from disk), the page falls back to blob URLs
+  and those files fail as they did before. Tested in Chromium; not yet in
+  Safari, where seeking in a locked video may not work.
 - **A locked site cannot publish incrementally.** Every build mints a fresh
   salt and a fresh IV per file, so every encrypted file differs from the one
   already published and the manifest matches nothing. A password therefore

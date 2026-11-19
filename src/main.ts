@@ -873,7 +873,7 @@ export default class VaultPublisherPlugin extends Plugin {
           `beside a published HTML page ${leftBehind === 1 ? "was" : "were"} not ` +
           `published, because the page's HTML never names ${leftBehind === 1 ? "it" : "them"}. ` +
           `If a script loads ${leftBehind === 1 ? "it" : "them"}, add the folder to ` +
-          `"Publish whole folders" -- see ${OUTPUT_FOLDER}/build-report.md.`,
+          `"Publish folders whole" -- see ${OUTPUT_FOLDER}/build-report.md.`,
         12000,
       );
     }
@@ -1997,7 +1997,7 @@ export default class VaultPublisherPlugin extends Plugin {
         say(
           `${count} file(s) beside a published HTML page were not published, ` +
             `because nothing in its HTML names them -- if a script loads them, ` +
-            `add the folder to 'Publish whole folders' -- see the build report`,
+            `add the folder to 'Publish folders whole' -- see the build report`,
         );
       }
       if (result.htmlFiles.baseHrefs.length) {
@@ -2520,7 +2520,7 @@ export default class VaultPublisherPlugin extends Plugin {
             "`srcset` or a CSS `url()`. A path its script builds while it runs -- " +
             "`\"img/\" + name + \".jpg\"` -- is never seen, so that file stays " +
             "behind and the page shows a broken image or fails to load its data. " +
-            "If the page needs these, add its folder to **Publish whole folders** " +
+            "If the page needs these, add its folder to **Publish folders whole** " +
             "in settings and publish again. If it does not, there is nothing to do.",
         );
         if (this.settings.publishPassword) {
