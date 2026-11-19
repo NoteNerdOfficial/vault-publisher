@@ -1151,6 +1151,37 @@ export function mayCarryCompanion(path: string): boolean {
   return !COMPANION_DENIED.test(path);
 }
 
+/**
+ * The files in a page's folder that its root-path references were meant for.
+ *
+ * A framework built with an absolute base writes \`/assets/index.js\`, and
+ * on a site published into a folder that reaches for the server's root.
+ * Those references are already reported, with the fix that works -- build
+ * with a relative base. So the files they meant are not also offered to
+ * \`findUnreferencedFiles\`, whose advice would be wrong for them:
+ * publishing the folder whole uploads a file the page still cannot reach.
+ *
+ * Matched against the page's own folder, since that is where a build
+ * dropped into the vault keeps what its root meant.
+ */
+export function rootReferenceTargets(pagePath: string, html: string): string[] {
+  const slash = pagePath.lastIndexOf("/");
+  const folder = slash === -1 ? "" : pagePath.slice(0, slash);
+  const out: string[] = [];
+  for (const reference of findRootAbsoluteReferences(html)) {
+    const bare = reference.replace(/[?#].*$/, "").replace(/^\/+/, "");
+    if (!bare) continue;
+    let decoded = bare;
+    try {
+      decoded = decodeURIComponent(bare);
+    } catch {
+      // Left as written: a name that will not decode matches nothing.
+    }
+    out.push(folder ? `${folder}/${decoded}` : decoded);
+  }
+  return out;
+}
+
 /** Files sitting in a published page's folder that nothing published. */
 export interface UnreferencedGroup {
   /** The folder, as a vault path; "" for the vault root. */

@@ -10,6 +10,7 @@ import {
   countHtmlFilesBlockedByFlag,
   findLocalReferences,
   findUnreferencedFiles,
+  rootReferenceTargets,
   findStylesheetReferences,
   hasLocalResourceUrl,
   isHtmlFilePath,
@@ -587,6 +588,25 @@ describe("findUnreferencedFiles", () => {
     expect(groups.map((g) => [g.folder, g.files])).toEqual([
       ["", ["top.png"]],
       ["proto", ["proto/a.png"]],
+    ]);
+  });
+});
+
+describe("rootReferenceTargets", () => {
+  it("maps a root-path reference to the file in the page's folder", () => {
+    const html =
+      '<link rel="icon" href="/favicon.svg"><script type="module" src="/assets/index-a1.js?v=1"></script>' +
+      '<img src="/img/two%20words.png"><a href="//cdn.example/x.js">x</a><img src="local.png">';
+    expect(rootReferenceTargets("react-default/index.html", html)).toEqual([
+      "react-default/favicon.svg",
+      "react-default/assets/index-a1.js",
+      "react-default/img/two words.png",
+    ]);
+  });
+
+  it("maps to the vault root for a page at the root", () => {
+    expect(rootReferenceTargets("index.html", '<script src="/app.js"></script>')).toEqual([
+      "app.js",
     ]);
   });
 });

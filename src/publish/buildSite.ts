@@ -121,6 +121,7 @@ import {
   countHtmlFilesAvailable,
   emptyHtmlFileStats,
   findUnreferencedFiles,
+  rootReferenceTargets,
   hasLocalResourceUrl,
   pageTitle,
   planCompanions,
@@ -1610,6 +1611,12 @@ export async function buildSite(
     const leftOutFolders = parseExcludeFolders(config.excludeFolders);
     const outputs = config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS;
     const carriedWhole = new Set(wholePlan.carry.map((file) => file.sourcePath));
+    // Meant by a root path, which is reported already with its own fix.
+    const namedFromRoot = new Set(
+      htmlPlan.targets.flatMap((target) =>
+        rootReferenceTargets(target.sourcePath, htmlContent.get(target.sourcePath) ?? ""),
+      ),
+    );
     htmlStats.unreferenced = findUnreferencedFiles(
       htmlPlan.targets.map((target) => target.sourcePath),
       app.vault.getFiles().map((file) => file.path),
@@ -1619,7 +1626,8 @@ export async function buildSite(
           wantedCompanions.has(path) ||
           carriedWhole.has(path) ||
           publishedHtml.has(path) ||
-          refusedCompanions.has(path),
+          refusedCompanions.has(path) ||
+          namedFromRoot.has(path),
         leftOut: (path) =>
           isExcluded(path, leftOutFolders) ||
           isBuildOutput(path, outputs, config.folder) ||
