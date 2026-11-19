@@ -13,7 +13,7 @@
  * a stylesheet that loads from one that is merely spelled right.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lockSite } from "./lockSite";
 import { UNLOCK_SCRIPT } from "./unlockScript";
 import type { PublishFile } from "../github/client";
@@ -361,5 +361,102 @@ describe("the reader, over a locked as-is page", () => {
     openShell("html-as-is/index.html");
     await unlock();
     expect(document.compatMode).toBe("CSS1Compat");
+  });
+});
+
+/*
+ * With a service worker in charge.
+ *
+ * jsdom has none, so `navigator.serviceWorker` is stubbed: a registration
+ * that succeeds and a controller whose script is ours. What is under test is
+ * the reader's half of the arrangement -- that it stops making blob URLs,
+ * and that it answers the worker's question from this tab.
+ */
+describe("the reader, with the service worker in charge", () => {
+  interface FakeWorker {
+    controller: { scriptURL: string } | null;
+    onmessage: ((event: unknown) => void) | null;
+    register: ReturnType<typeof vi.fn>;
+    addEventListener: () => void;
+  }
+  let worker: FakeWorker;
+
+  beforeEach(() => {
+    worker = {
+      controller: { scriptURL: `${location.origin}/osp-sw.js` },
+      onmessage: null,
+      register: vi.fn(async () => ({})),
+      addEventListener: () => {},
+    };
+    Object.defineProperty(navigator, "serviceWorker", {
+      value: worker,
+      configurable: true,
+    });
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  /** The worker's question, and the page's answer to it. */
+  function askPage(): Promise<unknown> {
+    return new Promise((resolve) => {
+      worker.onmessage?.({
+        data: { type: "osp-sw-state" },
+        ports: [{ postMessage: resolve }],
+      });
+    });
+  }
+
+  it("registers the worker from the root of the site", async () => {
+    openShell("html-as-is/index.html");
+    await unlock();
+    expect(worker.register).toHaveBeenCalledWith("../osp-sw.js");
+  });
+
+  it("writes the page as published, with no blob URLs", async () => {
+    openShell("html-as-is/index.html");
+    await unlock();
+    const link = document.querySelector("link[rel=stylesheet]") as HTMLLinkElement;
+    const script = document.querySelector("script[type=module]") as HTMLScriptElement;
+    expect(link.getAttribute("href")).toBe("styles.css");
+    expect(script.getAttribute("src")).toBe("app.js");
+    expect((document.querySelector("img") as HTMLImageElement).getAttribute("src")).toBe(
+      "art/panel.svg",
+    );
+    expect(blobs.size).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("answers the worker with this tab's key and the locked files", async () => {
+    openShell("html-as-is/index.html");
+    await unlock();
+    const answer = (await askPage()) as { bits: string; assets: string[] };
+    expect(answer.bits).toBe(sessionStorage.getItem(Object.keys(sessionStorage)[0]));
+    expect(answer.assets).toContain("html-as-is/art/panel.svg");
+    expect(answer.assets).not.toContain("assets/site.css");
+  });
+
+  it("answers with nothing while the page is still locked", async () => {
+    openShell("html-as-is/index.html");
+    new Function(UNLOCK_SCRIPT)();
+    expect(await askPage()).toBeNull();
+  });
+
+  it("falls back to blob URLs when another site's worker controls the page", async () => {
+    worker.controller = { scriptURL: `${location.origin}/someone-elses-sw.js` };
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      openShell("html-as-is/index.html");
+      const done = unlock();
+      await vi.advanceTimersByTimeAsync(3500);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+    for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 0));
+    const link = document.querySelector("link[rel=stylesheet]") as HTMLLinkElement;
+    expect(link.getAttribute("href")).toMatch(/^blob:/);
   });
 });

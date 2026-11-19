@@ -30,6 +30,7 @@ import {
   toBase64,
 } from "./encrypt";
 import { UNLOCK_SCRIPT } from "./unlockScript";
+import { SERVICE_WORKER_PATH, serviceWorkerScript } from "./serviceWorker";
 import { escapeHtml, pathToRoot } from "./page";
 
 /** Where the reader is published. */
@@ -291,6 +292,16 @@ export async function lockSite(
   }
 
   out.push({ path: UNLOCK_SCRIPT_PATH, content: UNLOCK_SCRIPT });
+  // The worker that serves the locked files to whatever asks for them
+  // later -- a script's picture, a fetch, a module's chunk. See
+  // `serviceWorker.ts`. Only worth publishing when there is something
+  // locked for it to serve.
+  if (assets.length) {
+    out.push({
+      path: SERVICE_WORKER_PATH,
+      content: serviceWorkerScript(Array.from(ALWAYS_CLEAR)),
+    });
+  }
 
   return { files: out, pages, assets: assets.length };
 }

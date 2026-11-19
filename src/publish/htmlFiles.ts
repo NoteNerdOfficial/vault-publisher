@@ -6,6 +6,7 @@ import {
   isHiddenPath,
 } from "./outputFolders";
 import { isExcluded, parseExcludeFolders } from "./excludeFolders";
+import { SERVICE_WORKER_PATH } from "./serviceWorker";
 
 /**
  * Publishing a vault's own HTML files, exactly as they are.
@@ -122,7 +123,7 @@ export const SITE_ASSET_FOLDERS = ["assets/files/", "assets/mathjax/"];
  */
 export function reservedPathReason(url: string): string | null {
   const path = url.toLowerCase();
-  if (path === ".nojekyll" || path === "cname") {
+  if (path === ".nojekyll" || path === "cname" || path === SERVICE_WORKER_PATH) {
     return `${url} is a file the site itself needs, so it cannot be published from the vault`;
   }
   if (

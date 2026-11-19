@@ -44,6 +44,7 @@ import {
   splitReviewInputs,
 } from "./overlay/importReview";
 import { lockSite } from "./publish/lockSite";
+import { RETIRED_SERVICE_WORKER, SERVICE_WORKER_PATH } from "./publish/serviceWorker";
 import {
   PAGE_MAP_FILE,
   buildPageMap,
@@ -2098,6 +2099,22 @@ export default class VaultPublisherPlugin extends Plugin {
         client.getTreeBlobs(github.branch),
       ]);
       const previous = parseManifest(previousRaw);
+
+      /*
+       * A site that was locked and is not any more still has a worker
+       * registered in every browser that unlocked it, and a browser keeps a
+       * worker whose script has gone. So the script is replaced with one
+       * that removes itself, and kept from then on: there is no telling
+       * when the last of those browsers will come back.
+       */
+      if (
+        !this.settings.publishPassword &&
+        previous.files[SERVICE_WORKER_PATH] &&
+        !result.files.some((file) => file.path === SERVICE_WORKER_PATH)
+      ) {
+        result.files.push({ path: SERVICE_WORKER_PATH, content: RETIRED_SERVICE_WORKER });
+      }
+
       const diff = diffAgainstManifest(result.files, previous, existingBlobs);
 
       const files = [
@@ -2509,10 +2526,11 @@ export default class VaultPublisherPlugin extends Plugin {
         if (this.settings.publishPassword) {
           lines.push(
             "",
-            "This site is password-locked. Publishing the folder whole uploads the " +
-              "files, but a picture a script adds *after* the page has unlocked is " +
-              "still asked for by its plain name, and only the encrypted copy is on " +
-              "the server -- so it will not display yet.",
+            "This site is password-locked. Files published this way are served " +
+              "to the page by the site's service worker once it is unlocked, " +
+              "which needs https (GitHub Pages has it) and a browser that allows " +
+              "service workers. Some private windows do not, and there a file a " +
+              "script asks for after the page opens will still fail.",
           );
         }
         for (const group of html.unreferenced) {
