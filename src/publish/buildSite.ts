@@ -120,6 +120,7 @@ import {
   countHtmlFilesBlockedByFlag,
   countHtmlFilesAvailable,
   emptyHtmlFileStats,
+  findUnreferencedFiles,
   hasLocalResourceUrl,
   pageTitle,
   planCompanions,
@@ -1590,6 +1591,43 @@ export async function buildSite(
         }`,
       });
     }
+  }
+
+  /*
+   * And what the pages did not take with them.
+   *
+   * A page's companions are whatever its markup names, so a file its script
+   * reaches by a path it builds at runtime was never found -- and a file
+   * never found is never reported as broken either. The page published, the
+   * picture did not, and nothing said so. Listed here so the report can.
+   *
+   * After every route that carries a file has run, so "published" means
+   * published. A file a folder published whole left behind, or a companion
+   * that was refused, is already in `skipped` with its reason; it is not
+   * unreferenced and is not listed twice.
+   */
+  if (htmlPlan.targets.length) {
+    const leftOutFolders = parseExcludeFolders(config.excludeFolders);
+    const outputs = config.outputFolders ?? DEFAULT_OUTPUT_FOLDERS;
+    const carriedWhole = new Set(wholePlan.carry.map((file) => file.sourcePath));
+    htmlStats.unreferenced = findUnreferencedFiles(
+      htmlPlan.targets.map((target) => target.sourcePath),
+      app.vault.getFiles().map((file) => file.path),
+      {
+        folder: config.folder,
+        published: (path) =>
+          wantedCompanions.has(path) ||
+          carriedWhole.has(path) ||
+          publishedHtml.has(path) ||
+          refusedCompanions.has(path),
+        leftOut: (path) =>
+          isExcluded(path, leftOutFolders) ||
+          isBuildOutput(path, outputs, config.folder) ||
+          isHiddenPath(path, config.folder) ||
+          isDependencyPath(path, config.folder) ||
+          entryFor(path, wholeEntries) !== null,
+      },
+    );
   }
 
   // Harvested first, site.css second: ours must win where both have an

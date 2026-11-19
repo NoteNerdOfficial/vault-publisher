@@ -862,6 +862,21 @@ export default class VaultPublisherPlugin extends Plugin {
       );
     }
 
+    const leftBehind = result.htmlFiles.unreferenced.reduce(
+      (n, group) => n + group.files.length,
+      0,
+    );
+    if (leftBehind) {
+      new Notice(
+        `Vault Publisher: ${leftBehind} ${leftBehind === 1 ? "file" : "files"} ` +
+          `beside a published HTML page ${leftBehind === 1 ? "was" : "were"} not ` +
+          `published, because the page's HTML never names ${leftBehind === 1 ? "it" : "them"}. ` +
+          `If a script loads ${leftBehind === 1 ? "it" : "them"}, add the folder to ` +
+          `"Publish whole folders" -- see ${OUTPUT_FOLDER}/build-report.md.`,
+        12000,
+      );
+    }
+
     // The other moment worth syncing on: a build is somebody about to look
     // at the review, and the overlay in the page they open reads the
     // document this is about to update.
@@ -1973,6 +1988,17 @@ export default class VaultPublisherPlugin extends Plugin {
             `output, not its src/index.html -- see the build report`,
         );
       }
+      if (result.htmlFiles.unreferenced.length) {
+        const count = result.htmlFiles.unreferenced.reduce(
+          (n, group) => n + group.files.length,
+          0,
+        );
+        say(
+          `${count} file(s) beside a published HTML page were not published, ` +
+            `because nothing in its HTML names them -- if a script loads them, ` +
+            `add the folder to 'Publish whole folders' -- see the build report`,
+        );
+      }
       if (result.htmlFiles.baseHrefs.length) {
         say(
           `WARNING: ${result.htmlFiles.baseHrefs.length} HTML file(s) set a base href ` +
@@ -2467,6 +2493,40 @@ export default class VaultPublisherPlugin extends Plugin {
           "",
         );
         for (const page of html.baseHrefs) lines.push(`- ${page}`);
+      }
+      if (html.unreferenced.length) {
+        const count = html.unreferenced.reduce((n, group) => n + group.files.length, 0);
+        lines.push(
+          "",
+          `**${count} file(s) sit beside a published page and were not published.** ` +
+            "A page takes with it the files its HTML names in `src`, `href`, " +
+            "`srcset` or a CSS `url()`. A path its script builds while it runs -- " +
+            "`\"img/\" + name + \".jpg\"` -- is never seen, so that file stays " +
+            "behind and the page shows a broken image or fails to load its data. " +
+            "If the page needs these, add its folder to **Publish whole folders** " +
+            "in settings and publish again. If it does not, there is nothing to do.",
+        );
+        if (this.settings.publishPassword) {
+          lines.push(
+            "",
+            "This site is password-locked. Publishing the folder whole uploads the " +
+              "files, but a picture a script adds *after* the page has unlocked is " +
+              "still asked for by its plain name, and only the encrypted copy is on " +
+              "the server -- so it will not display yet.",
+          );
+        }
+        for (const group of html.unreferenced) {
+          lines.push(
+            "",
+            `- \`${group.folder || "(vault root)"}\`, beside ` +
+              group.pages.map((page) => `\`${page}\``).join(", "),
+          );
+          const shown = group.files.slice(0, 20);
+          for (const file of shown) lines.push(`  - ${file}`);
+          if (group.files.length > shown.length) {
+            lines.push(`  - ...and ${group.files.length - shown.length} more`);
+          }
+        }
       }
       if (html.unresolved.length) {
         lines.push(

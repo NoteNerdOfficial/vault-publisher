@@ -494,6 +494,11 @@ export interface HtmlFileStats {
    * mapping from vault path to published URL is written down.
    */
   publishedPages: string[];
+  /**
+   * Files beside a published page that nothing referenced, so nothing
+   * published. See `findUnreferencedFiles`.
+   */
+  unreferenced: UnreferencedGroup[];
 }
 
 export function emptyHtmlFileStats(): HtmlFileStats {
@@ -506,6 +511,7 @@ export function emptyHtmlFileStats(): HtmlFileStats {
     appShells: [],
     baseHrefs: [],
     publishedPages: [],
+    unreferenced: [],
   };
 }
 
@@ -1142,6 +1148,94 @@ export function companionVaultPath(
 /** Whether a referenced file may be carried beside the page. */
 export function mayCarryCompanion(path: string): boolean {
   return !COMPANION_DENIED.test(path);
+}
+
+/** Files sitting in a published page's folder that nothing published. */
+export interface UnreferencedGroup {
+  /** The folder, as a vault path; "" for the vault root. */
+  folder: string;
+  /** The as-is pages in it, as vault paths. */
+  pages: string[];
+  /** The files left behind, as vault paths, sorted. */
+  files: string[];
+}
+
+/** What `findUnreferencedFiles` has to ask about the build. */
+export interface UnreferencedContext {
+  /** The published folder, as `SiteConfig.folder`. */
+  folder: string | null;
+  /** Whether this file went out at its own path, by any route. */
+  published: (path: string) => boolean;
+  /** Whether the author's settings keep this file out regardless. */
+  leftOut: (path: string) => boolean;
+}
+
+/**
+ * The files beside an as-is page that did not go out with it.
+ *
+ * A page's companions are found by reading its markup, so a file the page
+ * only reaches through a path its script builds -- `"img/" + name + ".jpg"`
+ * -- is never found, never carried, and never reported: the scan cannot
+ * call a reference broken when it never saw one. The page publishes, and
+ * the picture is missing on the live site with nothing in the report to
+ * say why. This is the report's half of that: whatever sits in the page's
+ * folder that nothing published, so the author can publish the folder whole.
+ *
+ * Recursive below the page, because that is where a prototype keeps its
+ * `img/` and `data/`. Except at the top of the scope, where "below the page"
+ * would be the whole vault: a page there gets only its own folder's files.
+ *
+ * Folders nest: a page in `proto/` and another in `proto/sub/` produce one
+ * group, under `proto/`, so no file is listed twice.
+ */
+export function findUnreferencedFiles(
+  pages: readonly string[],
+  vaultFiles: readonly string[],
+  context: UnreferencedContext,
+): UnreferencedGroup[] {
+  const root = context.folder ?? "";
+  const folderOf = (path: string) => {
+    const slash = path.lastIndexOf("/");
+    return slash === -1 ? "" : path.slice(0, slash);
+  };
+  const inside = (path: string, folder: string) =>
+    folder === "" || path.startsWith(`${folder}/`);
+
+  const byFolder = new Map<string, string[]>();
+  for (const page of pages) {
+    const folder = folderOf(page);
+    byFolder.set(folder, [...(byFolder.get(folder) ?? []), page]);
+  }
+
+  // Only a folder scanned recursively can swallow another; the scope root
+  // is scanned flat, so a folder under it keeps its own group.
+  const recursive = (folder: string) => folder !== root;
+  const outer = [...byFolder.keys()].filter(
+    (folder) =>
+      ![...byFolder.keys()].some(
+        (other) =>
+          other !== folder && recursive(other) && inside(folder, other),
+      ),
+  );
+
+  const groups: UnreferencedGroup[] = [];
+  for (const folder of outer.sort()) {
+    const covered = [...byFolder.entries()]
+      .filter(([other]) => other === folder || (recursive(folder) && inside(other, folder)))
+      .flatMap(([, found]) => found);
+    const files = vaultFiles
+      .filter((path) =>
+        recursive(folder)
+          ? inside(path, folder)
+          : folderOf(path) === folder,
+      )
+      .filter((path) => mayCarryCompanion(path))
+      .filter((path) => !context.leftOut(path))
+      .filter((path) => !context.published(path))
+      .sort();
+    if (files.length) groups.push({ folder, pages: covered.sort(), files });
+  }
+  return groups;
 }
 
 /**

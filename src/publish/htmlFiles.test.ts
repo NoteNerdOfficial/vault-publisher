@@ -9,6 +9,7 @@ import {
   countHtmlFilesAvailable,
   countHtmlFilesBlockedByFlag,
   findLocalReferences,
+  findUnreferencedFiles,
   findStylesheetReferences,
   hasLocalResourceUrl,
   isHtmlFilePath,
@@ -498,6 +499,95 @@ describe("companionVaultPath", () => {
 
   it("returns null for a reference with nothing in it", () => {
     expect(companionVaultPath("page.html", "?v=2")).toBe(null);
+  });
+});
+
+describe("findUnreferencedFiles", () => {
+  const nothing = { folder: null, published: () => false, leftOut: () => false };
+
+  it("lists a file a script loads by a path the markup never names", () => {
+    const groups = findUnreferencedFiles(
+      ["proto/index.html"],
+      ["proto/index.html", "proto/app.js", "proto/img/advisor.jpg", "other/x.png"],
+      { ...nothing, published: (p) => p === "proto/app.js" || p === "proto/index.html" },
+    );
+    expect(groups).toEqual([
+      { folder: "proto", pages: ["proto/index.html"], files: ["proto/img/advisor.jpg"] },
+    ]);
+  });
+
+  it("says nothing when everything beside the page went out", () => {
+    expect(
+      findUnreferencedFiles(["proto/index.html"], ["proto/index.html", "proto/a.png"], {
+        ...nothing,
+        published: () => true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("never suggests notes, other pages, or Obsidian's data files", () => {
+    const groups = findUnreferencedFiles(
+      ["proto/index.html"],
+      ["proto/index.html", "proto/notes.md", "proto/other.html", "proto/v.canvas", "proto/b.base", "proto/a.png"],
+      nothing,
+    );
+    expect(groups[0].files).toEqual(["proto/a.png"]);
+  });
+
+  it("respects what the settings keep out", () => {
+    const groups = findUnreferencedFiles(
+      ["proto/index.html"],
+      ["proto/index.html", "proto/private/key.png", "proto/a.png"],
+      { ...nothing, leftOut: (p) => p.startsWith("proto/private/") },
+    );
+    expect(groups[0].files).toEqual(["proto/a.png"]);
+  });
+
+  it("scans only its own folder at the top of the scope, not the whole vault", () => {
+    const groups = findUnreferencedFiles(
+      ["site/index.html"],
+      ["site/index.html", "site/logo.png", "site/deep/photo.jpg"],
+      { ...nothing, folder: "site" },
+    );
+    expect(groups).toEqual([
+      { folder: "site", pages: ["site/index.html"], files: ["site/logo.png"] },
+    ]);
+  });
+
+  it("treats the vault root as the top when nothing is scoped", () => {
+    const groups = findUnreferencedFiles(
+      ["index.html"],
+      ["index.html", "logo.png", "notes/photo.jpg"],
+      nothing,
+    );
+    expect(groups[0].files).toEqual(["logo.png"]);
+  });
+
+  it("lists a file once when pages nest", () => {
+    const groups = findUnreferencedFiles(
+      ["proto/index.html", "proto/sub/page.html"],
+      ["proto/index.html", "proto/sub/page.html", "proto/sub/a.png"],
+      nothing,
+    );
+    expect(groups).toEqual([
+      {
+        folder: "proto",
+        pages: ["proto/index.html", "proto/sub/page.html"],
+        files: ["proto/sub/a.png"],
+      },
+    ]);
+  });
+
+  it("keeps a subfolder's own group when the outer page sits at the top", () => {
+    const groups = findUnreferencedFiles(
+      ["index.html", "proto/index.html"],
+      ["index.html", "top.png", "proto/index.html", "proto/a.png"],
+      nothing,
+    );
+    expect(groups.map((g) => [g.folder, g.files])).toEqual([
+      ["", ["top.png"]],
+      ["proto", ["proto/a.png"]],
+    ]);
   });
 });
 
