@@ -1532,6 +1532,73 @@ describe("which page a comment is on", () => {
   });
 });
 
+describe("a card near the bottom of the window", () => {
+  /*
+   * The card opened 32px above its pin and grew downward, with nothing
+   * keeping it on screen, so a pin near the bottom edge put most of the card
+   * below it. jsdom has no layout: the window is its default 768px tall and
+   * each card is given the height a browser would measure.
+   */
+  function tall(el: Element | null, height: number): HTMLElement {
+    if (!el) throw new Error("no card");
+    Object.defineProperty(el, "offsetHeight", { configurable: true, get: () => height });
+    return el as HTMLElement;
+  }
+
+  it("keeps a comment's card inside the window, ending at its pin", () => {
+    mountPage();
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ x: 200, y: 740, text: "Low down." })]));
+    const shadow = run();
+    tall(shadow.querySelector(".co-pop"), 300);
+    click(shadow.querySelector(".co-pin"));
+
+    const top = parseFloat((shadow.querySelector(".co-pop") as HTMLElement).style.top);
+    expect(top + 300).toBeLessThanOrEqual(768 - 8);
+    // Beside the pin still: its foot level with the point the pin marks.
+    expect(top + 300).toBeGreaterThanOrEqual(740);
+  });
+
+  it("leaves a card that already fits where it always opened", () => {
+    mountPage();
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ x: 200, y: 100, text: "High up." })]));
+    const shadow = run();
+    tall(shadow.querySelector(".co-pop"), 300);
+    click(shadow.querySelector(".co-pin"));
+
+    expect((shadow.querySelector(".co-pop") as HTMLElement).style.top).toBe("68px");
+  });
+
+  it("stops above the toolbar when it is docked at the bottom, under the card", () => {
+    mountPage();
+    localStorage.setItem(STORE_KEY, JSON.stringify([row({ x: 200, y: 700, text: "Over the bar." })]));
+    const shadow = run();
+    const card = tall(shadow.querySelector(".co-pop"), 300);
+    card.getBoundingClientRect = () =>
+      ({ left: 241, right: 601, top: 0, bottom: 0, width: 360, height: 300 }) as DOMRect;
+    (shadow.querySelector(".co-notch") as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 300, right: 500, top: 712, bottom: 756, width: 200, height: 44 }) as DOMRect;
+    click(shadow.querySelector(".co-pin"));
+
+    const top = parseFloat(card.style.top);
+    expect(top + 300).toBeLessThanOrEqual(712 - 8);
+  });
+
+  it("keeps the draft for a new comment inside the window too", () => {
+    mountPage();
+    const shadow = run();
+    tall(shadow.querySelector(".co-draft"), 180);
+    mode(shadow, "comment");
+    shadow
+      .querySelector(".co-capture")
+      ?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true, clientX: 200, clientY: 750 }),
+      );
+
+    const top = parseFloat((shadow.querySelector(".co-draft") as HTMLElement).style.top);
+    expect(top + 180).toBeLessThanOrEqual(768 - 8);
+  });
+});
+
 describe("the popup", () => {
   function open(shadow: ShadowRoot): void {
     click(shadow.querySelector(".co-pin"));

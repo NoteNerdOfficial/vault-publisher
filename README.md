@@ -473,7 +473,10 @@ carries the only toolbar, and pins land on what is on the screen: its
 buttons, its sheets, its rows. A comment remembers which screen of the app it
 was left on, the panel names that screen, and clicking the comment sends the
 frame back to it. This needs the screen to be published from the same site as
-the frame, which is how a prototype folder is published anyway.
+the frame, which is how a prototype folder is published anyway. A prototype
+embedded in a note with `![[...html]]` is reviewed the same way: the note
+carries the toolbar, and pins in the embed follow its sheets and popups as
+they would on the prototype's own page.
 
 **Shared comments through GitHub issues.** With **How readers' comments
 reach you** set to **GitHub issues**, a published site's comments are kept as

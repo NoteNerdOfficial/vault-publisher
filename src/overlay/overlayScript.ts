@@ -1304,8 +1304,13 @@ export const OVERLAY_SCRIPT = `(function () {
    * and there is nothing in it that opens and closes.
    */
   function contextOf(node) {
-    if (!STAMP_AT_RUNTIME) return null;
     var doc = node && node.ownerDocument ? node.ownerDocument : document;
+    /*
+     * A framed screen is an application whatever the page around it is: a
+     * prototype embedded in a note opens sheets and popups exactly as it
+     * does on a page of its own, though the note around it does not.
+     */
+    if (!STAMP_AT_RUNTIME && doc === document) return null;
     var up = 0;
     for (var el = node; el && el.nodeType === 1; el = el.parentNode) {
       if (el === doc.body || el === doc.documentElement) break;
@@ -3231,7 +3236,8 @@ export const OVERLAY_SCRIPT = `(function () {
      * panel, which is the honest half: the pin says where, and the panel
      * says the text it was about has changed.
      */
-    if (comment.block && !STAMP_AT_RUNTIME) return null;
+    // A framed screen is an application, whatever the page around it is.
+    if (comment.block && !STAMP_AT_RUNTIME && !comment.frame) return null;
 
     /*
      * The same reasoning, for a deck that mounts one page at a time rather
@@ -5153,7 +5159,46 @@ export const OVERLAY_SCRIPT = `(function () {
     var left = at.left + 41;
     if (left + 360 > limit - 8) left = at.left - 360 - 8;
     popup.style.left = Math.max(8, left) + "px";
-    popup.style.top = Math.max(8, at.top - 32) + "px";
+    popup.style.top = keepInWindow(popup, Math.max(8, at.top - 32), at.top) + "px";
+  }
+
+  /*
+   * Where a card beside a pin goes vertically, so it ends inside the window.
+   *
+   * A card opens a little above its pin and hangs down from there, which is
+   * right until the pin is near the bottom of the window: then most of the
+   * card is below the edge, with the page's own end often stopping anyone
+   * scrolling to it. So a card that would cross the bottom is turned upward
+   * instead, its foot level with the point the pin marks, which keeps it
+   * beside the pin rather than somewhere else on screen. It never goes above
+   * the top of the window, which for a card taller than the window means its
+   * head shows and the card scrolls inside itself, as it already does.
+   *
+   * The toolbar counts as the edge when it is docked at the bottom and the
+   * card would be over it: a card raised only as far as the window's edge
+   * sat on top of it, hiding the buttons that switch out of comment mode.
+   *
+   * \`top\` is where it would go, and \`point\` is the pin's point, both in the
+   * page's coordinates. Measured, so it must be called with the card shown.
+   */
+  function keepInWindow(box, top, point) {
+    var height = box.offsetHeight;
+    if (!height) return top;
+    var first = window.pageYOffset + 8;
+    var last = window.pageYOffset + window.innerHeight - 8;
+    var bar = notch.getBoundingClientRect();
+    var card = box.getBoundingClientRect();
+    if (
+      bar.height &&
+      bar.top > window.innerHeight / 2 &&
+      card.left < bar.right &&
+      card.right > bar.left
+    ) {
+      last = Math.min(last, window.pageYOffset + bar.top - 8);
+    }
+    if (top + height <= last) return top;
+    var raised = Math.min(point + 8, last) - height;
+    return Math.max(first, Math.min(top, raised), 8);
   }
 
   /* --- the popup's own menu ----------------------------------------- */
@@ -5393,11 +5438,12 @@ export const OVERLAY_SCRIPT = `(function () {
     var left = point.x + 41;
     if (left + 280 > limit - 8) left = point.x - 280 - 8;
     draft.style.left = Math.max(8, left) + "px";
-    draft.style.top = Math.max(8, point.y - 32) + "px";
 
     draftField.input.value = "";
     draftField.refresh();
     draft.hidden = false;
+    // Placed once shown, since keeping it in the window measures it.
+    draft.style.top = keepInWindow(draft, Math.max(8, point.y - 32), point.y) + "px";
     draftField.input.focus();
   }
 

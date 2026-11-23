@@ -212,6 +212,45 @@ describe("a screen inside a device frame", () => {
   });
 });
 
+describe("a prototype embedded in a note", () => {
+  /*
+   * A note page is built from rendered Markdown and is not stamped at
+   * runtime, so nothing on it opens or closes. The prototype in its frame
+   * is an application like any other, and its sheets and popups have to be
+   * tracked as they would be on a page of their own.
+   */
+  it("records the sheet a pin is in, and the tap that opened it", () => {
+    const { frame, inner } = mountPhone(
+      `<button id="open">Choose delivery</button>` +
+        `<section class="sheet is-open"><label>Next day</label></section>`,
+    );
+    document.head.innerHTML = meta({ stamp: false, sourcePath: "See it working.md" });
+    const label = inner.querySelector(".sheet label") as HTMLElement;
+    boxed(label, { left: 40, top: 100, width: 200, height: 50 });
+    document.elementFromPoint = () => frame;
+    inner.elementFromPoint = () => label;
+    const shadow = run();
+
+    click(inner.getElementById("open"));
+    drop(shadow, 212, 150, "Show the price sooner.");
+
+    const comment = stored()[0];
+    expect(comment.frame).toBe("#screen");
+    expect(comment.context).toBe("~section.sheet");
+    expect(comment.opener?.text).toBe("Choose delivery");
+  });
+
+  it("still records nothing opening on the note itself", () => {
+    document.head.innerHTML = meta({ stamp: false, sourcePath: "See it working.md" });
+    document.body.innerHTML = `<div class="callout"><p>A note's callout.</p></div><dialog open><p>Not an app.</p></dialog>`;
+    document.elementFromPoint = () => document.querySelector("dialog p");
+    const shadow = run();
+    drop(shadow, 30, 30, "On the note.");
+
+    expect(stored()[0].context ?? null).toBeNull();
+  });
+});
+
 describe("a screen's own copy of the overlay", () => {
   it("stands down when the page around it is being reviewed", () => {
     const { frame, inner } = mountPhone(`<p>Home.</p>`);
