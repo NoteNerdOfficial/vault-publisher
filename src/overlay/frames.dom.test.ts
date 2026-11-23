@@ -502,7 +502,70 @@ describe("bringing back what a comment is about", () => {
     expect(document.querySelectorAll(".popup")).toHaveLength(1);
   });
 
-  it("offers nothing to tap when there was no tap to remember", () => {
+  describe("with Reopen set to run on its own", () => {
+    function mountRemove(over: Record<string, unknown>): ShadowRoot {
+      document.head.innerHTML = meta(over);
+      document.body.innerHTML = `<main><p>The list.</p><button id="remove">Remove</button></main>`;
+      document.getElementById("remove")?.addEventListener("click", () => {
+        const popup = document.createElement("div");
+        popup.className = "popup";
+        popup.innerHTML = `<button>Keep</button>`;
+        document.body.appendChild(popup);
+      });
+      seed([
+        {
+          text: "Make Keep the default.",
+          context: "~div.popup",
+          opener: { block: blockId("button", "Remove"), text: "Remove" },
+          x: 10,
+          y: 10,
+          cx: 0.5,
+          cy: 0.5,
+        },
+      ]);
+      return run();
+    }
+
+    it("makes the tap when the comment is opened", () => {
+      const shadow = mountRemove({ autoReopen: true });
+      openRow(shadow, "Make Keep the default.");
+      expect(document.querySelectorAll(".popup")).toHaveLength(1);
+    });
+
+    it("only offers it when the setting is off", () => {
+      const shadow = mountRemove({});
+      openRow(shadow, "Make Keep the default.");
+      expect(document.querySelectorAll(".popup")).toHaveLength(0);
+      expect(shadow.querySelector("[data-reopen]")).not.toBeNull();
+    });
+
+    it("does not tap for a sheet it can bring back by itself", () => {
+      document.head.innerHTML = meta({ autoReopen: true });
+      document.body.innerHTML =
+        `<button id="filters">Filter and sort</button>` +
+        `<section class="sheet" hidden><label>Only in stock</label></section>`;
+      let taps = 0;
+      document.getElementById("filters")?.addEventListener("click", () => taps++);
+      seed([
+        {
+          text: "Default this to on?",
+          context: "~section.sheet",
+          reveal: [{ class: "sheet is-open" }],
+          opener: { block: blockId("button", "Filter and sort"), text: "Filter and sort" },
+          x: 10,
+          y: 10,
+          cx: 0.5,
+          cy: 0.5,
+        },
+      ]);
+      const shadow = run();
+      openRow(shadow, "Default this to on?");
+      expect(document.querySelector(".sheet")?.hasAttribute("hidden")).toBe(false);
+      expect(taps).toBe(0);
+    });
+  });
+
+  it("offers nothing to tap when there was no tap to remember, and says so", () => {
     document.head.innerHTML = meta();
     document.body.innerHTML = `<main><p>The list.</p></main>`;
     seed([{ text: "In a popup.", context: "~div.popup", x: 10, y: 10, cx: 0.5, cy: 0.5 }]);
@@ -511,5 +574,153 @@ describe("bringing back what a comment is about", () => {
     openRow(shadow, "In a popup.");
     expect(shadow.querySelector(".co-shut")).not.toBeNull();
     expect(shadow.querySelector("[data-reopen]")).toBeNull();
+    expect(shadow.querySelector(".co-shut-why")?.textContent).toContain("No tap was recorded");
+  });
+
+  it("says why when the tap it would make is not on this screen", () => {
+    document.head.innerHTML = meta();
+    document.body.innerHTML = `<main><p>The list.</p></main>`;
+    seed([
+      {
+        text: "Elsewhere.",
+        context: "~div.popup",
+        opener: { block: blockId("button", "Show details"), text: "Show details" },
+        x: 10,
+        y: 10,
+        cx: 0.5,
+        cy: 0.5,
+      },
+    ]);
+    const shadow = run();
+
+    openRow(shadow, "Elsewhere.");
+    expect(shadow.querySelector("[data-reopen]")).toBeNull();
+    expect(shadow.querySelector(".co-shut-why")?.textContent).toContain(
+      "“Show details”, which is not on this screen",
+    );
+  });
+
+  /*
+   * A page that redraws its controls with innerHTML on every change has
+   * replaced the button that was tapped by the time the pin goes down.
+   */
+  it("remembers the tap that opened the sheet after the page redrew the button", () => {
+    document.head.innerHTML = meta();
+    document.body.innerHTML =
+      `<div id="steps"><button>Filter and sort</button></div>` +
+      `<section class="sheet is-open"><label>Only in stock</label></section>`;
+    const shadow = run();
+    const steps = document.getElementById("steps") as HTMLElement;
+    click(steps.querySelector("button"));
+    steps.innerHTML = `<button>Filter and sort</button>`;
+    document.elementFromPoint = () => document.querySelector(".sheet label");
+    drop(shadow, 30, 30, "Default this to on?");
+
+    expect(stored()[0].opener).toEqual({
+      block: blockId("button", "Filter and sort"),
+      text: "Filter and sort",
+    });
+  });
+
+  it("looks past taps inside the sheet to the one that opened it", () => {
+    document.head.innerHTML = meta();
+    document.body.innerHTML =
+      `<button id="filters">Filter and sort</button>` +
+      `<section class="sheet is-open"><button id="price">Price</button><label>Only in stock</label></section>`;
+    const shadow = run();
+    click(document.getElementById("filters"));
+    click(document.getElementById("price"));
+    document.elementFromPoint = () => document.querySelector(".sheet label");
+    drop(shadow, 30, 30, "Default this to on?");
+
+    expect(stored()[0].opener?.text).toBe("Filter and sort");
+  });
+
+  it("does not take a redrawn button inside the sheet for the opener", async () => {
+    document.head.innerHTML = meta();
+    document.body.innerHTML =
+      `<section class="sheet is-open"><div id="row"><button>Price</button></div>` +
+      `<label>Only in stock</label></section>`;
+    const shadow = run();
+    const row = document.getElementById("row") as HTMLElement;
+    click(row.querySelector("button"));
+    row.innerHTML = `<button>Price</button>`;
+    // The redrawn button is stamped by the page watcher, which waits a beat.
+    await new Promise((done) => setTimeout(done, 220));
+    document.elementFromPoint = () => document.querySelector(".sheet label");
+    drop(shadow, 30, 30, "Hm.");
+
+    expect(stored()[0].opener).toBeUndefined();
+  });
+});
+
+describe("two sheets that share a key", () => {
+  /*
+   * Every sheet in a prototype is a `section.sheet`. A comment in one is
+   * not open because another one is.
+   */
+  function mountSheets(): void {
+    document.head.innerHTML = meta();
+    document.body.innerHTML =
+      `<main><p>The list.</p></main>` +
+      `<section class="sheet" hidden><label>Only in stock</label></section>` +
+      `<section class="sheet is-open"><button>Copy link</button></section>`;
+  }
+
+  it("reads as closed, not lost, while the other sheet is up, and opens its own", () => {
+    mountSheets();
+    seed([
+      {
+        text: "Default this to on?",
+        block: blockId("label", "Only in stock"),
+        blockText: "Only in stock",
+        context: "~section.sheet",
+        reveal: [{ class: "sheet is-open" }],
+        x: 10,
+        y: 10,
+        rx: 0.5,
+        ry: 0.5,
+        cx: 0.5,
+        cy: 0.5,
+      },
+    ]);
+    const shadow = run();
+    const [filters, share] = Array.from(document.querySelectorAll(".sheet")) as HTMLElement[];
+
+    click(shadow.querySelector('.co-mode[data-mode="review"]'));
+    const row = shadow.querySelector(".co-row");
+    expect(row?.hasAttribute("data-orphan")).toBe(false);
+    expect(row?.textContent).toContain("(closed)");
+
+    click(row);
+    // The sheet the comment is in, not the first one with its key.
+    expect(filters.hasAttribute("hidden")).toBe(false);
+    expect(share.className).toBe("sheet is-open");
+    expect(shadow.querySelector(".co-pop")?.textContent).not.toContain("rewritten");
+  });
+
+  it("says the block may be in a different sheet when it cannot be found", () => {
+    document.head.innerHTML = meta();
+    document.body.innerHTML =
+      `<main><p>The list.</p></main>` +
+      `<section class="sheet is-open"><button>Copy link</button></section>`;
+    seed([
+      {
+        text: "Gone with its sheet.",
+        block: blockId("label", "Only in stock"),
+        blockText: "Only in stock",
+        context: "~section.sheet",
+        x: 10,
+        y: 10,
+        cx: 0.5,
+        cy: 0.5,
+      },
+    ]);
+    const shadow = run();
+    click(shadow.querySelector('.co-mode[data-mode="review"]'));
+    click(shadow.querySelector(".co-row"));
+
+    const warn = shadow.querySelector(".co-pop .co-pop-note .co-warn")?.textContent ?? "";
+    expect(warn).toContain("It may be in a different one");
   });
 });

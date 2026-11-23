@@ -231,6 +231,19 @@ export const OVERLAY_SCRIPT = `(function () {
   var CONTACT = typeof config.contact === "string" ? config.contact : "";
 
   /*
+   * Make the opening tap without asking, when a comment is opened from the
+   * panel and the popup or sheet it was left in is shut.
+   *
+   * On in the plugin's settings unless the owner turned it off, which is
+   * written into the page only when it is on. The tap runs the prototype's
+   * own code, and in an application the tap that raised a confirmation can
+   * be the one that deletes something; in a clickable prototype it is nearly
+   * always harmless, and a button standing between the reviewer and the pin
+   * is only in the way. See \`reopenButton\`.
+   */
+  var AUTO_REOPEN = config.autoReopen === true;
+
+  /*
    * Stamping block anchors here, for a page the build did not render.
    *
    * A note's page arrives with every block already carrying BLOCK_ATTR,
@@ -1460,7 +1473,13 @@ export const OVERLAY_SCRIPT = `(function () {
     if (!contextClosed(comment)) return false;
     var doc = docFor(comment);
     if (!doc) return false;
-    var holder = contextNodes(comment.context, doc)[0];
+    // Of several sheets with the same key, the one the comment's block is in.
+    var holders = contextNodes(comment.context, doc);
+    var target = anchorFor(comment);
+    var holder = holders[0];
+    for (var h = 0; target && h < holders.length; h++) {
+      if (holders[h].contains(target)) holder = holders[h];
+    }
     if (!holder) return false;
 
     var changes = [];
@@ -1506,8 +1525,17 @@ export const OVERLAY_SCRIPT = `(function () {
    * is what a pin dropped a moment later in something that had just opened
    * records as that thing's opener.
    */
-  var lastTap = null;
-  var TAP_MEMORY_MS = 120000;
+  /*
+   * A few taps, not one. The tap that raised a sheet is often followed by
+   * taps inside it -- a switch flipped, a field focused -- before the pin
+   * goes down, and keeping only the last one lost the opener to them.
+   *
+   * Ten minutes, not two: reading a sheet and deciding what to say about it
+   * takes longer than two, and the opener was being dropped for it.
+   */
+  var taps = [];
+  var TAP_MEMORY_MS = 600000;
+  var TAP_LIMIT = 8;
 
   function noteTap(event) {
     if (mode !== "view") return;
@@ -1515,13 +1543,44 @@ export const OVERLAY_SCRIPT = `(function () {
     if (!target || target.nodeType !== 1 || target === host) return;
     var block = nearestBlock(target);
     if (!block) return;
-    lastTap = {
+    taps.push({
       node: block,
       block: block.getAttribute(BLOCK_ATTR),
       text: clip(block.textContent),
       doc: block.ownerDocument,
       at: Date.now(),
-    };
+    });
+    if (taps.length > TAP_LIMIT) taps.shift();
+  }
+
+  /*
+   * The tap that opened \`holder\`: the newest recent tap on its screen that
+   * was outside it.
+   *
+   * The tapped element is not required to still be in the page. A
+   * prototype that redraws its controls on every change -- a toolbar
+   * that sets its own innerHTML -- has replaced the button by the time the
+   * pin goes down, and that is no reason to forget the tap: the opener is
+   * kept as a block id and looked up again when it is replayed. For such a
+   * tap "outside" is asked of the id instead, so a redrawn button inside
+   * the sheet is still not taken for the one that raised it.
+   */
+  function openerTap(holder, doc) {
+    var now = Date.now();
+    for (var i = taps.length - 1; i >= 0; i--) {
+      var tap = taps[i];
+      if (tap.doc !== doc || !tap.block) continue;
+      if (now - tap.at >= TAP_MEMORY_MS) break;
+      var inside = tap.node.isConnected
+        ? holder.contains(tap.node)
+        : !!holder.querySelector("[" + BLOCK_ATTR + '="' + cssQuote(tap.block) + '"]');
+      if (!inside) return tap;
+    }
+    return null;
+  }
+
+  function cssQuote(value) {
+    return String(value).replace(/["\\\\]/g, "\\\\$&");
   }
 
   document.addEventListener("click", noteTap, true);
@@ -1560,8 +1619,41 @@ export const OVERLAY_SCRIPT = `(function () {
   /** Whether a comment's context is on screen, or it has none to be in. */
   function contextOpen(comment) {
     if (!comment.context) return true;
+    return !!holderFor(comment);
+  }
+
+  /*
+   * The on-screen element a comment's context names, for this comment.
+   *
+   * A \`#id\` or attribute key names one thing. A \`~\` key does not: every
+   * bottom sheet in a prototype is a \`div.sheet\`, so "is a \`~div.sheet\`
+   * showing" was answered yes by whichever sheet was up. A comment left in
+   * the filters sheet then read as open while the share sheet was showing,
+   * found no block, and told the reviewer its block had been rewritten --
+   * with no offer to open the sheet it was really in.
+   *
+   * So for a \`~\` key the comment's own block decides, when it can be found:
+   * the context is open only if a showing match holds it (or, for a pin on
+   * a popover's padding anchored to the section around it, is held by it).
+   * A block that cannot be found at all decides nothing, and the first
+   * showing match stands, as before -- the sheet may be the right one with
+   * its text rewritten, and \`whyLost\` says both possibilities.
+   */
+  function holderFor(comment) {
+    if (!comment.context) return null;
     var doc = docFor(comment);
-    return !!doc && !!contextNode(comment.context, doc);
+    if (!doc) return null;
+    var key = String(comment.context);
+    if (key.charAt(0) !== "~" || !comment.block) return contextNode(key, doc);
+    var target = anchorFor(comment);
+    if (!target) return contextNode(key, doc);
+    var nodes = contextNodes(key, doc);
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (!(node.contains(target) || target.contains(node))) continue;
+      if (showing(node) && inSight(node)) return node;
+    }
+    return null;
   }
 
   /** The one case a reviewer needs told: it is in something, and it is shut. */
@@ -3201,7 +3293,7 @@ export const OVERLAY_SCRIPT = `(function () {
      * its own box is what the pin should move with.
      */
     if (target && comment.context && typeof comment.cx === "number") {
-      var nearer = contextNode(comment.context, docFor(comment));
+      var nearer = holderFor(comment);
       if (nearer && nearer !== target && target.contains(nearer)) target = null;
     }
 
@@ -3264,7 +3356,7 @@ export const OVERLAY_SCRIPT = `(function () {
      * \`rx\`/\`ry\` do for a block.
      */
     if (comment.context && typeof comment.cx === "number") {
-      var holder = contextNode(comment.context, docFor(comment));
+      var holder = holderFor(comment);
       if (holder) {
         var area = topRect(holder);
         var hx = area.left + comment.cx * area.width;
@@ -3399,9 +3491,61 @@ export const OVERLAY_SCRIPT = `(function () {
       if (!Object.prototype.hasOwnProperty.call(blocks, key)) continue;
       if (baseOf(key) === base || key === base) copies++;
     }
-    return copies > 1
-      ? "Anchor lost: this text is now on the page more than once, so the comment could not be placed."
-      : "Anchor lost: this block has been rewritten since.";
+    if (copies > 1) {
+      return "Anchor lost: this text is now on the page more than once, so the comment could not be placed.";
+    }
+    /*
+     * In a sheet named only by its tag and class, and one like it is up.
+     * Whether it is this comment's sheet with the text changed, or another
+     * sheet altogether, cannot be told from here, so both are said.
+     */
+    if (comment.context && String(comment.context).charAt(0) === "~") {
+      return (
+        "Anchor lost: this block is not in the " +
+        viewLabel(comment.context) +
+        " showing now. It may be in a different one, or it has been rewritten since."
+      );
+    }
+    return "Anchor lost: this block has been rewritten since.";
+  }
+
+  /*
+   * The button that makes the opening tap again, or null when there is no
+   * tap to make: none was recorded, or the control it was is not on this
+   * screen.
+   */
+  function reopenButton(comment) {
+    if (!comment.opener || !openerNode(comment)) return null;
+    var again = el("button", "co-reopen", "Reopen");
+    again.setAttribute("data-reopen", "");
+    again.setAttribute(
+      "title",
+      "Taps “" + (comment.opener.text || "the control") + "” again, as it was tapped to open this",
+    );
+    again.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      replayOpener(comment);
+    });
+    return again;
+  }
+
+  /* Why \`reopenButton\` gave nothing, in terms the reviewer can act on. */
+  function whyNoReopen(comment) {
+    if (comment.opener && comment.opener.text) {
+      return (
+        "Reopen taps “" +
+        comment.opener.text +
+        "”, which is not on this screen. Go to where it is, or open the " +
+        viewLabel(comment.context) +
+        " yourself."
+      );
+    }
+    return (
+      "No tap was recorded that opened it, so it cannot be reopened from here. Open the " +
+      viewLabel(comment.context) +
+      " in the prototype to see the pin."
+    );
   }
 
   /*
@@ -4214,6 +4358,14 @@ export const OVERLAY_SCRIPT = `(function () {
     renderPopup();
     renderPins();
     renderPanel();
+    /*
+     * Still shut, and the owner asked for the tap to be made rather than
+     * offered. After the card is drawn: \`chaseMark\` gives up on a card that
+     * is not showing, and it is what redraws this one once the sheet is up.
+     */
+    if (AUTO_REOPEN && !peek && contextClosed(comment) && openerNode(comment)) {
+      replayOpener(comment);
+    }
   }
 
   function closePopup() {
@@ -4369,23 +4521,19 @@ export const OVERLAY_SCRIPT = `(function () {
      */
     if (contextClosed(comment) && !(peek && peek.id === comment.id)) {
       var shut = el("div", "co-pop-note co-shut");
-      shut.appendChild(
+      var said = el("div", "co-shut-text");
+      said.appendChild(
         el("div", "co-warn", "Left inside " + viewLabel(comment.context) + ", which is closed."),
       );
-      if (comment.opener && openerNode(comment)) {
-        var again = el("button", "co-reopen", "Reopen");
-        again.setAttribute("data-reopen", "");
-        again.setAttribute(
-          "title",
-          "Taps “" + (comment.opener.text || "the control") + "” again, as it was tapped to open this",
-        );
-        again.addEventListener("click", function (event) {
-          event.preventDefault();
-          event.stopPropagation();
-          replayOpener(comment);
-        });
-        shut.appendChild(again);
-      }
+      var again = reopenButton(comment);
+      /*
+       * No button, and why. Leaving it out without a word read as the
+       * feature being broken, and the reviewer is the one who can act: by
+       * opening the thing in the prototype themselves.
+       */
+      if (!again) said.appendChild(el("div", "co-shut-why", whyNoReopen(comment)));
+      shut.appendChild(said);
+      if (again) shut.appendChild(again);
       popup.appendChild(shut);
     }
 
@@ -4393,6 +4541,10 @@ export const OVERLAY_SCRIPT = `(function () {
       var note = el("div", "co-pop-note");
       note.appendChild(el("div", "co-warn", whyLost(comment)));
       if (comment.blockText) note.appendChild(el("div", "co-quote", comment.blockText));
+      // A different sheet of the same kind may be the one up: the tap that
+      // opened this comment's is still worth offering.
+      var retry = comment.context && String(comment.context).charAt(0) === "~" && reopenButton(comment);
+      if (retry) note.appendChild(retry);
       popup.appendChild(note);
     }
 
@@ -5377,16 +5529,8 @@ export const OVERLAY_SCRIPT = `(function () {
            * recent, and outside the thing it opened -- a tap inside the
            * sheet was a tap on the sheet, not the one that raised it.
            */
-          if (
-            lastTap &&
-            lastTap.doc === hitDoc &&
-            Date.now() - lastTap.at < TAP_MEMORY_MS &&
-            lastTap.block &&
-            lastTap.node.isConnected &&
-            !holder.contains(lastTap.node)
-          ) {
-            point.opener = { block: lastTap.block, text: lastTap.text };
-          }
+          var tap = openerTap(holder, hitDoc);
+          if (tap) point.opener = { block: tap.block, text: tap.text };
           var area = topRect(holder);
           point.cx = area.width ? (clientX - area.left) / area.width : 0;
           point.cy = area.height ? (clientY - area.top) / area.height : 0;

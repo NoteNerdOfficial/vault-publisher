@@ -204,6 +204,13 @@ interface Settings {
      * through GitHub's prefilled form, and the repository must be public.
      */
     signinUrl: string;
+    /**
+     * Opening a comment that was left in a sheet or popup that is now shut
+     * makes the tap that opened it, rather than offering a Reopen button.
+     * On by default: a reviewer opening a comment wants to see its pin.
+     * Turned off for a prototype where a tap can change something.
+     */
+    autoReopen: boolean;
     /** Prefills the comment author in the overlay. */
     reviewer: string;
     /** Vault folder the review file is saved in, and imported from. */
@@ -348,6 +355,7 @@ const DEFAULT_SETTINGS: Settings = {
     publishContact: "",
     shareThroughIssues: false,
     signinUrl: "",
+    autoReopen: true,
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
   },
@@ -809,6 +817,7 @@ export default class VaultPublisherPlugin extends Plugin {
       reviewOverlay: overlay.enabled
         ? {
             reviewer: overlay.reviewer,
+            autoReopen: overlay.autoReopen,
             tracker:
               typeof target === "string" ? undefined : TRACKER_NAME[target.provider],
           }
@@ -2029,6 +2038,7 @@ export default class VaultPublisherPlugin extends Plugin {
               // Only for the file route. With sharing on its field is not
               // shown, and an address nobody can see must not be published.
               contact: shared ? undefined : overlay.publishContact,
+              autoReopen: overlay.autoReopen,
               shared,
             }
           : undefined,

@@ -107,6 +107,8 @@ const settings = {
     // needs a real repository, which a shared vault does not have.
     shareThroughIssues: false,
     signinUrl: "",
+    // On, as for any vault: opening a comment shows its pin.
+    autoReopen: true,
   },
   publishPassword: "",
   sourceLink: { enabled: false, url: "" },

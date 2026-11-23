@@ -226,6 +226,7 @@ export interface SettingsHost {
       publishContact: string;
       shareThroughIssues?: boolean;
       signinUrl?: string;
+      autoReopen?: boolean;
       reviewer: string;
       reviewFolder: string;
     };
@@ -2349,6 +2350,28 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
               value.trim().replace(/^\/+|\/+$/g, "") || "_vault-publisher/review";
             await this.host.saveSettings();
           }),
+      );
+
+    /*
+     * The one switch here that changes what the overlay does rather than
+     * where its comments go, so it applies to the published site as well:
+     * a reader opening a comment there meets the same shut sheet.
+     */
+    new Setting(root)
+      .setName("Reopen sheets and popups automatically")
+      .setDesc(
+        "When you open a comment that was left in a sheet, popup or " +
+          "notification that is now closed, tap the button that opened it, " +
+          "so the pin comes back without a click. Off, the comment offers " +
+          "a Reopen button instead. The tap runs the prototype's own code, " +
+          "so leave this off for a prototype where a tap can change or " +
+          "delete something. Applies to the preview and the published site.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(Boolean(overlay.autoReopen)).onChange(async (value) => {
+          overlay.autoReopen = value;
+          await this.host.saveSettings();
+        }),
       );
 
     new Setting(root)

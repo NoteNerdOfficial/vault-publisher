@@ -223,6 +223,7 @@ export function asIsPageContent(
         comments: overlay.comments !== false,
         published: overlay.published,
         contact: overlay.contact,
+        autoReopen: overlay.autoReopen,
         shared: overlay.shared,
       })
     : html;
@@ -472,6 +473,11 @@ export interface SiteConfig {
      * to and a file is the only way back to whoever owns the site.
      */
     contact?: string;
+    /**
+     * Make the tap that opened a shut sheet or popup when its comment is
+     * opened, instead of offering it as a Reopen button. A setting.
+     */
+    autoReopen?: boolean;
     /**
      * The public repository whose issues hold this site's shared comments,
      * when sharing is on. A reader posts through GitHub's own form and every
@@ -1390,6 +1396,7 @@ export async function buildSite(
               comments: config.reviewOverlay.comments !== false,
               published: config.reviewOverlay.published,
               contact: config.reviewOverlay.contact,
+              autoReopen: config.reviewOverlay.autoReopen,
               shared: config.reviewOverlay.shared,
             }
           : undefined,

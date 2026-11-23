@@ -502,6 +502,14 @@ describe("the overlay on a page this module did not build", () => {
     expect(reviewOverlayMeta(config)).not.toContain("contact");
   });
 
+  it("carries automatic Reopen only when it is turned on", () => {
+    expect(reviewOverlayMeta({ ...config, autoReopen: true })).toContain(
+      "autoReopen&quot;:true",
+    );
+    expect(reviewOverlayMeta({ ...config, autoReopen: false })).not.toContain("autoReopen");
+    expect(reviewOverlayMeta(config)).not.toContain("autoReopen");
+  });
+
   // The flag is the whole difference between the two callers: a rendered note
   // was stamped while its DOM was live, an as-is page never had a DOM pass.
   it("asks the browser to stamp anchors, which a rendered page does not", () => {

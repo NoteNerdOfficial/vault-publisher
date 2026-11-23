@@ -1273,6 +1273,9 @@ export const OVERLAY_CSS = `
   cursor: pointer;
 }
 .osp-overlay .co-reopen:hover { border-color: var(--co-fg-2); }
+.osp-overlay .co-pop-note > .co-reopen { align-self: flex-start; }
+.osp-overlay .co-shut-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.osp-overlay .co-shut-why { color: var(--co-fg-3); font-size: 11px; line-height: 16px; }
 /*
  * A link that leaves the page, drawn in the ink wherever it appears.
  *
