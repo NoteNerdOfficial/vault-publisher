@@ -84,8 +84,9 @@ const settings = {
     // One folder, so the exclusion is visible in the build report.
     excludeFolders: ["Scratch"],
     publishWholeFolders: [],
-    // Off, so the as-is example demonstrates the toggle rather than hiding it.
-    publishHtmlFiles: false,
+    // On, so the prototype embedded in "See it working" and the as-is
+    // example work on the first build. The plugin's own default is off.
+    publishHtmlFiles: true,
     homeNote: "Start here.md",
     theme: "studio",
     // Empty. `Examples/site-tokens.css` is in the vault to be tried.
