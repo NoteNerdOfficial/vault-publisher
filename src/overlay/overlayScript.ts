@@ -678,6 +678,30 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   /*
+   * Whether a framed comment's frame is showing the page it was left on,
+   * for a prototype whose screens are siblings shown one at a time.
+   *
+   * The address is not enough there: such a prototype swaps screens without
+   * changing it, so every screen has the same \`froute\`, and a click on a
+   * comment had nowhere to go. \`fview\` is the frame's own deck key, the
+   * same thing \`view\` is for a deck at the top, and it is matched the same
+   * way -- see \`onThisView\`. A comment without one is on every screen of
+   * its route, which is what it meant when it was written.
+   */
+  function onFrameView(comment) {
+    if (!comment.frame || !comment.fview) return true;
+    var doc = docFor(comment);
+    if (!doc) return false;
+    if (currentViewKey(doc) === comment.fview) return true;
+    return viewPagesShowing(comment.fview, doc);
+  }
+
+  /* The frame is on the comment's address and on its page. */
+  function onFrameScreen(comment) {
+    return onFrameRoute(comment) && onFrameView(comment);
+  }
+
+  /*
    * A frame's content box in its parent window's coordinates, and how much
    * the frame is scaled. A device mockup commonly shrinks its screen with a
    * CSS transform, so a frame 390 wide may be drawn 300 wide, and every
@@ -1063,11 +1087,18 @@ export const OVERLAY_SCRIPT = `(function () {
    * from this one walk -- which page is showing, and which element is a
    * given page -- so the two cannot disagree about what a deck is.
    */
-  function deckGroups() {
-    if (!STAMP_AT_RUNTIME) return [];
+  function deckGroups(inDoc) {
+    var doc = inDoc || document;
+    /*
+     * A framed screen is an application whatever the page around it is, as
+     * in \`contextOf\`: a phone prototype whose screens are siblings shown
+     * one at a time is a deck to this walk, inside its frame.
+     */
+    if (doc === document && !STAMP_AT_RUNTIME) return [];
+    if (!doc.body) return [];
 
     var found = [];
-    var queue = [document.body];
+    var queue = [doc.body];
     var seen = 0;
 
     while (queue.length && seen < VIEW_SCAN_LIMIT) {
@@ -1118,10 +1149,8 @@ export const OVERLAY_SCRIPT = `(function () {
     return found;
   }
 
-  function currentViewKey() {
-    if (!STAMP_AT_RUNTIME) return "";
-
-    var groups = deckGroups();
+  function currentViewKey(inDoc) {
+    var groups = deckGroups(inDoc);
     var parts = [];
     for (var i = 0; i < groups.length; i++) parts.push(viewKeyOf(groups[i].shown));
 
@@ -1182,10 +1211,10 @@ export const OVERLAY_SCRIPT = `(function () {
    * form carries the tag and the count is that an index is not an identity.
    * Those keep the comparison they had.
    */
-  function viewPagesShowing(key) {
+  function viewPagesShowing(key, inDoc) {
     var parts = String(key).split(">");
     for (var i = 0; i < parts.length; i++) {
-      if (!contextNode(parts[i])) return false;
+      if (!contextNode(parts[i], inDoc)) return false;
     }
     return true;
   }
@@ -1608,11 +1637,17 @@ export const OVERLAY_SCRIPT = `(function () {
 
   /* Makes the opening tap again, then waits for the pin to appear. */
   function replayOpener(comment) {
+    if (!tapOpener(comment)) return false;
+    chaseMark(comment, true);
+    return true;
+  }
+
+  /* The opening tap alone, for a caller that is already waiting on the pin. */
+  function tapOpener(comment) {
     var node = openerNode(comment);
     if (!node) return false;
     if (typeof node.click === "function") node.click();
     else node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    chaseMark(comment);
     return true;
   }
 
@@ -1660,7 +1695,7 @@ export const OVERLAY_SCRIPT = `(function () {
   function contextClosed(comment) {
     // On a screen the frame is not showing, nothing about it is known --
     // "closed" would send the reviewer looking for a dialog to open.
-    if (comment.frame && !onFrameRoute(comment)) return false;
+    if (comment.frame && !onFrameScreen(comment)) return false;
     return !!comment.context && !contextOpen(comment);
   }
 
@@ -1698,7 +1733,10 @@ export const OVERLAY_SCRIPT = `(function () {
     // Which screen each frame is on, so a frame navigating is a change too.
     var frames = reviewFrames();
     for (var f = 0; f < frames.length; f++) {
-      out.push(frames[f].key + "@" + frameRouteOf(frames[f].doc));
+      // And which of its pages, for a screen that swaps them in place.
+      out.push(
+        frames[f].key + "@" + frameRouteOf(frames[f].doc) + "|" + currentViewKey(frames[f].doc),
+      );
     }
     return out.join(">");
   }
@@ -1780,15 +1818,22 @@ export const OVERLAY_SCRIPT = `(function () {
    * where the next round finds it. Four is more levels of deck than anyone
    * builds, and the loop stops early the moment a round changes nothing.
    */
-  function turnToView(target) {
+  function turnToView(target, inDoc) {
     if (!target) return true;
-    checkView();
-    if (viewKey === target) return true;
+    var doc = inDoc || document;
+    // The top document's key is kept in \`viewKey\`, which the rest of the
+    // overlay reads; a frame's is asked for fresh, since nothing stores it.
+    var now = function () {
+      if (doc !== document) return currentViewKey(doc);
+      checkView();
+      return viewKey;
+    };
+    if (now() === target) return true;
 
     var wanted = String(target).split(">");
 
     for (var round = 0; round < 4; round++) {
-      var groups = deckGroups();
+      var groups = deckGroups(doc);
       var moved = false;
 
       for (var g = 0; g < groups.length; g++) {
@@ -1807,12 +1852,10 @@ export const OVERLAY_SCRIPT = `(function () {
       }
 
       if (!moved) break;
-      checkView();
-      if (viewKey === target) return true;
+      if (now() === target) return true;
     }
 
-    checkView();
-    return viewKey === target;
+    return now() === target;
   }
 
   /*
@@ -1965,11 +2008,14 @@ export const OVERLAY_SCRIPT = `(function () {
     // nulled when absent, so a comment that never had one stores as before.
     if (typeof row.frame === "string" && row.frame) {
       row.froute = typeof row.froute === "string" ? row.froute : null;
+      // Which page of a screen that swaps pages in place; see \`onFrameView\`.
+      if (typeof row.fview !== "string" || !row.fview) delete row.fview;
       row.fx = typeof row.fx === "number" ? row.fx : null;
       row.fy = typeof row.fy === "number" ? row.fy : null;
     } else {
       delete row.frame;
       delete row.froute;
+      delete row.fview;
       delete row.fx;
       delete row.fy;
     }
@@ -3269,7 +3315,7 @@ export const OVERLAY_SCRIPT = `(function () {
     var inFrame = null;
     if (comment.frame) {
       var doc = docFor(comment);
-      if (!doc || !onFrameRoute(comment)) return null;
+      if (!doc || !onFrameScreen(comment)) return null;
       inFrame = frameOf(doc);
       if (!inFrame || !showing(inFrame)) return null;
     }
@@ -3463,7 +3509,7 @@ export const OVERLAY_SCRIPT = `(function () {
   function orphaned(comment) {
     // A screen the frame is not showing cannot be searched, which is not
     // the same thing as the block being gone from it.
-    if (comment.frame && !onFrameRoute(comment)) return false;
+    if (comment.frame && !onFrameScreen(comment)) return false;
     // Inside something that is shut: the block went with it, and the panel
     // says so by naming what it is in. "Rewritten" would be untrue.
     if (contextClosed(comment)) return false;
@@ -3812,6 +3858,8 @@ export const OVERLAY_SCRIPT = `(function () {
      */
     var where = [];
     if (framed) where.push(framed);
+    // The page of the screen, for a framed prototype that swaps them in place.
+    if (comment.frame && comment.fview) where.push(viewLabel(comment.fview));
     if (comment.view) where.push(viewLabel(comment.view));
     if (contextClosed(comment)) {
       where.push(viewLabel(comment.context) + " (closed)");
@@ -5001,6 +5049,12 @@ export const OVERLAY_SCRIPT = `(function () {
         chaseMark(next);
         return;
       }
+      // On the right address but another of its pages: turn the screen, as
+      // a deck is turned. See \`onFrameView\`.
+      if (next.frame && !onFrameView(next)) {
+        turnToFramePage(next);
+        return;
+      }
       glide();
       openPopup(next.id);
       revealMark(next);
@@ -5049,6 +5103,24 @@ export const OVERLAY_SCRIPT = `(function () {
    * deck mid-transition moves it again as the slide settles, and chasing is
    * already how the overlay waits out a screen drawing itself.
    */
+  /*
+   * Off to a mark on another page of a framed screen: the same steps as
+   * \`turnToDeckPage\`, in the frame's document.
+   *
+   * Turned before the card opens, so the card asks whether the comment's
+   * sheet is shut on the page it was left on, and brings it back or taps
+   * it open from there. That half stays best effort: the page is reached
+   * whether or not the sheet on it can be.
+   */
+  function turnToFramePage(next) {
+    var arrived = turnToView(next.fview, docFor(next));
+    frameBlocks = Object.create(null);
+    redrawForView();
+    glide();
+    openPopup(next.id);
+    if (!revealMark(next) || !arrived) chaseMark(next);
+  }
+
   function turnToDeckPage(next) {
     var arrived = turnToView(next.view);
     // Unconditionally, not through \`viewTurned\`: the turn above has
@@ -5206,8 +5278,9 @@ export const OVERLAY_SCRIPT = `(function () {
    * looks a little sooner and a few times over, so the step reads as one
    * movement rather than a jump and then a correction.
    */
-  function chaseMark(comment) {
+  function chaseMark(comment, alreadyTapped) {
     var tries = 0;
+    var tapped = alreadyTapped === true;
     (function look() {
       // The reviewer moved on, or the card was closed while the screen was
       // still drawing. Either way nothing here is wanted any more.
@@ -5216,8 +5289,24 @@ export const OVERLAY_SCRIPT = `(function () {
       // or two, so which page is up is re-asked on every look.
       checkView();
       blocks = blockIndex();
+      /*
+       * A frame sent to another address loads its first page; the page the
+       * comment is on is turned to once it has.
+       */
+      if (comment.frame && comment.fview && onFrameRoute(comment) && !onFrameView(comment)) {
+        if (turnToView(comment.fview, docFor(comment))) frameBlocks = Object.create(null);
+      }
       // A screen that has just loaded has its sheet to bring back now.
-      if (!peek) peekFor(comment);
+      if (!peek && peekFor(comment)) frameBlocks = Object.create(null);
+      /*
+       * Or to tap open, when that is what the owner asked for. Once per
+       * chase: the card was opened before this screen was here to ask, so
+       * \`openPopup\` could not, and a tap that did not raise it will not
+       * the second time either.
+       */
+      if (AUTO_REOPEN && !tapped && !peek && contextClosed(comment) && tapOpener(comment)) {
+        tapped = true;
+      }
       renderPins();
       if (selected === comment.id) placePopup(comment);
       if (revealMark(comment)) {
@@ -5494,6 +5583,7 @@ export const OVERLAY_SCRIPT = `(function () {
         cy: null,
         frame: null,
         froute: null,
+        fview: null,
         fx: null,
         fy: null,
         reveal: null,
@@ -5514,6 +5604,7 @@ export const OVERLAY_SCRIPT = `(function () {
       if (hitDoc !== document && frameOf(hitDoc)) {
         point.frame = frameKeyOf(hitDoc);
         point.froute = frameRouteOf(hitDoc);
+        point.fview = currentViewKey(hitDoc) || null;
         var glass = glassOf(frameOf(hitDoc));
         point.fx = glass.width ? (clientX - glass.left) / glass.width : 0;
         point.fy = glass.height ? (clientY - glass.top) / glass.height : 0;
@@ -5623,6 +5714,7 @@ export const OVERLAY_SCRIPT = `(function () {
       // before frames were reached into reads exactly as it did.
       frame: point.frame || undefined,
       froute: point.frame ? point.froute : undefined,
+      fview: (point.frame && point.fview) || undefined,
       fx: point.frame ? point.fx : undefined,
       fy: point.frame ? point.fy : undefined,
       // What it takes to bring the context back; see \`peekFor\`.
@@ -6985,6 +7077,7 @@ export const OVERLAY_SCRIPT = `(function () {
       context: pin.context || null,
       frame: pin.frame || undefined,
       froute: pin.froute || null,
+      fview: pin.fview || undefined,
       fx: typeof pin.fx === "number" ? pin.fx : null,
       fy: typeof pin.fy === "number" ? pin.fy : null,
       x: typeof pin.x === "number" ? pin.x : 0,
@@ -7179,7 +7272,7 @@ export const OVERLAY_SCRIPT = `(function () {
   function issueParts(comment) {
     var pin = { v: 1, id: comment.id, page: comment.page || SOURCE_PATH };
     var fields = [
-      "block", "blockText", "route", "view", "context", "frame", "froute",
+      "block", "blockText", "route", "view", "context", "frame", "froute", "fview",
       "rx", "ry", "cx", "cy", "fx", "fy", "x", "y", "priority",
     ];
     for (var i = 0; i < fields.length; i++) {

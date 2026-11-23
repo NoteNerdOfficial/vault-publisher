@@ -231,6 +231,12 @@ export interface OverlayComment {
    * while the screen inside it navigates, so the frame alone cannot say.
    */
   froute?: string | null;
+  /**
+   * Which page that screen was on, for a prototype that swaps its pages in
+   * place without changing its address: the frame's own deck key, as `view`
+   * is for a deck at the top. Absent when the screen was not one of those.
+   */
+  fview?: string;
   /** The drop point as a fraction of the frame's glass, for a pin on no block. */
   fx?: number | null;
   fy?: number | null;

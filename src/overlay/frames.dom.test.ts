@@ -212,6 +212,102 @@ describe("a screen inside a device frame", () => {
   });
 });
 
+describe("a phone whose screens swap in place", () => {
+  /*
+   * The prototype keeps every screen in one document and shows one at a
+   * time, so the frame's address is the same on all of them. Which screen
+   * was up is the frame's own deck key, as a deck's page is at the top.
+   */
+  const SCREENS =
+    `<section id="home"><button id="go">Profile</button><p>Home screen.</p></section>` +
+    `<section id="profile" hidden><p>Your saved addresses.</p><button id="edit">Edit</button></section>`;
+
+  function openRow(shadow: ShadowRoot, text: string): void {
+    click(shadow.querySelector('.co-mode[data-mode="review"]'));
+    const row = Array.from(shadow.querySelectorAll(".co-row")).find((r) =>
+      r.textContent?.includes(text),
+    );
+    click(row ?? null);
+  }
+
+  it("records which screen the pin was dropped on", () => {
+    const { frame, inner } = mountPhone(SCREENS);
+    inner.getElementById("home")?.setAttribute("hidden", "");
+    inner.getElementById("profile")?.removeAttribute("hidden");
+    const plan = inner.querySelector("#profile p") as HTMLElement;
+    boxed(plan, { left: 10, top: 10, width: 200, height: 40 });
+    document.elementFromPoint = () => frame;
+    inner.elementFromPoint = () => plan;
+    const shadow = run();
+    drop(shadow, 120, 70, "Name the address.");
+
+    expect(stored()[0].fview).toBe("#profile");
+  });
+
+  it("turns the screen to the comment's page when its row is clicked", () => {
+    const { inner } = mountPhone(SCREENS);
+    seed([
+      {
+        text: "Name the address.",
+        frame: "#screen",
+        froute: null,
+        fview: "#profile",
+        block: blockId("p", "Your saved addresses."),
+        blockText: "Your saved addresses.",
+        rx: 0.5,
+        ry: 0.5,
+      },
+    ]);
+    const shadow = run();
+
+    openRow(shadow, "Name the address.");
+    expect(inner.getElementById("profile")?.hasAttribute("hidden")).toBe(false);
+    expect(inner.getElementById("home")?.hasAttribute("hidden")).toBe(true);
+    expect((shadow.querySelector(".co-pop") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("keeps a pin left on another page of the screen off this one", () => {
+    mountPhone(SCREENS);
+    seed([
+      { id: "home", frame: "#screen", froute: null, fview: "#home", x: 5, y: 5, fx: 0.1, fy: 0.1 },
+      { id: "profile", frame: "#screen", froute: null, fview: "#profile", x: 5, y: 5, fx: 0.1, fy: 0.1 },
+    ]);
+    const shadow = run();
+    expect(pins(shadow).map((p) => p.getAttribute("data-comment"))).toEqual(["home"]);
+  });
+
+  it("still goes to the page when the popup on it cannot be opened", () => {
+    const { inner } = mountPhone(SCREENS);
+    seed([
+      {
+        text: "In the alert.",
+        frame: "#screen",
+        froute: null,
+        fview: "#profile",
+        context: "~div.toast",
+        x: 5,
+        y: 5,
+        cx: 0.5,
+        cy: 0.5,
+      },
+    ]);
+    const shadow = run();
+
+    openRow(shadow, "In the alert.");
+    // On the page, with the card saying what it is in.
+    expect(inner.getElementById("profile")?.hasAttribute("hidden")).toBe(false);
+    expect(shadow.querySelector(".co-shut")?.textContent).toContain("which is closed");
+  });
+
+  it("names the page in the panel", () => {
+    mountPhone(SCREENS);
+    seed([{ text: "A note.", frame: "#screen", froute: null, fview: "#profile" }]);
+    const shadow = run();
+    click(shadow.querySelector('.co-mode[data-mode="review"]'));
+    expect(shadow.querySelector(".co-row-screen")?.textContent).toContain("profile");
+  });
+});
+
 describe("a prototype embedded in a note", () => {
   /*
    * A note page is built from rendered Markdown and is not stamped at

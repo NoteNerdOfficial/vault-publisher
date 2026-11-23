@@ -54,6 +54,7 @@ export interface SharedPin {
   context?: string | null;
   frame?: string | null;
   froute?: string | null;
+  fview?: string;
   rx?: number | null;
   ry?: number | null;
   cx?: number | null;
@@ -194,7 +195,13 @@ export function commentFromIssue(
     view: pin.view ?? null,
     context: pin.context ?? null,
     ...(pin.frame
-      ? { frame: pin.frame, froute: pin.froute ?? null, fx: pin.fx ?? null, fy: pin.fy ?? null }
+      ? {
+          frame: pin.frame,
+          froute: pin.froute ?? null,
+          ...(typeof pin.fview === "string" && pin.fview ? { fview: pin.fview } : {}),
+          fx: pin.fx ?? null,
+          fy: pin.fy ?? null,
+        }
       : {}),
     x: typeof pin.x === "number" ? pin.x : 0,
     y: typeof pin.y === "number" ? pin.y : 0,

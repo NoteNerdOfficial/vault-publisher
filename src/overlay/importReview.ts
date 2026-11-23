@@ -149,6 +149,7 @@ function readComment(value: unknown, index: number): OverlayComment {
       ? {
           frame: row.frame,
           froute: typeof row.froute === "string" ? row.froute : null,
+          ...(typeof row.fview === "string" && row.fview ? { fview: row.fview } : {}),
           fx: typeof row.fx === "number" ? row.fx : null,
           fy: typeof row.fy === "number" ? row.fy : null,
         }
