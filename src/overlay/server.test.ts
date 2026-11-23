@@ -129,6 +129,21 @@ describe("the review server", () => {
   const withToken = (path: string) =>
     `${base}${path}${path.includes("?") ? "&" : "?"}t=${TOKEN}`;
 
+  /*
+   * Opens a page the way a browser does: the token is answered with a
+   * cookie and a redirect to the same address without it, which is followed
+   * holding the cookie.
+   */
+  const open = async (path: string): Promise<Response> => {
+    const first = await fetch(withToken(path), { redirect: "manual" });
+    if (first.status !== 302) return first;
+    const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0];
+    return fetch(`${base}${first.headers.get("location")}`, {
+      headers: { cookie },
+      redirect: "manual",
+    });
+  };
+
   it("listens only on the loopback address", async () => {
     const address = server.listening;
 
@@ -162,7 +177,7 @@ describe("the review server", () => {
   });
 
   it("serves a page to a caller holding the token", async () => {
-    const response = await fetch(withToken("/index.html"));
+    const response = await open("/index.html");
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
@@ -172,7 +187,7 @@ describe("the review server", () => {
   // So a link from one page to the next does not have to carry the token,
   // and neither does the overlay's own fetch.
   it("hands out a cookie so later requests need no token in the URL", async () => {
-    const first = await fetch(withToken("/"));
+    const first = await fetch(withToken("/"), { redirect: "manual" });
     const cookie = first.headers.get("set-cookie") ?? "";
 
     expect(cookie).toContain(TOKEN);
@@ -185,12 +200,32 @@ describe("the review server", () => {
     expect(await second.text()).toBe("<h1>Plan</h1>");
   });
 
+  /*
+   * A prototype records the address bar as the screen a comment is on, so
+   * a token left in it was recorded too -- and the token is new every time
+   * the server starts, which hid those pins in every later session.
+   */
+  it("takes the token out of the address once the cookie is set", async () => {
+    const first = await fetch(withToken("/app/index.html?tab=2"), {
+      redirect: "manual",
+    });
+
+    expect(first.status).toBe(302);
+    expect(first.headers.get("location")).toBe("/app/index.html?tab=2");
+    expect(first.headers.get("set-cookie")).toContain(TOKEN);
+  });
+
+  it("leaves the token on an API call, which has no address bar", async () => {
+    const response = await fetch(withToken("/api/comments"), { redirect: "manual" });
+    expect(response.status).toBe(200);
+  });
+
   it("serves the index at the root", async () => {
-    expect(await (await fetch(withToken("/"))).text()).toBe("<h1>Home</h1>");
+    expect(await (await open("/")).text()).toBe("<h1>Home</h1>");
   });
 
   it("answers 404 for a page the build did not produce", async () => {
-    expect((await fetch(withToken("/missing.html"))).status).toBe(404);
+    expect((await open("/missing.html")).status).toBe(404);
   });
 
   it("answers an empty document before anything has been saved", async () => {
@@ -239,9 +274,7 @@ describe("the review server", () => {
   });
 
   it("refuses a path that climbs out of the preview folder", async () => {
-    const response = await fetch(withToken("/../data.json"), {
-      redirect: "manual",
-    });
+    const response = await open("/../data.json");
 
     expect([400, 404]).toContain(response.status);
   });

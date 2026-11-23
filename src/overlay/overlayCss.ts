@@ -1243,6 +1243,26 @@ export const OVERLAY_CSS = `
   font-size: 12px;
 }
 .osp-overlay .co-filed .co-warn { flex-basis: 100%; }
+/* A comment inside something shut, and the tap that would open it again. */
+.osp-overlay .co-shut {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.osp-overlay .co-reopen {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--co-line);
+  border-radius: var(--co-r-2);
+  background: var(--co-bg);
+  color: var(--co-fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.osp-overlay .co-reopen:hover { border-color: var(--co-fg-2); }
 /*
  * A link that leaves the page, drawn in the ink wherever it appears.
  *

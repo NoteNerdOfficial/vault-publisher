@@ -1469,4 +1469,199 @@ export const CLIENT_SCRIPT = `(function () {
 
   window.addEventListener("resize", fitViewer, { passive: true });
 
+  /* --- an embedded prototype at a chosen width -------------------- *
+     A note can embed a page published as-is (see htmlEmbed.ts), which
+     arrives as a frame and a bar. The bar gets a button per width here.
+     A width wider than the column is drawn scaled down rather than cut
+     off or scrolled, so a desktop layout can be looked at whole inside a
+     note; the label says the scale, so nobody judges type size from it. */
+  var EMBED_WIDTHS = [
+    ["Phone", 375],
+    ["Tablet", 768],
+    ["Desktop", 1280],
+    ["Fit", 0]
+  ];
+
+  function fitEmbed(figure) {
+    var stage = figure.querySelector(".osp-html-embed-stage");
+    var frame = stage && stage.querySelector("iframe");
+    if (!frame) return;
+    var height = Number(figure.getAttribute("data-height")) || 560;
+    var width = Number(figure.getAttribute("data-osp-at")) || 0;
+    var room = stage.clientWidth;
+    var note = figure.querySelector(".osp-html-embed-scale");
+
+    stage.style.height = height + "px";
+    if (!width || !room) {
+      frame.style.width = "100%";
+      frame.style.height = height + "px";
+      frame.style.transform = "";
+      frame.style.marginLeft = "";
+      if (note) note.textContent = "";
+      return;
+    }
+    var scale = Math.min(1, room / width);
+    frame.style.width = width + "px";
+    /* Taller by the same factor, so the scaled frame still fills the stage
+       and shows as much of the page as an unscaled one would. */
+    frame.style.height = Math.round(height / scale) + "px";
+    frame.style.transform = scale < 1 ? "scale(" + scale + ")" : "";
+    frame.style.marginLeft = scale < 1 ? "" : Math.floor((room - width) / 2) + "px";
+    if (note) {
+      note.textContent = width + " px" + (scale < 1 ? " at " + Math.round(scale * 100) + "%" : "");
+    }
+  }
+
+  function setEmbedWidth(figure, width) {
+    if (width) figure.setAttribute("data-osp-at", String(width));
+    else figure.removeAttribute("data-osp-at");
+    var buttons = figure.querySelectorAll(".osp-html-embed-width");
+    for (var i = 0; i < buttons.length; i++) {
+      var on = Number(buttons[i].getAttribute("data-width")) === width;
+      buttons[i].setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    fitEmbed(figure);
+  }
+
+  var embeds = document.querySelectorAll("figure.osp-html-embed");
+  for (var e = 0; e < embeds.length; e++) {
+    (function (figure) {
+      var holder = figure.querySelector(".osp-html-embed-widths");
+      if (!holder) return;
+      for (var w = 0; w < EMBED_WIDTHS.length; w++) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "osp-html-embed-width";
+        button.textContent = EMBED_WIDTHS[w][0];
+        button.setAttribute("data-width", String(EMBED_WIDTHS[w][1]));
+        button.setAttribute(
+          "title",
+          EMBED_WIDTHS[w][1] ? "View at " + EMBED_WIDTHS[w][1] + " px wide" : "Fit the column"
+        );
+        button.addEventListener("click", function (event) {
+          var width = Number(event.currentTarget.getAttribute("data-width"));
+          /* Frames compared side by side move together: two versions of a
+             design are only comparable at the same width. */
+          var group = figure.closest(".osp-html-compare");
+          var together = group ? group.querySelectorAll("figure.osp-html-embed") : [figure];
+          for (var g = 0; g < together.length; g++) setEmbedWidth(together[g], width);
+        });
+        holder.appendChild(button);
+      }
+      var scale = document.createElement("span");
+      scale.className = "osp-html-embed-scale";
+      holder.appendChild(scale);
+      setEmbedWidth(figure, Number(figure.getAttribute("data-width")) || 0);
+    })(embeds[e]);
+  }
+  if (embeds.length) {
+    window.addEventListener("resize", function () {
+      for (var i = 0; i < embeds.length; i++) fitEmbed(embeds[i]);
+    }, { passive: true });
+  }
+
+
+  /* --- what changed since the last visit ---------------------------- *
+     The build writes a fingerprint of each page's content to
+     assets/changes.json. This browser keeps the fingerprints it saw last
+     time, and marks the pages whose content has changed since, or that
+     are new: a dot in the tree and on the prototypes page, and a line
+     under the title of the page being read. A first visit marks nothing,
+     because everything is new to somebody who has seen none of it.
+
+     Kept in this browser and nowhere else. A page is "seen" when it is
+     read here, or when its row is followed: a page published as-is does
+     not run this script, so following the link is the only moment there
+     is to record it. */
+  var SEEN_KEY = "osp-seen";
+  var script =
+    document.currentScript || document.querySelector('script[src$="assets/site.js"]');
+  var siteRoot = null;
+  try {
+    if (script && /^https?:/.test(script.src)) siteRoot = new URL("../", script.src);
+  } catch (e) {}
+
+  function pageKey(href) {
+    if (!siteRoot) return null;
+    try {
+      var url = new URL(href, location.href);
+      if (url.origin !== siteRoot.origin) return null;
+      if (url.pathname.indexOf(siteRoot.pathname) !== 0) return null;
+      var key = decodeURIComponent(url.pathname.slice(siteRoot.pathname.length));
+      if (key === "" || key.charAt(key.length - 1) === "/") key += "index.html";
+      else if (!/\\.html?$/i.test(key)) key += ".html";
+      return key;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function readSeen() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(SEEN_KEY) || "null");
+      return raw && typeof raw === "object" ? raw : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeSeen(seen) {
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(seen)); } catch (e) {}
+  }
+
+  function markChanges(pages) {
+    var seen = readSeen();
+    if (!seen) {
+      writeSeen(pages);
+      return;
+    }
+    function state(key) {
+      if (!key || !pages[key]) return "";
+      if (!seen[key]) return "new";
+      return seen[key] === pages[key] ? "" : "changed";
+    }
+
+    var links = document.querySelectorAll(
+      ".osp-panel-body .osp-tree a.osp-row, .osp-proto-card a.osp-proto-link"
+    );
+    for (var i = 0; i < links.length; i++) {
+      (function (link) {
+        var key = pageKey(link.getAttribute("href"));
+        var now = state(key);
+        if (!now) return;
+        /* A card's link already uses its ::after to cover the card, so a
+           card is marked on the card and draws its dot elsewhere. */
+        var marked = link.closest(".osp-proto-card") || link;
+        marked.setAttribute("data-osp-changed", now);
+        link.setAttribute("title", now === "new" ? "New since your last visit" : "Changed since your last visit");
+        link.addEventListener("click", function () {
+          var latest = readSeen() || {};
+          latest[key] = pages[key];
+          writeSeen(latest);
+        });
+      })(links[i]);
+    }
+
+    var here = pageKey(location.href);
+    var mine = state(here);
+    var title = document.querySelector(".osp-article > .osp-title");
+    if (mine && title) {
+      var note = document.createElement("p");
+      note.className = "osp-changed-note";
+      note.textContent = mine === "new" ? "New since your last visit." : "Changed since your last visit.";
+      title.insertAdjacentElement("afterend", note);
+    }
+    if (here && pages[here]) {
+      seen[here] = pages[here];
+      writeSeen(seen);
+    }
+  }
+
+  if (siteRoot && window.fetch) {
+    fetch(new URL("assets/changes.json", siteRoot).href, { cache: "no-cache" })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (data) { if (data && data.pages) markChanges(data.pages); })
+      .catch(function () {});
+  }
+
 })();`;

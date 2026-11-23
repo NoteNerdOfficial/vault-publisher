@@ -524,7 +524,71 @@ describe("which screen a comment belongs to", () => {
     boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
     leaveComment(shadow, { x: 10, y: 10 }, "About the settings screen.");
 
-    expect(stored()[0].route).toBe("/app/index.html#/settings");
+    // Relative to the page, so it reads the same on any host.
+    expect(stored()[0].route).toBe("./#/settings");
+  });
+
+  /*
+   * The preview serves a prototype at `/app/index.html`, a published site
+   * at `/<repo>/app/`. A route that named the host's path was hidden on the
+   * other one, which is the whole of what moving a review between the two
+   * is for.
+   */
+  it("shows a pin left in the preview on the published copy", () => {
+    search("/my-site/app/#/settings");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          page: "app/index.html",
+          sourcePath: "app/index.html",
+          route: "/app/index.html#/settings",
+        }),
+      ]),
+    );
+    mountApp();
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+  });
+
+  it("shows a pin left on the published copy back in the preview", () => {
+    search("/app/index.html#/settings");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({ page: "app/index.html", sourcePath: "app/index.html", route: "./#/settings" }),
+      ]),
+    );
+    mountApp();
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+  });
+
+  it("still tells two screens apart across hosts", () => {
+    search("/my-site/app/index.html#/account");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          page: "app/index.html",
+          sourcePath: "app/index.html",
+          route: "/app/index.html#/settings",
+        }),
+      ]),
+    );
+    mountApp();
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(0);
+  });
+
+  // A router that routes on the path has no page-relative form to give.
+  it("keeps a path that is not the page's own as it stands", () => {
+    search("/app/settings");
+    mountApp();
+    const shadow = run();
+    boxed("p", { left: 0, top: 0, width: 400, height: 40, right: 400, bottom: 40 });
+    leaveComment(shadow, { x: 10, y: 10 }, "On a path-routed screen.");
+    expect(stored()[0].route).toBe("/app/settings");
   });
 
   it("shows a pin only on the screen it was left on", () => {
@@ -5104,5 +5168,86 @@ describe("moving the notch", () => {
       expect(shadow.querySelector(".co-panel")?.getAttribute("data-side")).toBe("left");
       expect(at()).toEqual(before);
     });
+  });
+});
+
+/*
+ * A comment's own address, for sending somebody straight to it. Only on a
+ * published page: a preview's address is no use to anyone else.
+ */
+describe("copying a link to a comment", () => {
+  function mountPublishedApp(): void {
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<p>On this screen.</p>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        stamp: true,
+        published: true,
+      }),
+    );
+    document.head.appendChild(meta);
+  }
+
+  function openFirstPin(shadow: ShadowRoot): void {
+    click(shadow.querySelector(".co-pin"));
+  }
+
+  it("copies the page, the screen and the comment", async () => {
+    const written: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text: string) => (written.push(text), Promise.resolve()) },
+    });
+    search("/my-site/app/?variant=b#/settings");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([
+        row({
+          id: "c1",
+          page: "app/index.html",
+          sourcePath: "app/index.html",
+          route: "./?variant=b#/settings",
+        }),
+      ]),
+    );
+    mountPublishedApp();
+    const shadow = run();
+    openFirstPin(shadow);
+    click(shadow.querySelector("[data-copy-link]"));
+    await Promise.resolve();
+
+    expect(written).toHaveLength(1);
+    const url = new URL(written[0]);
+    expect(url.pathname).toBe("/my-site/app/index.html");
+    expect(url.searchParams.get("variant")).toBe("b");
+    expect(url.searchParams.get("osp-comment")).toBe("c1");
+    expect(url.hash).toBe("#/settings");
+  });
+
+  it("is not offered in a preview", () => {
+    search("/app/index.html");
+    localStorage.setItem(
+      STORE_KEY,
+      JSON.stringify([row({ id: "c1", page: "app/index.html", sourcePath: "app/index.html" })]),
+    );
+    document.head.innerHTML = "";
+    document.body.innerHTML = `<p>On this screen.</p>`;
+    const meta = document.createElement("meta");
+    meta.setAttribute("name", "osp-review");
+    meta.setAttribute(
+      "content",
+      JSON.stringify({ sourcePath: "app/index.html", page: "app/index.html", stamp: true }),
+    );
+    document.head.appendChild(meta);
+    const shadow = run();
+    openFirstPin(shadow);
+    expect(shadow.querySelector(".co-pop")).not.toBeNull();
+    expect(shadow.querySelector("[data-copy-link]")).toBeNull();
   });
 });

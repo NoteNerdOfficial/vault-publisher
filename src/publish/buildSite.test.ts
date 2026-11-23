@@ -8,6 +8,7 @@ import {
   resolveHomeNote,
   selectNotes,
   urlForNote,
+  asIsPageContent,
   overlayKey,
 } from "./buildSite";
 
@@ -437,5 +438,42 @@ describe("the start-here key, read off a note", () => {
       pinOrder: 3,
     });
     expect(nav({ pinned: 3 }, { pinnedProperty: "start" }).pinned).toBe(false);
+  });
+});
+
+/*
+ * A prototype published as-is gets the overlay when the published overlay
+ * is on, and nothing at all when it is off. The meta is readable by every
+ * visitor, so the vault path must not be in it.
+ */
+describe("asIsPageContent", () => {
+  const html = "<!doctype html><html><body><p>Prototype</p></body></html>";
+  const target = { url: "app/index.html", sourcePath: "Clients/Acme/proto/index.html" };
+
+  it("publishes the author's file exactly when the overlay is off", () => {
+    expect(asIsPageContent(html, target, { siteName: "Site" })).toBe(html);
+  });
+
+  it("appends the overlay to a published prototype, keyed on its URL", () => {
+    const out = asIsPageContent(html, target, {
+      siteName: "Site",
+      reviewOverlay: { published: true, comments: true },
+    });
+    expect(out.startsWith(html)).toBe(true);
+    expect(out).toContain('<meta name="osp-review"');
+    expect(out).toContain('src="../assets/overlay.js"');
+    expect(out).toContain("app/index.html");
+    expect(out).not.toContain("Clients");
+  });
+
+  it("keeps the blank-app explanation out of a publish", () => {
+    const shell = '<!doctype html><html><body><div id="root"></div></body></html>';
+    const published = asIsPageContent(shell, target, {
+      siteName: "Site",
+      reviewOverlay: { published: true },
+    });
+    const preview = asIsPageContent(shell, target, { siteName: "Site", previewBuild: true });
+    expect(preview.length).toBeGreaterThan(shell.length);
+    expect(published).not.toContain(target.sourcePath);
   });
 });

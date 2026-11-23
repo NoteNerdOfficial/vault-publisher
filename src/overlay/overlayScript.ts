@@ -84,6 +84,25 @@ export const OVERLAY_SCRIPT = `(function () {
   var holder = document.querySelector('meta[name="osp-review"]');
   if (!holder) return;
 
+  // Not inside a frame the site itself drew: a prototype embedded in a note
+  // or shown as a thumbnail on the prototypes page. A toolbar per frame is
+  // clutter, and a pin left at a scaled-down width lands nowhere useful;
+  // the frame's "Open full page" is where a page is reviewed. Reading
+  // frameElement throws across origins, which means it is not ours.
+  try {
+    var host = window.frameElement;
+    if (host && host.closest && host.closest(".osp-html-embed, .osp-proto-card")) return;
+    /*
+     * Nor inside a page that is itself being reviewed: the screen of a
+     * prototype drawn in a phone or tablet frame, which is a second page in
+     * an <iframe> of the first. Both carry the overlay, so both drew a
+     * toolbar. The outer one reaches into this document itself (see
+     * \`reviewFrames\`), so its pins land on what is on the screen, and this
+     * copy has nothing left to do.
+     */
+    if (host && host.ownerDocument.querySelector('meta[name="osp-review"]')) return;
+  } catch (e) {}
+
   var config;
   try {
     config = JSON.parse(holder.getAttribute("content") || "{}");
@@ -119,7 +138,7 @@ export const OVERLAY_SCRIPT = `(function () {
   var DEEP_PARAM = "osp-comment";
   var BLOCK_ATTR = "data-osp-block";
   var TEXT_LIMIT = 80;
-  var SCHEMA = 10;
+  var SCHEMA = 11;
   /*
    * Whether this page's blocks are ours to mark, and keep marking.
    *
@@ -258,9 +277,9 @@ export const OVERLAY_SCRIPT = `(function () {
     "main, header, footer, nav, aside, section, article, dialog, form, " +
     "fieldset, details, summary, button, a, label, td, th, [role]";
 
-  function stampBlocks() {
+  function stampBlocks(doc) {
     var selector = PROSE_BLOCKS + ", " + UI_BLOCKS;
-    var nodes = document.querySelectorAll(selector);
+    var nodes = (doc || document).querySelectorAll(selector);
     var seen = {};
     for (var i = 0; i < nodes.length; i++) {
       var text = normalizeBlockText(nodes[i].textContent || "");
@@ -273,6 +292,60 @@ export const OVERLAY_SCRIPT = `(function () {
       seen[key] = count + 1;
       nodes[i].setAttribute(BLOCK_ATTR, count === 0 ? base : base + "-" + count);
     }
+
+    /*
+     * The rows of anything that scrolls.
+     *
+     * An application's list is rarely a \`ul\`: it is a scrolling \`div\` or
+     * \`main\` of \`div\` rows, none of which is in the vocabulary above. So a
+     * pin on a row anchored to the scroller around it, and stayed where it
+     * was while the list scrolled underneath -- on a different row a flick
+     * later. A box that scrolls is the one place where "which child" is
+     * exactly what a reviewer meant, so its children are stamped too, by
+     * the same hash of tag and text and after everything else, which keeps
+     * every id the pass above gives out unchanged.
+     */
+    var scrollers = scrollersIn(doc || document);
+    for (var s = 0; s < scrollers.length; s++) {
+      var rows = scrollers[s].children;
+      for (var r = 0; r < rows.length; r++) {
+        var row = rows[r];
+        if (row.hasAttribute(BLOCK_ATTR)) continue;
+        var rowText = normalizeBlockText(row.textContent || "");
+        if (!rowText) continue;
+        var rowBase = hashBlockText(row.tagName.toLowerCase() + "\\u0000" + rowText);
+        var rowKey = "k" + rowBase;
+        var n = Object.prototype.hasOwnProperty.call(seen, rowKey) ? seen[rowKey] : 0;
+        seen[rowKey] = n + 1;
+        row.setAttribute(BLOCK_ATTR, n === 0 ? rowBase : rowBase + "-" + n);
+      }
+    }
+  }
+
+  /*
+   * The elements that scroll their own content, found by asking the computed
+   * style of the candidates that can: anything with two or more children.
+   * Capped, because it runs on somebody else's page on a timer.
+   */
+  var SCROLLER_SCAN_LIMIT = 1500;
+
+  function scrollersIn(doc) {
+    var out = [];
+    var view = doc.defaultView || window;
+    if (!view.getComputedStyle) return out;
+    var all = doc.body ? doc.body.getElementsByTagName("*") : [];
+    var asked = 0;
+    for (var i = 0; i < all.length && asked < SCROLLER_SCAN_LIMIT; i++) {
+      var el = all[i];
+      if (el.children.length < 2 || el.id === "osp-overlay-host") continue;
+      asked++;
+      var style = view.getComputedStyle(el);
+      if (!style) continue;
+      var y = style.overflowY;
+      var x = style.overflowX;
+      if (y === "auto" || y === "scroll" || x === "auto" || x === "scroll") out.push(el);
+    }
+    return out;
   }
 
   if (STAMP_AT_RUNTIME) stampBlocks();
@@ -294,6 +367,19 @@ export const OVERLAY_SCRIPT = `(function () {
    * one document at one URL, and recording a route for it would mean a
    * comment made while reading the preview through the review server was
    * hidden when the same file was opened from disk, where the path differs.
+   *
+   * **Relative to the page, not to the host.** A route used to be the whole
+   * of \`location.pathname\` plus the query and fragment, and a pathname is
+   * not portable: the preview serves a prototype at \`/app/index.html\`, the
+   * published site at \`/<repo>/app/\`, and a pin left on one was hidden on
+   * the other -- as was a pin left at \`/app/\` when the page was opened as
+   * \`/app/index.html\` on the same host. So when the browser is on the
+   * page's own file, the path is dropped and the route is \`./\` followed by
+   * the query and fragment, which reads the same wherever the file is
+   * served. A path that is not the page's own (a router that routes on the
+   * path) still records the old absolute form, which is all there is to go
+   * on there. \`sameRoute\` reads both forms, so a review written before this
+   * matches as it did.
    */
   function currentRoute() {
     if (!STAMP_AT_RUNTIME) return null;
@@ -308,7 +394,82 @@ export const OVERLAY_SCRIPT = `(function () {
       }
       search = kept.length ? "?" + kept.join("&") : "";
     }
-    return location.pathname + search + location.hash;
+    return portableRoute(location.pathname + search + location.hash);
+  }
+
+  /*
+   * Whether a pathname is this page's own file, however it was asked for:
+   * \`.../app/index.html\`, \`.../app/\`, or \`.../notes/plan\` for a host that
+   * serves \`plan.html\` without its extension. Matched on the end of the
+   * path, so the prefix the host adds -- a repository name, a preview
+   * folder, a directory on disk -- does not matter.
+   */
+  function isOwnPath(pathname) {
+    var path = String(pathname || "");
+    try {
+      path = decodeURIComponent(path);
+    } catch (err) {
+      // A malformed escape: compare it as it stands.
+    }
+    var file = String(PAGE || "");
+    if (!file) return false;
+    var dir = file.slice(0, file.lastIndexOf("/") + 1);
+    var bare = file.replace(/\\.html?$/i, "");
+    var candidates = ["/" + file, "/" + bare];
+    if (/(^|\\/)index\\.html?$/i.test(file)) candidates.push("/" + dir);
+    for (var i = 0; i < candidates.length; i++) {
+      var tail = candidates[i];
+      if (path === tail || path.slice(-tail.length) === tail) return true;
+      // A page at the site root, served from a host that adds no prefix.
+      if (tail === "/" && path === "/") return true;
+    }
+    return false;
+  }
+
+  /* The page-relative form of a route, where it has one. */
+  function portableRoute(route) {
+    if (!route) return route;
+    var text = withoutPreviewToken(String(route));
+    if (text.slice(0, 2) === "./") return text;
+    var cut = text.search(/[?#]/);
+    var path = cut === -1 ? text : text.slice(0, cut);
+    var rest = cut === -1 ? "" : text.slice(cut);
+    return isOwnPath(path) ? "./" + rest : text;
+  }
+
+  /*
+   * The preview server's access token, taken out of a route.
+   *
+   * The server now moves the token out of the address bar as soon as it has
+   * set its cookie, but before it did, the first page a reviewer opened
+   * carried \`?t=<token>\` -- and a prototype records its address as the
+   * screen a comment is on. The token is new every time the server starts,
+   * so those comments were hidden in every later session and on the
+   * published site. Only a \`t\` that has the token's own shape is removed,
+   * so an application's own \`?t=dark\` is left alone.
+   */
+  function withoutPreviewToken(route) {
+    return route
+      .replace(/([?&])t=[a-z0-9]{24,32}(&|(?=#)|$)/, function (all, lead, tail) {
+        return tail === "&" ? lead : "";
+      })
+      .replace(/\\?(?=#|$)/, "");
+  }
+
+  function sameRoute(a, b) {
+    return portableRoute(a) === portableRoute(b);
+  }
+
+  /*
+   * A route as somewhere to send the browser. The page-relative form is
+   * aimed at the page's own file by name rather than at \`./\`, which for a
+   * page that is not an \`index.html\` would be its folder.
+   */
+  function routeHref(base) {
+    var text = String(base || "");
+    if (text.slice(0, 2) !== "./") return text;
+    var file = String(PAGE || "").split("/").pop() || "";
+    return encodeURIComponent(file) + text.slice(2);
   }
 
   /*
@@ -318,7 +479,310 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function onThisRoute(comment) {
     if (!comment.route) return true;
-    return comment.route === currentRoute();
+    return sameRoute(comment.route, currentRoute());
+  }
+
+  /* --- screens in frames ------------------------------------------- */
+
+  /*
+   * A prototype drawn inside a device.
+   *
+   * The common way to show an app "on a phone" is a page that draws the
+   * phone and puts the app in an <iframe> as its screen. Both pages carry
+   * this script, and until now each ran its own overlay: two toolbars, and
+   * neither could pin anything across the glass -- the outer one saw only
+   * an <iframe>, and the inner one was a toolbar squeezed into the screen.
+   *
+   * So the outer page reviews both. The inner copy stands down when it sees
+   * it is framed by a reviewed page (the top of this script), and the outer
+   * one reaches in: it hit-tests through the frame, stamps the screen's
+   * blocks, measures them in its own coordinates and redraws when the
+   * screen scrolls, changes or navigates. A comment left on the screen
+   * carries \`frame\` (which <iframe>) and \`froute\` (where that frame was), as
+   * a comment on a page carries \`route\`, so a pin left on screen two of the
+   * app does not appear over screen one.
+   *
+   * Same origin only, which is what a published site is: the frame's own
+   * document cannot be read otherwise, and such a frame is left alone.
+   */
+  var FRAME_DEPTH = 3;
+
+  /** The window an element belongs to. */
+  function viewOf(node) {
+    var doc = node && (node.nodeType === 9 ? node : node.ownerDocument);
+    return (doc && doc.defaultView) || window;
+  }
+
+  /** A frame's document, or null when it is not ours to read. */
+  function frameDoc(frame) {
+    try {
+      var doc = frame.contentDocument;
+      return doc && doc.documentElement ? doc : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /*
+   * The <iframe> a document is shown in, for a document this overlay reviews
+   * through one, or null at the top. Takes a node or a document.
+   */
+  function frameOf(node) {
+    var doc = node && (node.nodeType === 9 ? node : node.ownerDocument);
+    if (!doc || doc === document) return null;
+    try {
+      var frame = doc.defaultView && doc.defaultView.frameElement;
+      return frame || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /*
+   * What an <iframe> is called among its siblings, by the same preference
+   * order as a page of a deck: what its author named it, then where it is.
+   */
+  function frameNameOf(frame) {
+    if (frame.id) return "#" + frame.id;
+    var name = frame.getAttribute("name");
+    if (name) return "name=" + name;
+    var title = frame.getAttribute("title");
+    if (title) return "title=" + title;
+    var all = frame.ownerDocument.getElementsByTagName("iframe");
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] === frame) return "iframe:" + i + "/" + all.length;
+    }
+    return "iframe";
+  }
+
+  /** The key of the frame a document is in: names joined outermost first. */
+  function frameKeyOf(doc) {
+    var names = [];
+    var frame = frameOf(doc);
+    while (frame) {
+      names.unshift(frameNameOf(frame));
+      frame = frameOf(frame);
+    }
+    return names.length ? names.join(" > ") : null;
+  }
+
+  /*
+   * Every same-origin frame under this page, nested ones included, as
+   * \`{ frame, doc, key }\`.
+   */
+  function reviewFrames() {
+    var out = [];
+    (function walk(doc, depth) {
+      if (depth > FRAME_DEPTH) return;
+      var frames = doc.getElementsByTagName("iframe");
+      for (var i = 0; i < frames.length; i++) {
+        var inner = frameDoc(frames[i]);
+        if (!inner || !inner.body) continue;
+        out.push({ frame: frames[i], doc: inner, key: frameKeyOf(inner) });
+        walk(inner, depth + 1);
+      }
+    })(document, 1);
+    return out;
+  }
+
+  /** The document a comment was left in: the page's, or a frame's. */
+  function docFor(comment) {
+    if (!comment || !comment.frame) return document;
+    var frames = reviewFrames();
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i].key === comment.frame) return frames[i].doc;
+    }
+    return null;
+  }
+
+  /*
+   * Where a framed document is, relative to this page's folder.
+   *
+   * The screen of a device frame usually navigates between files of its
+   * own -- \`screens/home.html\` to \`screens/cart.html\` -- while the <iframe>
+   * element stays the same, so the frame alone does not say which screen a
+   * comment is on. Relative, for the reason \`route\` is: the preview and the
+   * published site put the folder under different prefixes.
+   */
+  function frameRouteOf(doc) {
+    var view = doc && doc.defaultView;
+    if (!view) return null;
+    var place;
+    try {
+      place = view.location;
+    } catch (e) {
+      return null;
+    }
+    var path = String(place.pathname || "");
+    var top = String(location.pathname || "");
+    var dir = top.slice(0, top.lastIndexOf("/") + 1);
+    if (dir && path.indexOf(dir) === 0) path = path.slice(dir.length);
+    try {
+      path = decodeURIComponent(path);
+    } catch (e) {
+      // Compared as it stands.
+    }
+    return path + String(place.search || "") + String(place.hash || "");
+  }
+
+  /** Whether a framed comment's frame is showing the screen it was left on. */
+  function onFrameRoute(comment) {
+    if (!comment.frame) return true;
+    var doc = docFor(comment);
+    if (!doc) return false;
+    if (!comment.froute) return true;
+    return frameRouteOf(doc) === comment.froute;
+  }
+
+  /*
+   * A frame's content box in its parent window's coordinates, and how much
+   * the frame is scaled. A device mockup commonly shrinks its screen with a
+   * CSS transform, so a frame 390 wide may be drawn 300 wide, and every
+   * point inside it has to be scaled on the way out.
+   */
+  function frameBox(frame) {
+    var box = frame.getBoundingClientRect();
+    var scale = frame.offsetWidth ? box.width / frame.offsetWidth : 1;
+    if (!scale || !isFinite(scale)) scale = 1;
+    var pad = { left: 0, top: 0 };
+    var view = viewOf(frame);
+    if (view.getComputedStyle) {
+      var style = view.getComputedStyle(frame);
+      pad.left = parseFloat(style.paddingLeft) || 0;
+      pad.top = parseFloat(style.paddingTop) || 0;
+    }
+    var left = box.left + ((frame.clientLeft || 0) + pad.left) * scale;
+    var top = box.top + ((frame.clientTop || 0) + pad.top) * scale;
+    var width = (frame.clientWidth ? frame.clientWidth - pad.left : box.width / scale) * scale;
+    var height = (frame.clientHeight ? frame.clientHeight - pad.top : box.height / scale) * scale;
+    return { left: left, top: top, width: width, height: height, scale: scale };
+  }
+
+  /* A frame's content box -- its glass -- in this window's coordinates. */
+  function glassOf(frame) {
+    var near = frameBox(frame);
+    var outer = frameOf(frame);
+    if (!outer) return near;
+    var lift = topRect(frame);
+    var raw = frame.getBoundingClientRect();
+    var k = raw.width ? lift.width / raw.width : 1;
+    return {
+      left: lift.left + (near.left - raw.left) * k,
+      top: lift.top + (near.top - raw.top) * k,
+      width: near.width * k,
+      height: near.height * k,
+      scale: near.scale * k,
+    };
+  }
+
+  /*
+   * An element's box in this window's coordinates, however many frames
+   * deep it is. For an element of this page it is its own box.
+   */
+  function topRect(node) {
+    var r = node.getBoundingClientRect();
+    var rect = { left: r.left, top: r.top, width: r.width, height: r.height };
+    var frame = frameOf(node);
+    while (frame) {
+      var outer = frameBox(frame);
+      rect.left = outer.left + rect.left * outer.scale;
+      rect.top = outer.top + rect.top * outer.scale;
+      rect.width *= outer.scale;
+      rect.height *= outer.scale;
+      frame = frameOf(frame);
+    }
+    rect.right = rect.left + rect.width;
+    rect.bottom = rect.top + rect.height;
+    return rect;
+  }
+
+  /*
+   * The part of the window an element can be seen through, in this window's
+   * coordinates, or null for "not clipped by anything worth asking about".
+   *
+   * This is what keeps a pin with the thing it is on when that thing is
+   * moved out of sight rather than hidden. A bottom sheet parked below the
+   * window with a transform, a drawer slid off the side, a menu scrolled out
+   * of its list: each is still displayed, opaque and in the document, so
+   * every other test here says it is showing. What says otherwise is that
+   * the point the pin would sit on is outside everything the element is
+   * seen through -- an ancestor that clips its overflow, the window for
+   * something held to the window, and the glass of a device frame.
+   *
+   * The document itself is not a clip. A paragraph below the fold is on the
+   * page, and its pin scrolls into view with it.
+   */
+  function clipOf(node) {
+    var clip = null;
+    function cut(box) {
+      if (!clip) {
+        clip = { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
+        return;
+      }
+      clip.left = Math.max(clip.left, box.left);
+      clip.top = Math.max(clip.top, box.top);
+      clip.right = Math.min(clip.right, box.right);
+      clip.bottom = Math.min(clip.bottom, box.bottom);
+    }
+
+    var el = node;
+    while (el) {
+      var doc = el.ownerDocument;
+      var view = viewOf(el);
+      var fixed = false;
+      for (var at = el.parentNode; at && at.nodeType === 1; at = at.parentNode) {
+        if (at === doc.body || at === doc.documentElement) break;
+        if (!view.getComputedStyle) break;
+        var style = view.getComputedStyle(at);
+        if (!style) continue;
+        if (style.position === "fixed") fixed = true;
+        if (
+          (style.overflowX && style.overflowX !== "visible") ||
+          (style.overflowY && style.overflowY !== "visible")
+        ) {
+          var box = topRect(at);
+          if (box.width || box.height) cut(box);
+        }
+      }
+      if (!fixed && view.getComputedStyle) {
+        var own = view.getComputedStyle(el);
+        if (own && own.position === "fixed") fixed = true;
+      }
+      var frame = frameOf(el);
+      if (frame) {
+        // Inside a frame everything is clipped by the glass.
+        var glass = glassOf(frame);
+        cut({
+          left: glass.left,
+          top: glass.top,
+          right: glass.left + glass.width,
+          bottom: glass.top + glass.height,
+        });
+      } else if (fixed && hasLayout()) {
+        var w = window.innerWidth || document.documentElement.clientWidth;
+        var h = window.innerHeight || document.documentElement.clientHeight;
+        if (w && h) cut({ left: 0, top: 0, right: w, bottom: h });
+      }
+      el = frame;
+    }
+    return clip;
+  }
+
+  /*
+   * Whether a point, in this window's coordinates, can be seen. A little
+   * slack, because a pin dropped on the very edge of a sheet should not
+   * flicker as the sheet settles by a pixel.
+   */
+  function seenAt(clip, x, y) {
+    if (!clip) return true;
+    if (clip.right <= clip.left || clip.bottom <= clip.top) return false;
+    var slack = 2;
+    return (
+      x >= clip.left - slack &&
+      x <= clip.right + slack &&
+      y >= clip.top - slack &&
+      y <= clip.bottom + slack
+    );
   }
 
   /* --- which page of a deck that is one file ------------------------- */
@@ -414,8 +878,12 @@ export const OVERLAY_SCRIPT = `(function () {
     if (el.hasAttribute("hidden")) return false;
     if (el.getAttribute("aria-hidden") === "true") return false;
 
-    if (window.getComputedStyle) {
-      var style = window.getComputedStyle(el);
+    // The element's own window: one inside a frame is styled by that
+    // frame's stylesheets, and asking this window about it is asking the
+    // wrong document.
+    var view = viewOf(el);
+    if (view.getComputedStyle) {
+      var style = view.getComputedStyle(el);
       if (style) {
         if (style.display === "none") return false;
         if (style.visibility === "hidden" || style.visibility === "collapse") {
@@ -442,9 +910,17 @@ export const OVERLAY_SCRIPT = `(function () {
    * levels up is exactly the case that matters.
    */
   function showing(el) {
-    for (var node = el; node && node.nodeType === 1; node = node.parentNode) {
-      if (!shownSelf(node)) return false;
-      if (!sawFixed && heldToViewport(node)) sawFixed = true;
+    var node = el;
+    while (node) {
+      for (; node && node.nodeType === 1; node = node.parentNode) {
+        if (!shownSelf(node)) return false;
+        if (!sawFixed && node.ownerDocument === document && heldToViewport(node)) {
+          sawFixed = true;
+        }
+      }
+      // Out of a frame's document and on through the <iframe> it is in: a
+      // phone frame that is hidden hides everything on its screen.
+      node = frameOf(node);
     }
     return true;
   }
@@ -470,8 +946,9 @@ export const OVERLAY_SCRIPT = `(function () {
    * listener below, which is most pages the overlay is on.
    */
   function heldToViewport(node) {
-    if (!window.getComputedStyle) return false;
-    var style = window.getComputedStyle(node);
+    var view = viewOf(node);
+    if (!view.getComputedStyle) return false;
+    var style = view.getComputedStyle(node);
     if (!style) return false;
     return style.position === "fixed" || style.position === "sticky";
   }
@@ -730,7 +1207,62 @@ export const OVERLAY_SCRIPT = `(function () {
       var value = el.getAttribute(VIEW_ATTRS[i]);
       if (value) return VIEW_ATTRS[i] + "=" + value;
     }
-    return "";
+    return popupKeyOf(el);
+  }
+
+  /*
+   * A name for a sheet, a popup or a menu that its author did not name.
+   *
+   * Most of them are not named: a bottom sheet is a \`div class="sheet"\`, a
+   * popover a \`div class="popover is-open"\`. Without a key, a pin dropped
+   * in one had no context, and when the sheet was taken out of the document
+   * on close -- which is how most frameworks close one -- the pin fell back
+   * to the point it was dropped on and stayed there, over the page the
+   * sheet had covered.
+   *
+   * So something that *says* it comes and goes is keyed by what it says it
+   * is: its tag and its classes, without the ones that only describe its
+   * state, since \`sheet is-open\` and \`sheet\` are the same sheet open and
+   * shut. Or by its role, when that is all there is. Only these: keying any
+   * unnamed \`div\` would make every wrapper a context, and a wrapper never
+   * closes.
+   */
+  var POPUP_ROLES = /^(dialog|alertdialog|menu|listbox|tooltip)$/;
+  var POPUP_CLASS =
+    /(^|[-_])(modal|sheet|bottomsheet|drawer|popup|popover|dialog|dropdown|menu|toast|tooltip|overlay|lightbox|snackbar)([-_]|$)/i;
+  var STATE_CLASS =
+    /^(is|has)-|(^|[-_])(open|opened|active|show|shown|showing|visible|in|out|enter|entering|entered|leave|leaving|exit|exiting|hidden|closed|closing|expanded|collapsed|on|off|up|down|animating|animated|transition|transitioning)$/i;
+
+  function stableClasses(el) {
+    var raw = String(el.getAttribute("class") || "").split(/\\s+/);
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      if (raw[i] && !STATE_CLASS.test(raw[i])) out.push(raw[i]);
+    }
+    return out.sort();
+  }
+
+  function popupKeyOf(el) {
+    var tag = el.tagName.toLowerCase();
+    var role = el.getAttribute("role") || "";
+    var classes = stableClasses(el);
+    var says =
+      tag === "dialog" ||
+      POPUP_ROLES.test(role) ||
+      el.getAttribute("aria-modal") === "true" ||
+      el.hasAttribute("popover");
+    for (var i = 0; !says && i < classes.length; i++) {
+      if (POPUP_CLASS.test(classes[i])) says = true;
+    }
+    if (!says) return "";
+    if (classes.length) return "~" + tag + "." + classes.join(".");
+    if (role) return "~" + tag + "[role=" + role + "]";
+    return "~" + tag;
+  }
+
+  /* Whether an element is what a \`~\` key describes. */
+  function matchesPopupKey(el, key) {
+    return popupKeyOf(el) === key;
   }
 
   /*
@@ -743,9 +1275,10 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function contextOf(node) {
     if (!STAMP_AT_RUNTIME) return null;
+    var doc = node && node.ownerDocument ? node.ownerDocument : document;
     var up = 0;
     for (var el = node; el && el.nodeType === 1; el = el.parentNode) {
-      if (el === document.body || el === document.documentElement) break;
+      if (el === doc.body || el === doc.documentElement) break;
       if (++up > CONTEXT_LIMIT) break;
       var key = contextKeyOf(el);
       if (key) return key;
@@ -767,37 +1300,240 @@ export const OVERLAY_SCRIPT = `(function () {
    * for a context that is open somewhere is the behaviour this had before,
    * and a pin wrongly hidden is a comment the reviewer cannot find.
    */
-  function contextNode(key) {
-    if (!key) return null;
+  function contextNode(key, inDoc) {
+    var nodes = contextNodes(key, inDoc);
+    for (var j = 0; j < nodes.length; j++) {
+      if (showing(nodes[j]) && inSight(nodes[j])) return nodes[j];
+    }
+    return null;
+  }
+
+  /* Every element a context key names, shown or not. */
+  function contextNodes(key, inDoc) {
+    if (!key) return [];
+    var doc = inDoc || document;
     var text = String(key);
     var nodes = [];
 
     if (text.charAt(0) === "#") {
-      var one = document.getElementById(text.slice(1));
+      var one = doc.getElementById(text.slice(1));
       if (one) nodes.push(one);
+    } else if (text.charAt(0) === "~") {
+      var tag = text.slice(1).split(/[.\\[]/)[0] || "*";
+      var candidates = doc.getElementsByTagName(tag);
+      for (var c = 0; c < candidates.length; c++) {
+        if (matchesPopupKey(candidates[c], text)) nodes.push(candidates[c]);
+      }
     } else {
       var eq = text.indexOf("=");
-      if (eq === -1) return null;
+      if (eq === -1) return [];
       var name = text.slice(0, eq);
       var value = text.slice(eq + 1);
-      var found = document.querySelectorAll("[" + name + "]");
+      var found = doc.querySelectorAll("[" + name + "]");
       for (var i = 0; i < found.length; i++) {
         if (found[i].getAttribute(name) === value) nodes.push(found[i]);
       }
     }
 
-    for (var j = 0; j < nodes.length; j++) if (showing(nodes[j])) return nodes[j];
-    return null;
+    return nodes;
+  }
+
+  /*
+   * Whether any of an element can be seen through what clips it.
+   *
+   * A sheet closed by sliding it below the window is still displayed and
+   * opaque, so \`showing\` calls it open -- and a comment in it was listed
+   * as if its pin were on screen, with nothing to say where it had gone.
+   * Its box lies wholly outside the window it is held to, which is what
+   * "closed" means for something that closes by moving.
+   */
+  function inSight(el) {
+    if (!hasLayout()) return true;
+    var clip = clipOf(el);
+    if (!clip) return true;
+    var box = topRect(el);
+    var w = Math.min(box.right, clip.right) - Math.max(box.left, clip.left);
+    var h = Math.min(box.bottom, clip.bottom) - Math.max(box.top, clip.top);
+    return w > 1 && h > 1;
+  }
+
+  /* --- bringing back what a comment is about ------------------------ */
+
+  /*
+   * A comment opened from the panel whose sheet, drawer or popup is shut.
+   *
+   * The pin cannot be drawn, and "sheet (closed)" says where it is without
+   * showing it. So the overlay puts the thing back on screen, in one of two
+   * ways depending on how the prototype shut it.
+   *
+   * **Still in the page, hidden or parked.** Most sheets and drawers close
+   * by a class or a style, and stay in the document. When a pin is dropped
+   * in one, the attributes that make it open are recorded -- on it and on a
+   * few ancestors, since the open state is often on a wrapper -- and opening
+   * the comment writes them back. The same trick as turning a deck to a
+   * slide: the result is a state the prototype itself produced, in its own
+   * vocabulary. It is undone when the card closes, and only where the
+   * prototype has not since changed the attribute itself.
+   *
+   * **Taken out of the page.** A popup a script built on a tap and removed
+   * on the next can only be built again by the prototype. So the tap that
+   * was made just before the pin was dropped is remembered, and the card
+   * offers to make it again. Offered rather than done, because it runs the
+   * prototype's own code, and the tap that opened a confirmation may be the
+   * one that deletes something.
+   */
+  var REVEAL_ATTRS = [
+    "class",
+    "style",
+    "hidden",
+    "open",
+    "inert",
+    "aria-hidden",
+    "aria-expanded",
+    "data-state",
+    "data-open",
+    "data-visible",
+  ];
+  var REVEAL_DEPTH = 4;
+  var REVEAL_VALUE_LIMIT = 600;
+
+  /* The open state of a context: its own attributes, then its ancestors'. */
+  function revealStateOf(holder) {
+    var doc = holder.ownerDocument;
+    var out = [];
+    var el = holder;
+    for (var level = 0; level < REVEAL_DEPTH; level++) {
+      if (!el || el.nodeType !== 1 || el === doc.body || el === doc.documentElement) break;
+      var attrs = {};
+      for (var i = 0; i < REVEAL_ATTRS.length; i++) {
+        var value = el.getAttribute(REVEAL_ATTRS[i]);
+        if (value !== null) attrs[REVEAL_ATTRS[i]] = String(value).slice(0, REVEAL_VALUE_LIMIT);
+      }
+      out.push(attrs);
+      el = el.parentNode;
+    }
+    return out;
+  }
+
+  var peek = null;
+
+  /* Puts a closed context back the way it was when the pin was dropped. */
+  function peekFor(comment) {
+    if (peek && peek.id === comment.id) return true;
+    endPeek();
+    if (!comment.context || !comment.reveal || !comment.reveal.length) return false;
+    if (!contextClosed(comment)) return false;
+    var doc = docFor(comment);
+    if (!doc) return false;
+    var holder = contextNodes(comment.context, doc)[0];
+    if (!holder) return false;
+
+    var changes = [];
+    var el = holder;
+    for (var level = 0; level < comment.reveal.length; level++) {
+      if (!el || el.nodeType !== 1 || el === doc.body) break;
+      var saved = comment.reveal[level] || {};
+      for (var i = 0; i < REVEAL_ATTRS.length; i++) {
+        var name = REVEAL_ATTRS[i];
+        var want = Object.prototype.hasOwnProperty.call(saved, name) ? saved[name] : null;
+        var have = el.getAttribute(name);
+        if (want === have) continue;
+        changes.push({ el: el, name: name, before: have, after: want });
+        if (want === null) el.removeAttribute(name);
+        else el.setAttribute(name, want);
+      }
+      el = el.parentNode;
+    }
+    if (!changes.length) return false;
+    peek = { id: comment.id, changes: changes };
+    return true;
+  }
+
+  /*
+   * Undoes a peek, newest change first. An attribute the prototype has
+   * written since is the prototype's, and is left as it is.
+   */
+  function endPeek() {
+    if (!peek) return;
+    var changes = peek.changes;
+    peek = null;
+    for (var i = changes.length - 1; i >= 0; i--) {
+      var change = changes[i];
+      if (!change.el.isConnected) continue;
+      if (change.el.getAttribute(change.name) !== change.after) continue;
+      if (change.before === null) change.el.removeAttribute(change.name);
+      else change.el.setAttribute(change.name, change.before);
+    }
+  }
+
+  /*
+   * The last tap a reviewer made on the page, as the block it landed on. It
+   * is what a pin dropped a moment later in something that had just opened
+   * records as that thing's opener.
+   */
+  var lastTap = null;
+  var TAP_MEMORY_MS = 120000;
+
+  function noteTap(event) {
+    if (mode !== "view") return;
+    var target = event.target;
+    if (!target || target.nodeType !== 1 || target === host) return;
+    var block = nearestBlock(target);
+    if (!block) return;
+    lastTap = {
+      node: block,
+      block: block.getAttribute(BLOCK_ATTR),
+      text: clip(block.textContent),
+      doc: block.ownerDocument,
+      at: Date.now(),
+    };
+  }
+
+  document.addEventListener("click", noteTap, true);
+
+  /* The element a comment's opener names, now, in the comment's document. */
+  function openerNode(comment) {
+    if (!comment.opener || !comment.opener.block) return null;
+    var doc = docFor(comment);
+    if (!doc) return null;
+    var map = comment.frame ? blocksFor(comment) : blocks;
+    var direct = map[comment.opener.block];
+    if (direct) return direct;
+    // Renumbered, as a row's buttons are when the list above them changes:
+    // the same rule as an anchor, one candidate or none.
+    var base = baseOf(comment.opener.block);
+    var found = null;
+    for (var key in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+      if (baseOf(key) !== base && key !== base) continue;
+      if (found) return null;
+      found = map[key];
+    }
+    return found;
+  }
+
+  /* Makes the opening tap again, then waits for the pin to appear. */
+  function replayOpener(comment) {
+    var node = openerNode(comment);
+    if (!node) return false;
+    if (typeof node.click === "function") node.click();
+    else node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    chaseMark(comment);
+    return true;
   }
 
   /** Whether a comment's context is on screen, or it has none to be in. */
   function contextOpen(comment) {
     if (!comment.context) return true;
-    return !!contextNode(comment.context);
+    var doc = docFor(comment);
+    return !!doc && !!contextNode(comment.context, doc);
   }
 
   /** The one case a reviewer needs told: it is in something, and it is shut. */
   function contextClosed(comment) {
+    // On a screen the frame is not showing, nothing about it is known --
+    // "closed" would send the reviewer looking for a dialog to open.
+    if (comment.frame && !onFrameRoute(comment)) return false;
     return !!comment.context && !contextOpen(comment);
   }
 
@@ -815,17 +1551,27 @@ export const OVERLAY_SCRIPT = `(function () {
     var keys = [];
     var seenKey = Object.create(null);
 
+    var probe = Object.create(null);
     for (var i = 0; i < rows.length; i++) {
-      var key = rows[i].context;
-      if (!key || seenKey[key]) continue;
+      if (!rows[i].context) continue;
+      // The frame is part of the key: the same \`#menu\` on two screens is two
+      // menus.
+      var key = (rows[i].frame ? rows[i].frame + " | " : "") + rows[i].context;
+      if (seenKey[key]) continue;
       seenKey[key] = true;
       keys.push(key);
+      probe[key] = rows[i];
     }
 
     keys.sort();
     var out = [];
     for (var k = 0; k < keys.length; k++) {
-      out.push(keys[k] + (contextNode(keys[k]) ? "+" : "-"));
+      out.push(keys[k] + (contextOpen(probe[keys[k]]) ? "+" : "-"));
+    }
+    // Which screen each frame is on, so a frame navigating is a change too.
+    var frames = reviewFrames();
+    for (var f = 0; f < frames.length; f++) {
+      out.push(frames[f].key + "@" + frameRouteOf(frames[f].doc));
     }
     return out.join(">");
   }
@@ -950,6 +1696,35 @@ export const OVERLAY_SCRIPT = `(function () {
    * form and the second one is the reason this exists -- "3 of 7" is a page
    * of a deck, and "section:2/7" is a bug report.
    */
+  /* "~section.sheet" is a sheet; "~div[role=dialog]" a dialog. */
+  function popupLabel(key) {
+    var body = String(key).slice(1);
+    var role = /\\[role=([^\\]]+)\\]/.exec(body);
+    var bits = body.replace(/\\[.*$/, "").split(".");
+    for (var i = 1; i < bits.length; i++) {
+      var said = POPUP_CLASS.exec(bits[i]);
+      if (said) return said[2].toLowerCase();
+    }
+    if (role) return role[1];
+    return bits[1] || bits[0] || "popup";
+  }
+
+  /* "screens/cart.html#step-2" as "cart #step-2". */
+  function frameScreenLabel(froute) {
+    var text = String(froute || "");
+    if (!text) return "";
+    var cut = text.search(/[?#]/);
+    var path = cut === -1 ? text : text.slice(0, cut);
+    var rest = cut === -1 ? "" : text.slice(cut);
+    var file = path.split("/").pop() || path;
+    var name = file.replace(/\\.html?$/i, "");
+    if (name === "index" || !name) {
+      var dirs = path.split("/");
+      name = dirs.length > 1 ? dirs[dirs.length - 2] || "index" : "index";
+    }
+    return rest ? name + " " + rest : name;
+  }
+
   function viewLabel(key) {
     var parts = String(key).split(">");
     var out = [];
@@ -958,6 +1733,12 @@ export const OVERLAY_SCRIPT = `(function () {
       var part = parts[i];
       if (part.charAt(0) === "#") {
         out.push(part.slice(1));
+        continue;
+      }
+      // An unnamed popup (see \`popupKeyOf\`): by the word that says what it
+      // is -- "sheet", "popover" -- rather than by its markup.
+      if (part.charAt(0) === "~") {
+        out.push(popupLabel(part));
         continue;
       }
       var eq = part.indexOf("=");
@@ -1053,6 +1834,20 @@ export const OVERLAY_SCRIPT = `(function () {
     // Which page of a single-file deck, for the screens the address bar
     // does not tell apart.
     row.view = typeof row.view === "string" && row.view ? row.view : null;
+    // On a screen inside a frame (see \`reviewFrames\`). Removed rather than
+    // nulled when absent, so a comment that never had one stores as before.
+    if (typeof row.frame === "string" && row.frame) {
+      row.froute = typeof row.froute === "string" ? row.froute : null;
+      row.fx = typeof row.fx === "number" ? row.fx : null;
+      row.fy = typeof row.fy === "number" ? row.fy : null;
+    } else {
+      delete row.frame;
+      delete row.froute;
+      delete row.fx;
+      delete row.fy;
+    }
+    if (!Array.isArray(row.reveal)) delete row.reveal;
+    if (!row.opener || typeof row.opener.block !== "string") delete row.opener;
     row.blockText = typeof row.blockText === "string" ? row.blockText : "";
     row.resolved = row.resolved === true;
     row.priority = priOf(row.priority);
@@ -1599,6 +2394,11 @@ export const OVERLAY_SCRIPT = `(function () {
        \`resolve\` was carrying "this is about a comment" that the button it
        now sits in says in words. */
     check: [["path", { d: "M20 6 9 17l-5-5" }]],
+    /* Lucide's link, for copying the address of one comment. */
+    link: [
+      ["path", { d: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" }],
+      ["path", { d: "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" }],
+    ],
     /* Out of the browser, and back into it: the two halves of carrying a
        review between builds. */
     download: [
@@ -2160,19 +2960,38 @@ export const OVERLAY_SCRIPT = `(function () {
 
   /* --- blocks ------------------------------------------------------- */
 
-  function blockIndex() {
+  function blockIndex(doc) {
     var map = Object.create(null);
-    var nodes = document.querySelectorAll("[" + BLOCK_ATTR + "]");
+    var nodes = (doc || document).querySelectorAll("[" + BLOCK_ATTR + "]");
     for (var i = 0; i < nodes.length; i++) {
       var key = nodes[i].getAttribute(BLOCK_ATTR);
       if (key && !map[key]) map[key] = nodes[i];
     }
+    if (!doc) frameBlocks = Object.create(null);
+    return map;
+  }
+
+  /*
+   * The blocks of a framed screen, indexed when first asked for and kept
+   * until the page's own index is rebuilt -- which every path that changes
+   * anything already does -- so a pass over the pins indexes each frame once.
+   */
+  var frameBlocks = Object.create(null);
+
+  function blocksFor(comment) {
+    if (!comment || !comment.frame) return blocks;
+    var key = comment.frame;
+    if (frameBlocks[key]) return frameBlocks[key];
+    var doc = docFor(comment);
+    var map = doc ? blockIndex(doc) : Object.create(null);
+    frameBlocks[key] = map;
     return map;
   }
 
   function nearestBlock(node) {
     var current = node;
-    while (current && current !== document.body) {
+    var body = node && node.ownerDocument ? node.ownerDocument.body : document.body;
+    while (current && current !== body) {
       if (current.nodeType === 1 && current.hasAttribute(BLOCK_ATTR)) return current;
       current = current.parentNode;
     }
@@ -2201,6 +3020,24 @@ export const OVERLAY_SCRIPT = `(function () {
     host.style.display = "none";
     var node = document.elementFromPoint(clientX, clientY);
     host.style.display = saved;
+    /*
+     * Through the glass. A point over an <iframe> whose document can be read
+     * is asked again of that document, in its own coordinates -- scaled,
+     * for a screen a mockup has shrunk -- so a pin on a phone's screen is a
+     * pin on the button under it, not on the frame.
+     */
+    var x = clientX;
+    var y = clientY;
+    for (var depth = 0; node && node.tagName === "IFRAME" && depth < FRAME_DEPTH; depth++) {
+      var inner = frameDoc(node);
+      if (!inner || !inner.elementFromPoint) break;
+      var glass = frameBox(node);
+      x = (x - glass.left) / glass.scale;
+      y = (y - glass.top) / glass.scale;
+      var below = inner.elementFromPoint(x, y);
+      if (!below) break;
+      node = below;
+    }
     return node;
   }
 
@@ -2229,7 +3066,7 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
     var base = host.getBoundingClientRect();
-    var box = target.getBoundingClientRect();
+    var box = topRect(target);
     // The measured box is kept exactly, since it is what the next mouse move
     // is tested against. What is drawn is 3px wider all round: an outline
     // hugging the glyphs reads as an error state rather than as a target.
@@ -2285,6 +3122,18 @@ export const OVERLAY_SCRIPT = `(function () {
      */
     if (!contextOpen(comment)) return null;
 
+    /*
+     * On a screen in a frame: the frame has to be here, showing, and on the
+     * screen the comment was left on.
+     */
+    var inFrame = null;
+    if (comment.frame) {
+      var doc = docFor(comment);
+      if (!doc || !onFrameRoute(comment)) return null;
+      inFrame = frameOf(doc);
+      if (!inFrame || !showing(inFrame)) return null;
+    }
+
     var target = anchorFor(comment);
 
     /*
@@ -2297,14 +3146,30 @@ export const OVERLAY_SCRIPT = `(function () {
      */
     if (target && !showing(target)) return null;
 
+    /*
+     * A block that holds the context rather than sitting inside it: a pin
+     * dropped on a popover's text, which is no block, anchored to the page
+     * section the popover was put in. The popover is the nearer thing, and
+     * its own box is what the pin should move with.
+     */
+    if (target && comment.context && typeof comment.cx === "number") {
+      var nearer = contextNode(comment.context, docFor(comment));
+      if (nearer && nearer !== target && target.contains(nearer)) target = null;
+    }
+
     if (target) {
-      var box = target.getBoundingClientRect();
+      var box = topRect(target);
       var rx = typeof comment.rx === "number" ? comment.rx : 0;
       var ry = typeof comment.ry === "number" ? comment.ry : 0;
-      return {
-        left: box.left - base.left + rx * box.width,
-        top: box.top - base.top + ry * box.height,
-      };
+      var px = box.left + rx * box.width;
+      var py = box.top + ry * box.height;
+      /*
+       * Out of sight without being hidden: a sheet parked below the window,
+       * a drawer slid off the side, a row scrolled out of its list or off a
+       * phone's screen. See \`clipOf\`.
+       */
+      if (!seenAt(clipOf(target), px, py)) return null;
+      return { left: px - base.left, top: py - base.top };
     }
 
     /*
@@ -2350,14 +3215,28 @@ export const OVERLAY_SCRIPT = `(function () {
      * \`rx\`/\`ry\` do for a block.
      */
     if (comment.context && typeof comment.cx === "number") {
-      var holder = contextNode(comment.context);
+      var holder = contextNode(comment.context, docFor(comment));
       if (holder) {
-        var area = holder.getBoundingClientRect();
-        return {
-          left: area.left - base.left + comment.cx * area.width,
-          top: area.top - base.top + comment.cy * area.height,
-        };
+        var area = topRect(holder);
+        var hx = area.left + comment.cx * area.width;
+        var hy = area.top + comment.cy * area.height;
+        if (!seenAt(clipOf(holder), hx, hy)) return null;
+        return { left: hx - base.left, top: hy - base.top };
       }
+    }
+
+    /*
+     * A point on a framed screen is kept as a fraction of the glass, since
+     * the frame moves with the page around it and a document coordinate
+     * would not.
+     */
+    if (inFrame) {
+      if (typeof comment.fx !== "number") return null;
+      var glass = glassOf(inFrame);
+      return {
+        left: glass.left - base.left + comment.fx * glass.width,
+        top: glass.top - base.top + comment.fy * glass.height,
+      };
     }
 
     return { left: comment.x, top: comment.y };
@@ -2403,9 +3282,13 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function recovered(comment) {
     if (!comment.block) return null;
+    var blocks = blocksFor(comment);
     var base = baseOf(comment.block);
     var claimed = Object.create(null);
     for (var i = 0; i < all.length; i++) {
+      // Only claims in the same document: a screen in a frame numbers its
+      // blocks on its own.
+      if ((all[i].frame || null) !== (comment.frame || null)) continue;
       if (all[i].block && blocks[all[i].block]) claimed[all[i].block] = true;
     }
     var found = null;
@@ -2429,6 +3312,7 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function anchorFor(comment) {
     if (!comment.block) return null;
+    var blocks = blocksFor(comment);
     var direct = blocks[comment.block];
     if (direct) return direct;
     var moved = recovered(comment);
@@ -2436,6 +3320,12 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   function orphaned(comment) {
+    // A screen the frame is not showing cannot be searched, which is not
+    // the same thing as the block being gone from it.
+    if (comment.frame && !onFrameRoute(comment)) return false;
+    // Inside something that is shut: the block went with it, and the panel
+    // says so by naming what it is in. "Rewritten" would be untrue.
+    if (contextClosed(comment)) return false;
     return !!comment.block && !anchorFor(comment);
   }
 
@@ -2453,6 +3343,7 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   function whyLost(comment) {
     if (!comment.block) return "";
+    var blocks = blocksFor(comment);
     var base = baseOf(comment.block);
     var copies = 0;
     for (var key in blocks) {
@@ -2688,7 +3579,14 @@ export const OVERLAY_SCRIPT = `(function () {
    * screen to be told apart from.
    */
   function screenName(comment) {
-    var route = comment.route ? String(comment.route) : "";
+    var route = comment.route ? withoutPreviewToken(String(comment.route)) : "";
+
+    /*
+     * A screen inside a device frame is named by its own file, which is
+     * what the app calls it: \`screens/cart.html\` is "cart". It leads,
+     * because it is the screen the reviewer has to be on to see the pin.
+     */
+    var framed = comment.frame ? frameScreenLabel(comment.froute) : "";
 
     /*
      * The deck's page first, where there is one.
@@ -2720,6 +3618,7 @@ export const OVERLAY_SCRIPT = `(function () {
      * redrawn when the answer changes -- see \`contextsTurned\`.
      */
     var where = [];
+    if (framed) where.push(framed);
     if (comment.view) where.push(viewLabel(comment.view));
     if (contextClosed(comment)) {
       where.push(viewLabel(comment.context) + " (closed)");
@@ -3076,9 +3975,11 @@ export const OVERLAY_SCRIPT = `(function () {
             ? "Left inside " +
               viewLabel(comment.context) +
               ", which is closed -- open it to see the pin"
-            : comment.view && screen === viewLabel(comment.view)
-              ? "Left on this page of the deck: " + viewLabel(comment.view)
-              : "Left on this screen: " + comment.route,
+            : comment.frame
+              ? "Left on this screen of the prototype: " + (comment.froute || comment.frame)
+              : comment.view && screen === viewLabel(comment.view)
+                ? "Left on this page of the deck: " + viewLabel(comment.view)
+                : "Left on this screen: " + comment.route,
         );
         where.appendChild(at);
       }
@@ -3225,6 +4126,13 @@ export const OVERLAY_SCRIPT = `(function () {
      * the panel while its dialog is closed, which should stay open and be
      * readable. Both look identical to a check made after the fact.
      */
+    /*
+     * Brought back if it is shut, before the latch below is read, so a
+     * reopened sheet counts as open: the prototype closing it again then
+     * takes the card with it, as it would for any open sheet.
+     */
+    if (peek && peek.id !== id) endPeek();
+    if (peekFor(comment)) frameBlocks = Object.create(null);
     selectedContextOpen = contextOpen(comment);
     // A refusal belongs to one attempt. Opening a popup starts again.
     relayError = null;
@@ -3236,6 +4144,7 @@ export const OVERLAY_SCRIPT = `(function () {
   function closePopup() {
     selected = null;
     editing = null;
+    endPeek();
     popup.hidden = true;
     closePopMenu();
     renderPins();
@@ -3340,6 +4249,9 @@ export const OVERLAY_SCRIPT = `(function () {
 
     acts.appendChild(prevBtn);
     acts.appendChild(nextBtn);
+    // Published pages only: a preview's address is \`localhost\` or a file
+    // on disk, which is no use to whoever the link would be sent to.
+    if (PUBLISHED) acts.appendChild(copyLinkButton(comment));
     acts.appendChild(closeBtn);
     head.appendChild(acts);
     popup.appendChild(head);
@@ -3372,6 +4284,32 @@ export const OVERLAY_SCRIPT = `(function () {
       threads.appendChild(thread(comment.replies[i], comment.replies[i].text, false));
     }
     popup.appendChild(threads);
+
+    /*
+     * Shut, and not brought back by \`peekFor\`: say what it is in, and
+     * offer to make the tap that opened it, naming the tap.
+     */
+    if (contextClosed(comment) && !(peek && peek.id === comment.id)) {
+      var shut = el("div", "co-pop-note co-shut");
+      shut.appendChild(
+        el("div", "co-warn", "Left inside " + viewLabel(comment.context) + ", which is closed."),
+      );
+      if (comment.opener && openerNode(comment)) {
+        var again = el("button", "co-reopen", "Reopen");
+        again.setAttribute("data-reopen", "");
+        again.setAttribute(
+          "title",
+          "Taps “" + (comment.opener.text || "the control") + "” again, as it was tapped to open this",
+        );
+        again.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          replayOpener(comment);
+        });
+        shut.appendChild(again);
+      }
+      popup.appendChild(shut);
+    }
 
     if (orphaned(comment)) {
       var note = el("div", "co-pop-note");
@@ -3681,6 +4619,18 @@ export const OVERLAY_SCRIPT = `(function () {
    * the comment belongs to a screen this one is not showing yet.
    */
   function revealMark(comment) {
+    /*
+     * On a framed screen the pin is only drawn while its block is on the
+     * glass, so the screen is scrolled to the block first; the pin is then
+     * there to be scrolled to like any other.
+     */
+    if (comment.frame) {
+      var inside = anchorFor(comment);
+      if (inside && inside.scrollIntoView) {
+        inside.scrollIntoView({ block: "nearest" });
+        renderPins();
+      }
+    }
     var pin = pins.querySelector('[data-comment="' + comment.id + '"]');
     if (!pin || !pin.scrollIntoView) return false;
     pin.scrollIntoView({ behavior: moving() ? "smooth" : "auto", block: "center" });
@@ -3728,12 +4678,45 @@ export const OVERLAY_SCRIPT = `(function () {
     }
 
     if (onThisRoute(next)) {
+      // On a screen the frame is not showing: send the frame there first.
+      if (next.frame && !onFrameRoute(next) && sendFrameTo(next)) {
+        glide();
+        openPopup(next.id);
+        chaseMark(next);
+        return;
+      }
       glide();
       openPopup(next.id);
       revealMark(next);
       return;
     }
     crossTo(next);
+  }
+
+  /*
+   * Points a framed screen at the screen a comment was left on, as the
+   * reviewer would by tapping through the app. True when it was sent.
+   *
+   * Only a frame whose own address can be set: the frame is found by the
+   * key it was recorded under, and its \`froute\` is relative to this page's
+   * folder, which is exactly what a relative URL from this page means.
+   */
+  function sendFrameTo(comment) {
+    if (!comment.froute) return false;
+    var frames = reviewFrames();
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i].key !== comment.frame) continue;
+      try {
+        frames[i].doc.defaultView.location.href = new URL(
+          comment.froute,
+          location.href,
+        ).href;
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+    return false;
   }
 
   /*
@@ -3789,16 +4772,99 @@ export const OVERLAY_SCRIPT = `(function () {
    * the link: the overlay on the other side opens it on arrival.
    */
   function crossTo(next) {
-    var there = splitRoute(next.route);
+    var there = splitRoute(portableRoute(next.route));
     var here = splitRoute(currentRoute());
     if (there.base !== here.base) {
-      location.href = there.base + deepQuery(there.base, next.id) + there.hash;
+      var href = routeHref(there.base);
+      location.href = href + deepQuery(href, next.id) + there.hash;
       return;
     }
     glide();
     openPopup(next.id);
     location.hash = there.hash;
     chaseMark(next);
+  }
+
+  /*
+   * The address of one comment, to hand to somebody else.
+   *
+   * The page, the screen the comment was left on, and the comment itself in
+   * the query, so the overlay on the other end opens it on arrival -- the
+   * same deep link the panel uses between pages, made absolute. A route in
+   * the page-relative form keeps its query too (\`?variant=b\`), since that
+   * may be what tells two screens apart; an old absolute route keeps only
+   * its fragment, because its path names whichever host it was left on.
+   */
+  function commentLink(comment) {
+    var route = splitRoute(portableRoute(comment.route));
+    var href;
+    if (comment.page === PAGE && route.base.slice(0, 2) === "./") {
+      var base = routeHref(route.base);
+      href = base + deepQuery(base, comment.id);
+    } else {
+      href = pageHref(comment);
+    }
+    try {
+      return new URL(href + route.hash, location.href).href;
+    } catch (err) {
+      return href + route.hash;
+    }
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    // An insecure context has no async clipboard; the old command still
+    // works there, from a field that exists only for the copy.
+    return new Promise(function (resolve, reject) {
+      var field = document.createElement("textarea");
+      field.value = text;
+      field.setAttribute("readonly", "");
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.appendChild(field);
+      field.select();
+      var done = false;
+      try {
+        done = document.execCommand("copy");
+      } catch (err) {
+        done = false;
+      }
+      field.remove();
+      if (done) resolve();
+      else reject(new Error("copy refused"));
+    });
+  }
+
+  function copyLinkButton(comment) {
+    var btn = el("button", "co-pop-btn");
+    btn.setAttribute("title", "Copy link to this comment");
+    btn.setAttribute("data-copy-link", "");
+    btn.appendChild(icon(ICONS.link));
+    btn.addEventListener("click", function (event) {
+      event.stopPropagation();
+      var link = commentLink(comment);
+      copyText(link).then(
+        function () {
+          clear(btn);
+          btn.appendChild(icon(ICONS.check));
+          btn.setAttribute("title", "Link copied");
+          setTimeout(function () {
+            if (!btn.isConnected) return;
+            clear(btn);
+            btn.appendChild(icon(ICONS.link));
+            btn.setAttribute("title", "Copy link to this comment");
+          }, 1500);
+        },
+        function () {
+          // Nothing to copy with: show the address so it can be copied by
+          // hand, rather than failing in silence.
+          btn.setAttribute("title", link);
+        },
+      );
+    });
+    return btn;
   }
 
   function splitRoute(route) {
@@ -3834,10 +4900,31 @@ export const OVERLAY_SCRIPT = `(function () {
       // or two, so which page is up is re-asked on every look.
       checkView();
       blocks = blockIndex();
+      // A screen that has just loaded has its sheet to bring back now.
+      if (!peek) peekFor(comment);
       renderPins();
       if (selected === comment.id) placePopup(comment);
-      if (revealMark(comment)) return;
-      if (++tries > 8) return;
+      if (revealMark(comment)) {
+        /*
+         * It came back -- reopened by a tap, or its screen loaded. The card
+         * still says it is closed, so it is redrawn, and it now follows the
+         * thing shut like any card opened over an open sheet.
+         */
+        if (selected === comment.id && popup.querySelector(".co-shut") && contextOpen(comment)) {
+          // Stamped now rather than on the watcher's next pass, or the card
+          // calls the block it has just brought back "lost".
+          var shown = docFor(comment);
+          if (shown && (STAMP_AT_RUNTIME || shown !== document)) stampBlocks(shown);
+          blocks = blockIndex();
+          selectedContextOpen = true;
+          renderPopup();
+          placePopup(comment);
+        }
+        return;
+      }
+      // A framed screen navigating has a page to load, which takes longer
+      // than a deck takes to turn.
+      if (++tries > (comment.frame ? 30 : 8)) return;
       window.setTimeout(look, 70);
     })();
   }
@@ -4048,6 +5135,12 @@ export const OVERLAY_SCRIPT = `(function () {
         context: null,
         cx: null,
         cy: null,
+        frame: null,
+        froute: null,
+        fx: null,
+        fy: null,
+        reveal: null,
+        opener: null,
       };
 
       /*
@@ -4057,11 +5150,39 @@ export const OVERLAY_SCRIPT = `(function () {
        * the pin that used to have nothing holding it.
        */
       var hit = hitAt(clientX, clientY);
+
+      // On a screen in a frame: which frame, which screen it was showing,
+      // and where on its glass, for when nothing nearer can be named.
+      var hitDoc = hit && hit.ownerDocument ? hit.ownerDocument : document;
+      if (hitDoc !== document && frameOf(hitDoc)) {
+        point.frame = frameKeyOf(hitDoc);
+        point.froute = frameRouteOf(hitDoc);
+        var glass = glassOf(frameOf(hitDoc));
+        point.fx = glass.width ? (clientX - glass.left) / glass.width : 0;
+        point.fy = glass.height ? (clientY - glass.top) / glass.height : 0;
+      }
+
       point.context = contextOf(hit);
       if (point.context) {
-        var holder = contextNode(point.context);
+        var holder = contextNode(point.context, hitDoc);
         if (holder) {
-          var area = holder.getBoundingClientRect();
+          point.reveal = revealStateOf(holder);
+          /*
+           * The tap that opened it, when the last tap was on this screen,
+           * recent, and outside the thing it opened -- a tap inside the
+           * sheet was a tap on the sheet, not the one that raised it.
+           */
+          if (
+            lastTap &&
+            lastTap.doc === hitDoc &&
+            Date.now() - lastTap.at < TAP_MEMORY_MS &&
+            lastTap.block &&
+            lastTap.node.isConnected &&
+            !holder.contains(lastTap.node)
+          ) {
+            point.opener = { block: lastTap.block, text: lastTap.text };
+          }
+          var area = topRect(holder);
           point.cx = area.width ? (clientX - area.left) / area.width : 0;
           point.cy = area.height ? (clientY - area.top) / area.height : 0;
         }
@@ -4069,7 +5190,7 @@ export const OVERLAY_SCRIPT = `(function () {
 
       var target = nearestBlock(hit);
       if (target) {
-        var box = target.getBoundingClientRect();
+        var box = topRect(target);
         point.block = target.getAttribute(BLOCK_ATTR);
         // The fraction, not the pixel offset: a paragraph that re-wraps at a
         // different width keeps the pin on roughly the same words, where a
@@ -4148,6 +5269,15 @@ export const OVERLAY_SCRIPT = `(function () {
       route: currentRoute(),
       view: viewKey || null,
       context: point.context,
+      // Only on a comment left on a framed screen, so a review written
+      // before frames were reached into reads exactly as it did.
+      frame: point.frame || undefined,
+      froute: point.frame ? point.froute : undefined,
+      fx: point.frame ? point.fx : undefined,
+      fy: point.frame ? point.fy : undefined,
+      // What it takes to bring the context back; see \`peekFor\`.
+      reveal: point.reveal || undefined,
+      opener: point.opener || undefined,
       x: point.x,
       y: point.y,
       rx: point.rx,
@@ -5192,6 +6322,170 @@ export const OVERLAY_SCRIPT = `(function () {
       },
     };
   }
+
+  /* --- screens in frames, scrolling boxes and things in motion ----------- */
+
+  /*
+   * Anything that moves a pin without a resize, a mutation or a scroll of
+   * the window: a list scrolled inside its own box, a sheet sliding up, a
+   * dialog fading in, and everything a framed screen does. Each one used to
+   * leave the pins where they were until something else happened to repaint
+   * them -- so a pin on a sheet's button stayed at the bottom of the window
+   * while the sheet rose, and arrived at the button only when the sheet
+   * stopped.
+   */
+  var motionRuns = 0;
+  var motionUntil = 0;
+  var motionTick = null;
+
+  function hasPins() {
+    return mine().length > 0;
+  }
+
+  function followFrames() {
+    if (motionTick !== null) return;
+    motionTick = window.requestAnimationFrame(function step() {
+      motionTick = null;
+      reposition();
+      var now = Date.now();
+      // A transition that never reported its end -- its element removed
+      // mid-flight -- must not keep this running, hence the cap.
+      if (now < motionUntil || (motionRuns > 0 && now < motionUntil + 2000)) {
+        motionTick = window.requestAnimationFrame(step);
+      } else {
+        motionRuns = 0;
+      }
+    });
+  }
+
+  function watchMotion(doc) {
+    function began() {
+      if (!hasPins()) return;
+      motionRuns++;
+      motionUntil = Date.now() + 1000;
+      followFrames();
+    }
+    function ended() {
+      motionRuns = Math.max(0, motionRuns - 1);
+      if (!motionRuns) motionUntil = Math.min(motionUntil, Date.now() + 80);
+    }
+    doc.addEventListener("transitionrun", began, true);
+    doc.addEventListener("animationstart", began, true);
+    doc.addEventListener("transitionend", ended, true);
+    doc.addEventListener("transitioncancel", ended, true);
+    doc.addEventListener("animationend", ended, true);
+    doc.addEventListener("animationcancel", ended, true);
+    // A box scrolling inside the page: \`scroll\` does not bubble, so it is
+    // caught on the way down. The window's own scroll is handled above.
+    doc.addEventListener(
+      "scroll",
+      function (event) {
+        if (!hasPins()) return;
+        if (doc === document && event.target === document) return;
+        reposition();
+      },
+      { capture: true, passive: true },
+    );
+  }
+
+  watchMotion(document);
+
+  /* Something about a framed screen changed: indexes, contexts, pins. */
+  function framesChanged() {
+    frameBlocks = Object.create(null);
+    if (!contextsTurned()) {
+      reposition();
+      if (anchorsChanged()) renderPanel();
+    }
+  }
+
+  var frameObservers = [];
+
+  function watchFrame(doc) {
+    if (doc.ospReviewed) return;
+    doc.ospReviewed = true;
+    stampBlocks(doc);
+
+    var view = doc.defaultView;
+    var settle = null;
+    function changed() {
+      if (settle !== null) return;
+      settle = window.setTimeout(function () {
+        settle = null;
+        if (!doc.defaultView) return;
+        stampBlocks(doc);
+        watchFrames();
+        framesChanged();
+      }, 150);
+    }
+    var Observer = (view && view.MutationObserver) || window.MutationObserver;
+    if (Observer && doc.documentElement) {
+      var nodes = new Observer(changed);
+      nodes.observe(doc.documentElement, { childList: true, subtree: true, characterData: true });
+      // The same attributes the page's own watcher listens for, and for the
+      // same reason: \`data-osp-block\` is not among them.
+      var attrs = new Observer(changed);
+      attrs.observe(doc.documentElement, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: [
+          "class",
+          "style",
+          "hidden",
+          "open",
+          "aria-hidden",
+          "aria-expanded",
+          "data-state",
+          "data-active",
+          "data-visible",
+        ],
+      });
+      frameObservers.push(nodes, attrs);
+    }
+
+    watchMotion(doc);
+    // A screen scrolling inside the glass moves every pin on it.
+    doc.addEventListener("scroll", reposition, { capture: true, passive: true });
+    if (view) {
+      view.addEventListener("resize", reposition);
+      view.addEventListener("hashchange", framesChanged);
+      view.addEventListener("popstate", framesChanged);
+    }
+    // A frame inside this one finishing loading.
+    doc.addEventListener("load", frameLoaded, true);
+    // Taps on the screen, for what a pin dropped next was opened by.
+    doc.addEventListener("click", noteTap, true);
+  }
+
+  function watchFrames() {
+    var frames = reviewFrames();
+    for (var i = 0; i < frames.length; i++) watchFrame(frames[i].doc);
+    return frames.length;
+  }
+
+  /*
+   * A frame loaded or navigated. Its document is a new one each time, so
+   * the watch above is set up again on it, and the pins are redrawn for
+   * whichever screen it is now on.
+   */
+  function frameLoaded(event) {
+    var target = event && event.target;
+    if (!target || target.tagName !== "IFRAME") return;
+    if (watchFrames()) framesChanged();
+  }
+
+  document.addEventListener("load", frameLoaded, true);
+  if (watchFrames()) framesChanged();
+
+  // Replaced on a second run of this script, as the page watcher is.
+  if (window.ospFrameWatcher) window.ospFrameWatcher.stop();
+  window.ospFrameWatcher = {
+    stop: function () {
+      for (var i = 0; i < frameObservers.length; i++) frameObservers[i].disconnect();
+      frameObservers = [];
+      document.removeEventListener("load", frameLoaded, true);
+    },
+  };
 
   /* --- arriving from another page's panel ---------------------------- */
 

@@ -25,13 +25,15 @@ import { SERVICE_WORKER_PATH } from "./serviceWorker";
  *     it. A round trip through `DOMParser` would be a round trip we would
  *     have to prove lossless on markup we did not write, for no benefit.
  *
- *     One exception, and only outside a publish: a *preview* build appends
- *     the review overlay, so a page that carries its own styling can still
- *     be commented on. It is appended rather than inserted and delimited by
+ *     One exception, and it is opt-in: the review overlay. A preview
+ *     with the overlay on, and a publish with "Include in the published
+ *     site" on, append it after the file -- a prototype is reviewed like
+ *     any other page. It is appended rather than inserted and delimited by
  *     comments, the overlay stamps its own anchors in the browser rather
- *     than having them written into the file, and `publish()` never asks for
- *     it -- see `reviewOverlayAppendix` in `page.ts`. What goes to the site
- *     is still the author's file and nothing else.
+ *     than having them written into the file, and a published copy keys
+ *     its comments on the page URL, never on the vault path. With the
+ *     published overlay off, what goes to the site is the author's file
+ *     and nothing else. See `asIsPageContent` in `buildSite.ts`.
  *   - **At its own path.** `site/demo/chart.html` publishes to
  *     `demo/chart.html` -- the same scope-relative path as a note, with the
  *     extension left alone. That is what makes the next point possible.

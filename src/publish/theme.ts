@@ -784,6 +784,97 @@ body {
 .markdown-rendered .mermaid { margin: 0 0 1.5rem; text-align: center; }
 .markdown-rendered .mermaid svg { max-width: 100%; height: auto; }
 
+/* --- an embedded prototype ------------------------------------------- *
+ * A page published as-is, framed inside a note (htmlEmbed.ts). The bar
+ * names it, offers widths (added by the site script) and links to it on its
+ * own; the stage clips a frame that has been scaled down to fit. The frame
+ * is white whatever the theme, because the page inside it was designed
+ * against whatever background its own stylesheet set, and most set none. */
+.osp-html-embed {
+  margin: 1.5rem 0;
+  border: 1px solid var(--osp-border);
+  border-radius: var(--osp-radius);
+  overflow: hidden;
+}
+.osp-html-embed-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.375rem 0.625rem;
+  font-family: var(--osp-font-ui);
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--osp-border);
+  background: var(--osp-bg);
+}
+.osp-html-embed-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.osp-html-embed-widths {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.osp-html-embed-width {
+  padding: 0.125rem 0.5rem;
+  font: inherit;
+  color: var(--osp-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--osp-radius);
+  cursor: pointer;
+}
+.osp-html-embed-width:hover { color: var(--osp-text); }
+.osp-html-embed-width[aria-pressed="true"] {
+  color: var(--osp-text);
+  border-color: var(--osp-border);
+}
+.osp-html-embed-scale {
+  margin-left: 0.25rem;
+  color: var(--osp-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.osp-html-embed-open { white-space: nowrap; }
+.osp-html-embed-stage {
+  position: relative;
+  overflow: hidden;
+  background: var(--osp-surface);
+}
+.osp-html-embed-stage iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #fff;
+  transform-origin: 0 0;
+}
+@media print {
+  .osp-html-embed-widths { display: none; }
+}
+/* Two or more on one line of the note: side by side, stacked when the
+   column is too narrow for two frames to be worth looking at. */
+.osp-html-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+.osp-html-compare > .osp-html-embed { margin: 0; min-width: 0; }
+/* A column is too narrow for one row: the name and the link share the
+   first, and the widths get the second to themselves. */
+.osp-html-compare .osp-html-embed-title { flex: 1 1 auto; }
+.osp-html-compare .osp-html-embed-open { order: 1; }
+.osp-html-compare .osp-html-embed-widths {
+  order: 2;
+  flex-basis: 100%;
+  margin-left: -0.5rem;
+}
+
 /* --- diagrams: zoom and full screen ---------------------------------- *
  * The controls appear when a diagram is pointed at or focused, and stay
  * on a screen that cannot hover. A diagram at its normal size lets a touch
@@ -3155,6 +3246,91 @@ html { scroll-behavior: smooth; }
   color: var(--osp-text-muted);
   white-space: nowrap;
 }
+
+/* --- what changed since the last visit ------------------------------ *
+ * Set by the site script from assets/changes.json and this browser's own
+ * memory of the last visit. A dot, not a word: it is there to be noticed
+ * while scanning, and the link's title says which it is. A card marks
+ * itself rather than its link, whose ::after already covers the card. */
+.osp-tree a.osp-row[data-osp-changed]::after,
+.osp-proto-card[data-osp-changed] .osp-home-trail::before,
+.osp-proto-card[data-osp-changed]:not(:has(.osp-home-trail)) .osp-proto-link::before {
+  content: "";
+  flex: none;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--osp-accent);
+  vertical-align: middle;
+}
+.osp-tree a.osp-row[data-osp-changed]::after { margin-left: 0.4rem; }
+.osp-proto-card[data-osp-changed] .osp-home-trail::before,
+.osp-proto-card[data-osp-changed] .osp-proto-link::before { margin-right: 0.4rem; }
+.osp-changed-note {
+  margin: -0.5rem 0 1.25rem;
+  font-family: var(--osp-font-ui);
+  font-size: var(--osp-ui-sm);
+  color: var(--osp-accent);
+}
+
+/* --- the prototypes index ------------------------------------------- *
+ * Cards with a live thumbnail: the page itself in a frame drawn at 1280 by
+ * 800 and scaled to a quarter (landing.ts). The title's link is stretched
+ * over the card, because the frame may not sit inside the link. */
+.markdown-rendered .osp-proto-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(0, 320px));
+  gap: 1.5rem 1.25rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.markdown-rendered .osp-proto-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+}
+.osp-proto-thumb {
+  position: relative;
+  display: block;
+  width: 320px;
+  max-width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--osp-border);
+  border-radius: var(--osp-radius);
+  background: var(--osp-surface);
+}
+.osp-proto-thumb iframe {
+  width: 1280px;
+  height: 800px;
+  border: 0;
+  background: #fff;
+  transform: scale(0.25);
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.markdown-rendered a.osp-proto-link {
+  color: var(--osp-text);
+  text-decoration: none;
+}
+.markdown-rendered a.osp-proto-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.markdown-rendered .osp-proto-card:hover .osp-proto-link { color: var(--osp-link); }
+.markdown-rendered .osp-proto-card:hover .osp-proto-thumb { border-color: var(--osp-link); }
+.markdown-rendered a.osp-proto-link:focus-visible::after {
+  outline: 2px solid var(--osp-link);
+  outline-offset: 2px;
+  border-radius: var(--osp-radius);
+}
+.osp-proto-card .osp-home-trail { margin-left: 0; }
 
 .osp-home-excerpt {
   display: block;

@@ -37,6 +37,11 @@ export interface SitePaths {
   tags: string;
   /** Folder the per-tag pages are published under, e.g. "tags". */
   tagPrefix: string;
+  /**
+   * The index of pages published as-is, e.g. "prototypes.html". Absent on
+   * a site with none, which then has no such page and links to none.
+   */
+  prototypes?: string;
 }
 
 export interface ShellInput {

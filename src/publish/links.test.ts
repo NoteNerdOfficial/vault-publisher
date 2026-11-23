@@ -200,3 +200,24 @@ describe("slugifyFragment", () => {
     expect(slugifyFragment("What's new?")).toBe("whats-new");
   });
 });
+
+describe("LinkResolver with a partial path", () => {
+  const resolver = new LinkResolver([
+    { sourcePath: "Projects/proto/index.html", url: "proto/index.html" },
+    { sourcePath: "Archive/Projects/proto/index.html", url: "archive/proto/index.html" },
+    { sourcePath: "Notes/Plan.md", url: "plan.html" },
+  ]);
+
+  it("finds a file by its trailing folders, as Obsidian does", () => {
+    expect(resolver.resolve("proto/index.html")?.url).toBe("proto/index.html");
+    expect(resolver.resolve("Notes/Plan")?.url).toBe("plan.html");
+  });
+
+  it("prefers the shorter path when two end the same way", () => {
+    expect(resolver.resolve("Projects/proto/index.html")?.url).toBe("proto/index.html");
+  });
+
+  it("matches whole folders, not the end of a folder's name", () => {
+    expect(resolver.resolve("oto/index.html")).toBeNull();
+  });
+});

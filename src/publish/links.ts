@@ -74,7 +74,29 @@ export class LinkResolver {
     const [pathPart] = splitFragment(linkText);
     const key = normalizeKey(stripExtension(pathPart));
 
-    return this.byPath.get(key) ?? this.byBasename.get(key)?.[0] ?? null;
+    return (
+      this.byPath.get(key) ?? this.byBasename.get(key)?.[0] ?? this.bySuffix(key) ?? null
+    );
+  }
+
+  /**
+   * A partial path: `[[proto/index.html]]` for `Projects/proto/index.html`.
+   *
+   * Obsidian accepts any trailing run of folders, and two of the commonest
+   * links into a prototype are written that way, because its entry point is
+   * called `index.html` like every other one and the bare name says
+   * nothing. Matched on whole segments, never on a fragment of a folder's
+   * name, and the shortest path wins, as it does for a bare name.
+   */
+  private bySuffix(key: string): LinkTarget | null {
+    if (!key.includes("/")) return null;
+    const tail = `/${key.replace(/^\/+/, "")}`;
+    let best: LinkTarget | null = null;
+    for (const [path, target] of this.byPath) {
+      if (!path.endsWith(tail)) continue;
+      if (!best || target.sourcePath.length < best.sourcePath.length) best = target;
+    }
+    return best;
   }
 }
 

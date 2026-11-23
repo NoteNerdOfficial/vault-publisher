@@ -142,6 +142,41 @@ function readComment(value: unknown, index: number): OverlayComment {
     ry: typeof row.ry === "number" ? row.ry : null,
     cx: typeof row.cx === "number" ? row.cx : null,
     cy: typeof row.cy === "number" ? row.cy : null,
+    // On a screen inside a frame, and which screen. Absent on everything
+    // else, and kept absent rather than set to null so a review that never
+    // had a frame reads back exactly as it was written.
+    ...(typeof row.frame === "string" && row.frame
+      ? {
+          frame: row.frame,
+          froute: typeof row.froute === "string" ? row.froute : null,
+          fx: typeof row.fx === "number" ? row.fx : null,
+          fy: typeof row.fy === "number" ? row.fy : null,
+        }
+      : {}),
+    // How to bring back what it is in. Kept only when well formed.
+    ...(Array.isArray(row.reveal)
+      ? {
+          reveal: (row.reveal as unknown[])
+            .filter((level): level is Record<string, unknown> => !!level && typeof level === "object")
+            .map((level) =>
+              Object.fromEntries(
+                Object.entries(level).filter(
+                  (pair): pair is [string, string] => typeof pair[1] === "string",
+                ),
+              ),
+            ),
+        }
+      : {}),
+    ...(row.opener &&
+    typeof row.opener === "object" &&
+    typeof (row.opener as Record<string, unknown>).block === "string"
+      ? {
+          opener: {
+            block: (row.opener as Record<string, string>).block,
+            text: String((row.opener as Record<string, unknown>).text ?? ""),
+          },
+        }
+      : {}),
     author: typeof row.author === "string" && row.author ? row.author : "Anonymous",
     text: row.text,
     createdAt: typeof row.createdAt === "string" ? row.createdAt : "",

@@ -5,6 +5,7 @@ import {
   browseContent,
   noteExcerpt,
   overviewContent,
+  prototypesContent,
   sitePaths,
   tagPageContent,
   tagSlug,
@@ -281,5 +282,45 @@ describe("the tags page", () => {
   it("says so plainly when a vault has no tags", () => {
     const html = tagsIndexContent({ ...input(), tags: [] });
     expect(html).toContain("No tags yet");
+  });
+});
+
+describe("the prototypes index", () => {
+  const CARDS = [
+    { url: "proto/index.html", title: "Checkout flow", folder: "proto", updated: "2026-11-01" },
+    { url: "chart.html", title: "Revenue chart", folder: "", updated: "2026-11-10" },
+    { url: "old/index.html", title: "Old idea", folder: "old", updated: null },
+  ];
+
+  it("has an address only on a site that publishes pages as-is", () => {
+    expect(sitePaths(["a.html"]).prototypes).toBeUndefined();
+    expect(sitePaths(["a.html"], true).prototypes).toBe("prototypes.html");
+    expect(sitePaths(["prototypes.html"], true).prototypes).toBe("all-prototypes.html");
+  });
+
+  it("lists every page newest first, by title, with a live thumbnail", () => {
+    const html = prototypesContent(CARDS, "./");
+    const titles = Array.from(html.matchAll(/osp-home-title" href="[^"]+">([^<]+)</g), (m) => m[1]);
+    expect(titles).toEqual(["Revenue chart", "Checkout flow", "Old idea"]);
+    expect(html).toContain('<iframe src="./proto/index.html" loading="lazy" tabindex="-1"');
+    expect(html).toContain('sandbox="allow-scripts allow-same-origin"');
+    expect(html).toContain("3 pages published as they are");
+  });
+
+  // An iframe is interactive content, which an <a> may not contain.
+  it("keeps each frame outside the link", () => {
+    const html = prototypesContent(CARDS, "./");
+    expect(html).not.toMatch(/<a [^>]*>(?:(?!<\/a>).)*<iframe/);
+  });
+
+  it("is linked from the front page when there are any", () => {
+    const withProtos = overviewContent({
+      ...input(),
+      paths: { ...PATHS, prototypes: "prototypes.html" },
+      prototypeCount: 3,
+    });
+    expect(withProtos).toContain('href="./prototypes.html"');
+    expect(withProtos).toContain("3 prototypes");
+    expect(overviewContent(input())).not.toContain("prototypes");
   });
 });

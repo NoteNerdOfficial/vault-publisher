@@ -59,6 +59,8 @@ export interface LandingInput {
   today: Date;
   /** Prefix back to the site root for the page being built, e.g. "../". */
   root: string;
+  /** How many pages were published as-is; the front page links to them. */
+  prototypeCount?: number;
 }
 
 /* --- where the site's own pages go ----------------------------------- */
@@ -72,7 +74,7 @@ export interface LandingInput {
  * the alternatives are deliberately dull rather than clever -- a reader
  * should not have to wonder whether `tag/` and `tags/` are different places.
  */
-export function sitePaths(taken: Iterable<string>): SitePaths {
+export function sitePaths(taken: Iterable<string>, prototypes = false): SitePaths {
   const used = new Set(Array.from(taken, (url) => url.toLowerCase()));
   const free = (candidates: string[], test: (candidate: string) => boolean) =>
     candidates.find(test) ?? candidates[candidates.length - 1];
@@ -84,6 +86,14 @@ export function sitePaths(taken: Iterable<string>): SitePaths {
       for (const url of used) if (url.startsWith(`${prefix.toLowerCase()}/`)) return false;
       return true;
     }),
+    ...(prototypes
+      ? {
+          prototypes: free(
+            ["prototypes.html", "all-prototypes.html", "osp-prototypes.html"],
+            (c) => !used.has(c),
+          ),
+        }
+      : {}),
   };
 }
 
@@ -345,6 +355,7 @@ export function overviewContent(input: LandingInput): string {
             )
           : ""),
     ) +
+    prototypesLink(input) +
     section(
       "tags",
       "Tags",
@@ -378,6 +389,7 @@ export function exploreContent(input: LandingInput): string {
     section("recent", "Recently updated", recentList(input, 5).html) +
     (tags.length ? section("tags", "Tags", tagCloud(tags.slice(0, TAGS_ON_HOME), root)) : "") +
     more(`${root}${encodeUrlPath(paths.browse)}`, `Browse all ${notes.length} notes`) +
+    prototypesLink(input) +
     `</section>`
   );
 }
@@ -547,5 +559,73 @@ export function tagsIndexContent(input: LandingInput): string {
           .join("") +
         `</ul>`,
     )
+  );
+}
+
+/* --- prototypes ------------------------------------------------------- */
+
+/** A page published as-is, as the prototypes index lists it. */
+export interface PrototypeCard {
+  url: string;
+  title: string;
+  /** Its published folder, "" at the root. */
+  folder: string;
+  /** ISO 8601, from the file's modification time, or null. */
+  updated: string | null;
+}
+
+/** Where the front page points at the prototypes, when there are any. */
+function prototypesLink(input: LandingInput): string {
+  const count = input.prototypeCount ?? 0;
+  if (!input.paths.prototypes || !count) return "";
+  return more(
+    `${input.root}${encodeUrlPath(input.paths.prototypes)}`,
+    `${count} ${count === 1 ? "prototype" : "prototypes"}`,
+  );
+}
+
+/**
+ * Every page published as-is, on one page: the address to hand a reviewer.
+ *
+ * A prototype in the file tree sits wherever its folder put it, among the
+ * notes, and the tree names it by file -- four entries called `index`. This
+ * page names each by its `<title>`, newest first, with a thumbnail.
+ *
+ * The thumbnail is the page itself, live, in a frame drawn at desktop width
+ * and scaled to a quarter. Nothing is captured at build time, so it is
+ * never stale and costs the build nothing. It is lazy, so a long list
+ * loads as it is scrolled; sandboxed without top navigation, so a script in
+ * the prototype cannot take the index page somewhere else; and out of the
+ * pointer and the tab order, so the card is one link and nothing else.
+ */
+export function prototypesContent(cards: PrototypeCard[], root: string): string {
+  const sorted = [...cards].sort(
+    (a, b) =>
+      (b.updated ?? "").localeCompare(a.updated ?? "") || a.title.localeCompare(b.title),
+  );
+  const lead =
+    `${cards.length} ${cards.length === 1 ? "page" : "pages"} published as they are, ` +
+    `newest first.`;
+  const items = sorted.map((card) => {
+    const href = escapeHtml(root + encodeUrlPath(card.url));
+    const trail = [card.folder ? `${card.folder}/` : "", card.updated ? formatDay(card.updated) : ""]
+      .filter(Boolean)
+      .join(" · ");
+    // The frame sits beside the link, not in it: an <iframe> is interactive
+    // content, which an <a> may not contain. The title's link is stretched
+    // over the whole card in CSS instead, so the card is still one target.
+    return (
+      `<li class="osp-proto-card">` +
+      `<span class="osp-proto-thumb" aria-hidden="true">` +
+      `<iframe src="${href}" loading="lazy" tabindex="-1" title="" ` +
+      `sandbox="allow-scripts allow-same-origin"></iframe></span>` +
+      `<a class="osp-proto-link osp-home-title" href="${href}">${escapeHtml(card.title)}</a>` +
+      (trail ? `<span class="osp-home-trail">${escapeHtml(trail)}</span>` : "") +
+      `</li>`
+    );
+  });
+  return (
+    `<p class="osp-index-lead">${escapeHtml(lead)}</p>` +
+    `<ul class="osp-proto-grid">${items.join("")}</ul>`
   );
 }

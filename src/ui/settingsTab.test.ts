@@ -486,10 +486,30 @@ describe("folders published whole", () => {
     const tab = new VaultPublisherSettingsTab(app(), target);
     tab.display();
 
-    rows(tab.containerEl)[0].querySelector("button")?.click();
+    // The last of the row's buttons: listed/unlisted comes before it.
+    const buttons = rows(tab.containerEl)[0].querySelectorAll("button");
+    buttons[buttons.length - 1]?.click();
     await settle();
 
     expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "b/dist" }]);
+  });
+
+  it("unlists a folder and lists it again", async () => {
+    const target = host({
+      site: { folder: "", publishWholeFolders: [{ folder: "a/dist" }] },
+    });
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+
+    rows(tab.containerEl)[0].querySelector("button")?.click();
+    await settle();
+    expect(target.settings.site.publishWholeFolders).toEqual([
+      { folder: "a/dist", unlisted: true },
+    ]);
+
+    rows(tab.containerEl)[0].querySelector("button")?.click();
+    await settle();
+    expect(target.settings.site.publishWholeFolders).toEqual([{ folder: "a/dist" }]);
   });
 
   it("says what each folder holds and where it lands", () => {

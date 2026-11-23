@@ -209,7 +209,7 @@ export interface SettingsHost {
       /** "light" | "dark", or unset to follow the visitor's own system. */
       startTheme?: "light" | "dark";
       publishHtmlFiles?: boolean;
-      publishWholeFolders?: { folder: string; at?: string }[];
+      publishWholeFolders?: { folder: string; at?: string; unlisted?: boolean }[];
       excludeFolders?: string[];
       failOnPrivacyLeak?: boolean;
       failOnTruncatedBase?: boolean;
@@ -1333,6 +1333,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       site.publishWholeFolders = next.map((entry) => ({
         folder: entry.folder,
         ...(entry.at === null ? {} : { at: entry.at }),
+        ...(entry.unlisted ? { unlisted: true } : {}),
       }));
       await this.host.saveSettings();
     };
@@ -1448,6 +1449,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await change(index, { at: destination(value) });
           });
       });
+
+      // Listed or not. An icon rather than a third field: it is a yes or
+      // no, and the row already holds two things to type into.
+      row.addExtraButton((button) =>
+        button
+          .setIcon(entry.unlisted ? "eye-off" : "eye")
+          .setTooltip(
+            entry.unlisted
+              ? "Unlisted: published, but only reachable by its address. Click to list it."
+              : "Listed in the file tree, search and the prototypes page. Click to unlist it.",
+          )
+          .onClick(async () => {
+            await change(index, { unlisted: !entry.unlisted });
+            this.display();
+          }),
+      );
 
       row.addExtraButton((button) =>
         button
@@ -1754,7 +1771,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           : `/${entry.at}/`;
     if (!entry.folder) return "Give it a vault path.";
     return count
-      ? `${count} file${count === 1 ? "" : "s"} -> ${where}`
+      ? `${count} file${count === 1 ? "" : "s"} -> ${where}` +
+          (entry.unlisted ? " (unlisted)" : "")
       : `nothing here -- check the path`;
   }
 

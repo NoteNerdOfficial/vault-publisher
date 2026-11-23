@@ -359,6 +359,31 @@ export class ReviewServer {
           "Set-Cookie",
           `${COOKIE}=${token}; Path=/; SameSite=Strict`,
         );
+        /*
+         * And then out of the address bar. A page that routes on the address
+         * -- every as-is prototype, which records `location` as the screen a
+         * comment is on -- would otherwise record the token as part of the
+         * screen. The token is new every time the server starts, so those
+         * pins vanished in the next session and never matched on the
+         * published site at all. The cookie is set on this response, so the
+         * redirect is already authorized.
+         */
+        const raw = request.url ?? "/";
+        const cut = raw.indexOf("?");
+        // Pages only: the API is called by scripts, which may present the
+        // token per request and have no address bar to keep clean.
+        const isApi = raw.startsWith("/api/");
+        if ((request.method ?? "GET") === "GET" && cut !== -1 && !isApi) {
+          const params = new URLSearchParams(raw.slice(cut + 1));
+          if (params.get("t") === token) {
+            params.delete("t");
+            const rest = params.toString();
+            response.statusCode = 302;
+            response.setHeader("Location", raw.slice(0, cut) + (rest ? `?${rest}` : ""));
+            response.end();
+            return;
+          }
+        }
       }
 
       const path = (request.url ?? "/").split("?")[0];

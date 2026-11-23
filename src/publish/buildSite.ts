@@ -3,6 +3,11 @@ import { createRenderHost, renderFile } from "../render/renderNote";
 import { waitForDataviewIndex } from "../render/settle";
 import { withDataviewRefreshSuspended } from "../render/dataviewRefresh";
 import { LinkResolver, LinkTarget, rewriteLinks } from "./links";
+import { frameHtmlEmbeds } from "./htmlEmbed";
+import { hashContent } from "./incremental";
+
+/** Where the build writes each page's content fingerprint. */
+export const CHANGES_PATH = "assets/changes.json";
 import {
   addHeadingAnchors,
   assignHeadingIds,
@@ -83,6 +88,8 @@ import {
   overviewContent,
   sitePaths,
   tagPageContent,
+  prototypesContent,
+  PrototypeCard,
   tagUrls,
   tagsIndexContent,
 } from "./landing";
@@ -170,6 +177,61 @@ export function overlayKey(
   sourcePath: string,
 ): string {
   return overlay.published ? url : sourcePath;
+}
+
+/**
+ * What an as-is page is published as: the author's file, plus whatever of
+ * ours was asked for, appended after it.
+ *
+ * Two things can be appended, each between `osp-review` comments so a diff
+ * shows exactly what was added:
+ *
+ *   - **The review overlay**, whenever the build carries `reviewOverlay`.
+ *     That is every preview with the overlay on, *and* every publish with
+ *     "Include in the published site" on: a prototype is reviewed like any
+ *     other page, which is most of why anyone publishes one. On a publish
+ *     the comment key is the page's URL (`overlayKey`), because the meta
+ *     is readable by every visitor and the vault path must not be in it.
+ *     `stamp` is set because no render pass stamped this document's
+ *     blocks, so the overlay does it in the browser from the same
+ *     content-derived hash.
+ *   - **The blank-app explanation**, on a preview only (`previewBuild`),
+ *     for a framework shell with no script. A publish never gets it.
+ *
+ * So "byte for byte" means: with the published overlay off, the file is
+ * the vault's file exactly; with it on, the file is the vault's file
+ * followed by one delimited block. Nothing is ever inserted *into* the
+ * author's markup -- see `reviewOverlayAppendix` for why appending is the
+ * only safe place.
+ */
+export function asIsPageContent(
+  html: string,
+  target: { url: string; sourcePath: string },
+  config: Pick<SiteConfig, "reviewOverlay" | "previewBuild" | "siteName">,
+): string {
+  const overlay = config.reviewOverlay;
+  const withOverlay = overlay
+    ? html +
+      reviewOverlayAppendix({
+        sourcePath: overlayKey(overlay, target.url, target.sourcePath),
+        url: target.url,
+        siteName: config.siteName,
+        reviewer: overlay.reviewer,
+        tracker: overlay.tracker,
+        stamp: true,
+        comments: overlay.comments !== false,
+        published: overlay.published,
+        contact: overlay.contact,
+      })
+    : html;
+
+  const shellRoot = appShellWithoutCode(html);
+  return config.previewBuild && shellRoot
+    ? withOverlay +
+        `\n<!-- osp-review:start -- added by the publisher; not in the source file -->\n` +
+        appShellNotice(shellRoot, target.sourcePath) +
+        `\n<!-- osp-review:end -->\n`
+    : withOverlay;
 }
 
 export interface SiteConfig {
@@ -895,7 +957,10 @@ export async function buildSite(
    * count, the tag pages, the graph -- is a claim about a note. See `asIs`
    * on `NavNote`.
    */
-  const htmlNavNotes: NavNote[] = htmlPlan.targets
+  // Every page that was read, listed or not: an unlisted page is still
+  // embedded and linked by title. The tree, search and the prototypes page
+  // take only the listed ones, below.
+  const asIsPages: NavNote[] = htmlPlan.targets
     .filter((target) => htmlContent.has(target.sourcePath))
     .map((target) => {
       const slash = target.url.lastIndexOf("/");
@@ -911,6 +976,12 @@ export async function buildSite(
         asIs: true,
       };
     });
+  const unlistedPages = new Set(
+    htmlPlan.targets
+      .filter((target) => entryFor(target.sourcePath, wholeEntries)?.unlisted)
+      .map((target) => target.url),
+  );
+  const htmlNavNotes = asIsPages.filter((page) => !unlistedPages.has(page.url));
 
   // Both kinds of page go into the resolver, so `[[chart.html]]` in a note
   // becomes a working link instead of the dead span it used to be. Nothing
@@ -918,6 +989,10 @@ export async function buildSite(
   // an HTML file's key is its name with the extension still on it, which is
   // exactly how Obsidian writes a link to a file that is not a note.
   const resolver = new LinkResolver([...targets, ...htmlPlan.targets]);
+  // What `frameHtmlEmbeds` asks of a resolved embed: is it a page published
+  // as-is, and what is it called. Only pages whose file was read are here,
+  // which is the same test that put them in the tree.
+  const asIsTitles = new Map(asIsPages.map((page) => [page.url, page.title]));
 
   // Everything in the vault that is *not* being published, by name, so a
   // query result can be recognised as belonging to a note the reader was
@@ -1041,6 +1116,15 @@ export async function buildSite(
             // looks machine-made -- rewrites every attribute pointing at
             // it, this href included.
             addHeadingAnchors(container);
+            // Before the links, which resolve the frame's "Open full page"
+            // anchor like any other; the frame's own src is already relative.
+            frameHtmlEmbeds(
+              container,
+              resolver,
+              url,
+              (page) => asIsTitles.has(page),
+              (page) => asIsTitles.get(page),
+            );
             const rewritten = rewriteLinks(container, resolver, url);
             unresolvedTargets = rewritten.unresolvedTargets;
             outgoing = rewritten.resolvedTargets;
@@ -1159,10 +1243,10 @@ export async function buildSite(
   // over it, and every tag's own page. The vault's own HTML counts as
   // published here: a `browse.html` in the vault keeps its name, and our
   // listing becomes `all-notes.html`.
-  const paths: SitePaths = sitePaths([
-    ...rendered.map((page) => page.url),
-    ...htmlPlan.targets.map((target) => target.url),
-  ]);
+  const paths: SitePaths = sitePaths(
+    [...rendered.map((page) => page.url), ...htmlPlan.targets.map((target) => target.url)],
+    htmlNavNotes.length > 0,
+  );
   const counted = collectTags(
     rendered.map((page) => ({ url: page.url, tags: page.tags })),
   );
@@ -1193,6 +1277,7 @@ export async function buildSite(
     paths,
     today,
     root: pathToRoot(url),
+    prototypeCount: htmlNavNotes.length,
   });
 
   /**
@@ -1416,70 +1501,11 @@ export async function buildSite(
     const html = htmlContent.get(target.sourcePath);
     if (html === undefined) continue;
 
-    /**
-     * The review overlay, on a page we did not build.
-     *
-     * Appended to the preview's copy, never to a published one: the only
-     * caller that sets `reviewOverlay` is `buildToPreview`, which is the
-     * same structural guarantee the note pages rely on, and the meta carries
-     * the vault path that must never be published.
-     *
-     * It costs the one thing this path otherwise promises. While the overlay
-     * is on, a preview copy of an as-is page is the vault's file plus a
-     * delimited block at the end of it, so a byte-for-byte check against the
-     * vault has to be done with the overlay off -- or by ignoring what sits
-     * between the two `osp-review` comments. A publish is unaffected either
-     * way, which is where the promise actually matters.
-     *
-     * `stamp` is set because nothing stamped this document's blocks: there
-     * was no render pass to do it in, so the overlay does it in the browser
-     * from the same content-derived hash.
-     */
-    const overlay = config.reviewOverlay;
-    const withOverlay = overlay
-      ? html +
-        reviewOverlayAppendix({
-          sourcePath: overlayKey(overlay, target.url, target.sourcePath),
-          url: target.url,
-          siteName: config.siteName,
-          reviewer: overlay.reviewer,
-          tracker: overlay.tracker,
-          stamp: true,
-          comments: overlay.comments !== false,
-          published: overlay.published,
-          contact: overlay.contact,
-        })
-      : html;
-
-    /*
-     * The one thing a preview can say that a build report cannot: it can say
-     * it on the blank page itself.
-     *
-     * `appShellWithoutCode` has recognised this file for as long as the
-     * report has existed, and the report is a file in the vault somebody has
-     * to already know to open. The symptom people actually arrive with is
-     * "the preview opens and the app never renders", so the explanation
-     * belongs where they are standing when they find out.
-     *
-     * Gated on `previewBuild` rather than on the overlay, so a preview with
-     * commenting switched off still explains itself; appended rather than
-     * prepended, because anything before `<!doctype html>` puts the document
-     * into quirks mode; and inside the same delimited region the overlay
-     * already uses, so the preview's additions to an as-is page remain one
-     * documented exception rather than two. A publish sets neither flag.
-     */
-    const shellRoot = appShellWithoutCode(html);
-    const content =
-      config.previewBuild && shellRoot
-        ? withOverlay +
-          `\n<!-- osp-review:start -- added by the publisher; not in the source file -->\n` +
-          appShellNotice(shellRoot, target.sourcePath) +
-          `\n<!-- osp-review:end -->\n`
-        : withOverlay;
+    const content = asIsPageContent(html, target, config);
 
     // The scans below read `html`, never `content`: what the report says
     // about a page is about the author's file, not about anything of ours
-    // that a preview added to it.
+    // that the build added to it.
     files.push({ path: target.url, content });
     htmlStats.published++;
     htmlStats.publishedPages.push(`${target.sourcePath} -> ${target.url}`);
@@ -1497,7 +1523,7 @@ export async function buildSite(
     // A framework's unbuilt `index.html`, which publishes perfectly and
     // cannot run. What is wrong with it is what it does not contain, so
     // nothing else in this report can see it.
-    // Already read above, where the preview's own copy needed it.
+    const shellRoot = appShellWithoutCode(html);
     if (shellRoot) htmlStats.appShells.push(`${target.url}: ${shellRoot}`);
 
     const companions = planCompanions(target, html, companionContext);
@@ -1713,6 +1739,35 @@ export async function buildSite(
     }),
   });
 
+  /*
+   * Every page published as-is, in one place. Only on a site that has any;
+   * `paths.prototypes` is unset otherwise, and so is every link to it.
+   * Dated by the file's own modification time, since an HTML file has no
+   * frontmatter to say otherwise.
+   */
+  if (paths.prototypes) {
+    const cards: PrototypeCard[] = htmlNavNotes.map((page) => {
+      const target = htmlPlan.targets.find((t) => t.url === page.url);
+      const file = target ? app.vault.getAbstractFileByPath(target.sourcePath) : null;
+      const mtime = file instanceof TFile ? file.stat?.mtime : undefined;
+      return {
+        url: page.url,
+        title: page.title,
+        folder: page.folder,
+        updated: mtime ? new Date(mtime).toISOString().slice(0, 10) : null,
+      };
+    });
+    files.push({
+      path: paths.prototypes,
+      content: buildPage({
+        meta: pageMeta("Prototypes", paths.prototypes),
+        content: prototypesContent(cards, pathToRoot(paths.prototypes)),
+        headings: [],
+        shell: sitePageShell([{ label: "Prototypes" }]),
+      }),
+    });
+  }
+
   files.push({
     path: paths.tags,
     content: buildPage({
@@ -1740,6 +1795,28 @@ export async function buildSite(
       }),
     });
   }
+  /*
+   * What each page is now, so a returning reader can be told what changed.
+   *
+   * A fingerprint of the page's *content* -- the note's body, or a page
+   * published as-is byte for byte -- and not of the file, because every
+   * file carries the navigation, so publishing one new note changed every
+   * page on the site and "changed since your last visit" would mark them
+   * all. The comparison is made in the reader's browser against what it
+   * saw last time (see "what changed" in clientScript.ts); nothing about a
+   * reader is sent anywhere, and nothing here knows about the last publish.
+   */
+  const changes: Record<string, string> = {};
+  for (const page of rendered) changes[page.url] = hashContent(page.html);
+  for (const target of htmlPlan.targets) {
+    // An unlisted page is not named anywhere a visitor could read a list,
+    // and this file is one.
+    if (unlistedPages.has(target.url)) continue;
+    const html = htmlContent.get(target.sourcePath);
+    if (html !== undefined) changes[target.url] = hashContent(html);
+  }
+  files.push({ path: CHANGES_PATH, content: JSON.stringify({ v: 1, pages: changes }) });
+
   // Pages would otherwise run the committed HTML through Jekyll, which
   // ignores files and folders whose names begin with an underscore -- and
   // Obsidian attachment folders are commonly named `_attachments`.

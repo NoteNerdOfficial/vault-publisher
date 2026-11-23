@@ -104,6 +104,14 @@ export interface WholeFolderEntry {
   folder: string;
   /** Where it lands, or null to keep the vault path. `""` is the root. */
   at: string | null;
+  /**
+   * Published, but listed nowhere: not in the file tree, not in search, not
+   * on the prototypes page. Its pages are reached by their address, or from
+   * a note that links to or embeds them -- the shape of a link sent to one
+   * client rather than a page put on show. Absent means listed, which is
+   * what every entry stored before this existed meant.
+   */
+  unlisted?: boolean;
 }
 
 /**
@@ -171,7 +179,9 @@ export function parseWholeFolders(value: unknown): WholeFolderEntry[] {
       item && typeof item === "object" && "at" in item
         ? storedDestination((item as { at: unknown }).at)
         : null;
-    out.push({ folder, at });
+    const unlisted =
+      item && typeof item === "object" && (item as { unlisted?: unknown }).unlisted === true;
+    out.push(unlisted ? { folder, at, unlisted: true } : { folder, at });
   }
 
   return out;

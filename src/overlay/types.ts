@@ -31,12 +31,14 @@
  * `priority` and `agent`. 4 added `external`. 5 added `closedAt` on
  * `external` and the document's `withdrawn` list. 6 renamed the middle
  * priority from `normal` to `medium`. 7 added `route`. 8 added `imported`. 9 added `view`.
- * 10 added `context` and the point within it, `cx` and `cy`.
+ * 10 added `context` and the point within it, `cx` and `cy`. 11 added `frame`,
+ * `froute`, `fx` and `fy`, for a comment left on a screen inside a frame, and
+ * `reveal` and `opener`, for bringing back the sheet or popup it is in.
  * An older file still reads: every added field is optional and defaults to
  * what a comment without it meant, and a `normal` priority is read as
  * `medium` by every reader of one.
  */
-export const OVERLAY_SCHEMA_VERSION = 10;
+export const OVERLAY_SCHEMA_VERSION = 11;
 
 /**
  * How much a comment is asking for, in the reviewer's own estimation.
@@ -143,6 +145,12 @@ export interface OverlayComment {
    * tell them apart; the address bar can, whatever the application is built
    * on.
    *
+   * Written relative to the page where it can be: `./#/settings`,
+   * `./?variant=b`, or `./` for the entry screen, so the same pin matches on
+   * the preview and on the published site, whose paths differ. A path that
+   * is not the page's own (routing on the path) is kept absolute, as every
+   * route was before; readers normalise both forms before comparing them.
+   *
    * Null for a page the build rendered, which is one document at one URL,
    * and null in a review written before this field existed. Both mean "show
    * this wherever its page is shown", which is what they meant at the time.
@@ -209,6 +217,38 @@ export interface OverlayComment {
    */
   cx: number | null;
   cy: number | null;
+  /**
+   * The <iframe> a comment was left inside, for a page that shows another
+   * as a screen -- a prototype drawn in a phone or tablet frame. Its `id`,
+   * `name` or `title`, or its position among the page's frames, joined with
+   * ` > ` for one frame inside another. Absent for a comment on the page
+   * itself, which is every comment written before this field existed.
+   */
+  frame?: string | null;
+  /**
+   * Which screen that frame was showing: its document's address relative to
+   * the page's folder, with the query and fragment. The frame stays put
+   * while the screen inside it navigates, so the frame alone cannot say.
+   */
+  froute?: string | null;
+  /** The drop point as a fraction of the frame's glass, for a pin on no block. */
+  fx?: number | null;
+  fy?: number | null;
+  /**
+   * What made the comment's context open when the pin was dropped: the
+   * values of a handful of attributes (`class`, `style`, `hidden`, `open`,
+   * `aria-hidden` and the like) on the context, then on each of a few of its
+   * ancestors in turn. Written back to show a closed sheet or drawer when
+   * the comment is opened from the panel, and undone when it is closed.
+   */
+  reveal?: Array<Record<string, string>>;
+  /**
+   * The tap that opened the context, when one was made just before the pin
+   * was dropped: the block it landed on and its text. Offered as "Reopen"
+   * for a popup that was taken out of the page, which only the prototype
+   * can build again.
+   */
+  opener?: { block: string; text: string };
   author: string;
   text: string;
   /** ISO 8601. */

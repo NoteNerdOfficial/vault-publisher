@@ -166,6 +166,14 @@ and absent, rather than broken, with JavaScript off:
   for the visit.
 - **Back to top.** A round button in the corner of the content column, shown
   once the top of the page is most of a screen away.
+- **What changed since your last visit.** A small dot in the tree (and on
+  the prototypes page) beside each page whose content has changed or that is
+  new since this reader last came, and a line under the title of a page that
+  changed. The build writes a fingerprint of each page's *content* to
+  `assets/changes.json`, not of the whole file, which every new note would
+  change through the navigation; the reader's browser remembers what it saw
+  last time and compares. Nothing about a reader leaves their browser, and a
+  first visit marks nothing.
 - **Zooming diagrams.** A Mermaid diagram has zoom in, zoom out, reset and full
   screen controls that appear on hover (and stay visible on touch screens).
   Ctrl or Cmd with the scroll wheel zooms in place, a zoomed diagram can be
@@ -183,6 +191,52 @@ only which of its files travel.
 their own path, with no stylesheet or script of ours added. Off by default,
 because vaults are full of HTML nobody wrote as a web page: saved articles, a
 plugin's bundled help, an export somebody made once.
+
+The one thing that can be added is the review overlay, and only if you ask
+for it: with **Review → Include in the published site** on, a prototype gets
+the same comment layer as every note, so a reviewer can pin a comment to it on
+the live site. It is appended after your file between two `osp-review`
+comments, never inserted into your markup, and it groups comments under the
+page's URL rather than its vault path. With that switch off, the published
+file is your file exactly.
+
+**A note can show a prototype inside it.** Embed the page the way you would
+an image, and the note becomes the writing around a working design:
+
+```markdown
+![[checkout/index.html]]          a frame 560 px tall, the column's width
+![[checkout/index.html|720]]      720 px tall
+![[checkout/index.html|375x700]]  starting at phone width, 700 px tall
+```
+
+Obsidian has no embed for HTML and shows a box with the file's name; the
+published page shows the prototype itself, with its title, an **Open full
+page** link, and **Phone**, **Tablet**, **Desktop** and **Fit** widths. A
+width wider than the column is scaled down to fit rather than cut off, and
+the bar says the scale (`1280 px at 55%`), so nobody judges type size from a
+shrunken frame. Only a page this build publishes is framed: an embed of an
+HTML file the scope left out stays as Obsidian drew it. A partial path such
+as `checkout/index.html` finds `Projects/checkout/index.html`, as it does in
+Obsidian, which matters because every prototype's entry point has the same
+name.
+
+**Two versions side by side.** Put two or more embeds on one line and they
+are shown next to each other, stacking on a narrow screen:
+
+```markdown
+![[checkout-v1/index.html]] ![[checkout-v2/index.html]]
+```
+
+A width chosen in one frame is applied to all of them, because two versions
+of a design are only comparable at the same viewport.
+
+**And the site lists them in one place.** A site with any page published
+as-is gets `prototypes.html`, linked from the front page: every one of them
+by its `<title>`, newest first, each with a live thumbnail. The thumbnail is
+the page itself in a small frame, so it is never out of date and the build
+captures nothing; frames load as the list is scrolled, and are sandboxed so
+a prototype's script cannot navigate the index. It is the address to send a
+reviewer when there is more than one thing to look at.
 
 **The files a page names travel with it.** Scripts, stylesheets, images, and
 the files a *stylesheet* names in turn (a `@font-face` src, a
@@ -227,6 +281,14 @@ build would have written is not written, and a homepage note moves to
 here it loses to an instruction rather than to another file that happened to
 be there. The settings panel says which note is about to move, and the build
 report says it again.
+
+**A folder can be unlisted.** The eye beside a row under **Publish folders
+whole** turns it off: the folder is still published at its address, and a
+note can still link to it or embed it, but it is left out of the file tree,
+search and the prototypes page. That is the shape of a link sent to one
+client rather than a page put on show. It is not a lock: anyone with the
+address can open it, and a search engine that finds a link to it can index
+it. For a real lock, see **Locking a site behind a password**.
 
 A destination says *where* a folder lands, not *whether* it may be published:
 the scope still decides that. Two folders cannot be sent to the same place,
@@ -370,6 +432,31 @@ one marked resolved, and an open pin showing the block it is about, the
 comment, a reply box, a Resolve and next button, and the issue it was filed
 as.](media/review-overlay.png)
 
+**On a prototype, pins follow what the app is doing.** A comment left inside
+a dialog, a bottom sheet, a drawer or a popup belongs to it: the pin moves
+with it as it slides in, and is drawn only while it is open, whether the app
+hides it, parks it off-screen or takes it out of the page. The panel names
+what a hidden comment is in, such as "sheet (closed)", so a row without a pin
+still says where to look. A pin on a row of a scrolling list stays on that
+row as the list scrolls.
+
+**Opening a comment brings back what it is about.** Clicking a comment whose
+sheet or drawer is closed opens it again, as it was when the pin was dropped,
+and closing the comment closes it. A popup the prototype removed from the
+page cannot be opened that way, so its comment offers **Reopen** instead,
+which taps the button that opened it the first time ("Remove", say). It is a
+button rather than automatic because a tap runs the prototype's own code.
+Only comments left after this feature existed record what is needed, and a
+backdrop the prototype dims separately does not come back with the sheet.
+
+**A prototype drawn inside a phone or tablet frame is reviewed as one page.**
+When the frame is a page that shows the app in an `<iframe>`, the outer page
+carries the only toolbar, and pins land on what is on the screen: its
+buttons, its sheets, its rows. A comment remembers which screen of the app it
+was left on, the panel names that screen, and clicking the comment sends the
+frame back to it. This needs the screen to be published from the same site as
+the frame, which is how a prototype folder is published anyway.
+
 A published page keys its comments on its own URL and never on the vault path
 behind it, so no folder names reach a reader. `pageMap.ts` is the other half:
 a publish records which note produced which page, in the vault beside the
@@ -411,6 +498,8 @@ src/publish/    turning rendered HTML into a site
   assets.ts       the files a page points at, carried and rewritten
   htmlFiles.ts    the vault's own .html pages, published untouched, and what
                   each one -- and each stylesheet it carries -- asks for
+  htmlEmbed.ts    a page published as-is, framed inside the note that
+                  embeds it, with widths to view it at
   wholeFolders.ts folders published entire, for a build whose chunks nothing
                   references
   sourceLink.ts   which repository the site's bar links back to, if any

@@ -564,3 +564,24 @@ describe("whether a folder published a front page", () => {
     }
   });
 });
+
+describe("an unlisted folder", () => {
+  it("keeps the flag when it is set, and nothing when it is not", () => {
+    expect(
+      parseWholeFolders([
+        { folder: "client/dist", at: "acme", unlisted: true },
+        { folder: "app/dist" },
+        { folder: "other/dist", unlisted: "yes" },
+      ]),
+    ).toEqual([
+      { folder: "client/dist", at: "acme", unlisted: true },
+      { folder: "app/dist", at: null },
+      { folder: "other/dist", at: null },
+    ]);
+  });
+
+  it("is found by the entry that covers a page", () => {
+    const entries = parseWholeFolders([{ folder: "client/dist", unlisted: true }]);
+    expect(entryFor("client/dist/index.html", entries)?.unlisted).toBe(true);
+  });
+});
