@@ -102,6 +102,10 @@ const settings = {
     // Blank: whoever reads the vault is the reviewer, not whoever built it.
     reviewer: "",
     reviewFolder: "_vault-publisher/review",
+    // Comments reach the owner as a file. Sharing them as GitHub issues
+    // needs a real repository, which a shared vault does not have.
+    shareThroughIssues: false,
+    signinUrl: "",
   },
   publishPassword: "",
   sourceLink: { enabled: false, url: "" },
