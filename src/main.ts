@@ -51,7 +51,20 @@ import {
   parsePageMap,
   resolveToNotes,
 } from "./overlay/pageMap";
-import { OverlayComment, OverlayExport, OverlayExternalIssue } from "./overlay/types";
+import {
+  OVERLAY_SCHEMA_VERSION,
+  OverlayComment,
+  OverlayExport,
+  OverlayExternalIssue,
+} from "./overlay/types";
+import {
+  SharedConfig,
+  SharedIssue,
+  applyShared,
+  commentFromIssue,
+  githubWebFor,
+  normalizeSigninUrl,
+} from "./overlay/shared";
 import {
   RelayOutcome,
   ReviewServer,
@@ -61,6 +74,7 @@ import {
 import {
   DEFAULT_JIRA_ISSUE_TYPE,
   DEFAULT_RELAY_LABELS,
+  IssueContext,
   IssueDraft,
   IssueRef,
   IssueState,
@@ -173,6 +187,23 @@ interface Settings {
      * address is one somebody gave us for a different purpose.
      */
     publishContact: string;
+    /**
+     * Share the published site's comments through GitHub issues on the
+     * site's own repository: a reader posts one through GitHub's own form,
+     * and every visitor sees them as pins. See `overlay/shared.ts`.
+     *
+     * Nested under `onPublish`, and refused for a locked site, whose
+     * comments would otherwise sit in public issues.
+     */
+    shareThroughIssues: boolean;
+    /**
+     * The owner's own sign-in Worker (see `examples/github-signin-worker`),
+     * or empty. With one, readers sign in with GitHub once and post from
+     * the page, and the repository may be private -- its comments are then
+     * read by signed-in readers only. Without one, each comment goes
+     * through GitHub's prefilled form, and the repository must be public.
+     */
+    signinUrl: string;
     /** Prefills the comment author in the overlay. */
     reviewer: string;
     /** Vault folder the review file is saved in, and imported from. */
@@ -283,6 +314,8 @@ interface Settings {
  * it: asking explicitly means now.
  */
 const AUTO_SYNC_INTERVAL = 60_000;
+/** How many pages of a hundred issues a sync reads from the site's repo. */
+const SHARED_SYNC_PAGES = 5;
 
 const DEFAULT_SETTINGS: Settings = {
   autoRun: "none",
@@ -313,6 +346,8 @@ const DEFAULT_SETTINGS: Settings = {
     onPublish: false,
     publishComments: false,
     publishContact: "",
+    shareThroughIssues: false,
+    signinUrl: "",
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
   },
@@ -1022,6 +1057,77 @@ export default class VaultPublisherPlugin extends Plugin {
     }
   }
 
+  /**
+   * Brings comments left on the published site into the vault.
+   *
+   * With sharing on, a reader's comment is an issue on the site's repository
+   * and nowhere else, so this is the only way one reaches the preview, the
+   * review note and the tracker sync. Each review issue not already in the
+   * review file is added, against the note behind its page where the last
+   * publish recorded one; from then on it is a filed comment like any other,
+   * and the rest of the sync resolves it when its issue closes.
+   *
+   * Uses the publishing token, which can already read that repository.
+   */
+  private async pullSharedComments(store: ReviewStore, quiet: boolean): Promise<void> {
+    const overlay = this.settings.commentOverlay;
+    const github = this.settings.github;
+    if (!overlay.onPublish || !overlay.shareThroughIssues) return;
+    if (!github.owner || !github.repo || !github.token) return;
+
+    const client = new GitHubClient({
+      apiBase: github.apiBase,
+      token: github.token,
+      owner: github.owner,
+      repo: github.repo,
+    });
+
+    const issues: SharedIssue[] = [];
+    try {
+      for (let page = 1; page <= SHARED_SYNC_PAGES; page++) {
+        const batch = await client.listIssues(page);
+        issues.push(...batch);
+        if (batch.length < 100) break;
+      }
+    } catch (error) {
+      if (!quiet) {
+        new Notice(
+          `Vault Publisher: could not read the site's shared comments: ${error instanceof Error ? error.message : String(error)}`,
+          10000,
+        );
+      }
+      return;
+    }
+
+    const pages = await this.readPageMap();
+    const incoming = issues
+      .map((issue) => commentFromIssue(issue, github.owner, github.repo, pages))
+      .filter((comment): comment is OverlayComment => comment !== null);
+    if (!incoming.length) return;
+
+    try {
+      const raw =
+        (await store.readComments()) ??
+        JSON.stringify({
+          version: OVERLAY_SCHEMA_VERSION,
+          site: this.settings.site.siteName,
+          exportedAt: new Date().toISOString(),
+          comments: [],
+          withdrawn: [],
+        });
+      const next = applyShared(raw, incoming);
+      if (!next) return;
+      await store.writeComments(next);
+      if (!quiet) {
+        const added = (JSON.parse(next).comments as unknown[]).length -
+          ((JSON.parse(raw).comments as unknown[]) ?? []).length;
+        new Notice(`Vault Publisher: brought in ${added} comment${added === 1 ? "" : "s"} from the published site.`, 6000);
+      }
+    } catch {
+      // The rest of the sync still runs; the next one tries again.
+    }
+  }
+
   /** The mapping a past publish left behind, or nothing. */
   private async readPageMap(): Promise<Record<string, string>> {
     const adapter = this.app.vault.adapter;
@@ -1285,6 +1391,36 @@ export default class VaultPublisherPlugin extends Plugin {
    * different document, and the draft is the one shape all three are made
    * from.
    */
+  /** Whether each GitHub repository issues are filed in is public, by key. */
+  private repoIsPublic = new Map<string, boolean>();
+
+  /*
+   * What an issue draft needs to know about where it is going: chiefly
+   * whether that is a public repository, where the vault path stays out.
+   * Asked of GitHub once per repository per session; a repository that
+   * cannot be asked about is treated as public, which only costs a line.
+   */
+  private async issueContext(target: RelayTarget, site: string): Promise<IssueContext> {
+    if (target.provider !== "github") return { site };
+    const key = `${target.owner}/${target.repo}`;
+    let open = this.repoIsPublic.get(key);
+    if (open === undefined) {
+      try {
+        const repo = await new GitHubClient({
+          apiBase: this.settings.github.apiBase,
+          token: this.settings.github.token,
+          owner: target.owner,
+          repo: target.repo,
+        }).getRepo();
+        open = repo ? !repo.private : true;
+      } catch {
+        open = true;
+      }
+      this.repoIsPublic.set(key, open);
+    }
+    return { site, publicRepo: open };
+  }
+
   private async fileIssue(
     target: RelayTarget,
     draft: IssueDraft,
@@ -1371,7 +1507,7 @@ export default class VaultPublisherPlugin extends Plugin {
     try {
       const filed = await this.fileIssue(
         ready.target,
-        issueDraft(comment, ready.target, { site: document.site }),
+        issueDraft(comment, ready.target, await this.issueContext(ready.target, document.site)),
       );
       external = externalFor(ready.target.provider, filed, new Date());
     } catch (error) {
@@ -1436,7 +1572,7 @@ export default class VaultPublisherPlugin extends Plugin {
       try {
         const issue = await this.fileIssue(
           ready.target,
-          issueDraft(comment, ready.target, { site: document.site }),
+          issueDraft(comment, ready.target, await this.issueContext(ready.target, document.site)),
         );
         filed.set(comment.id, externalFor(ready.target.provider, issue, new Date()));
       } catch (error) {
@@ -1508,8 +1644,14 @@ export default class VaultPublisherPlugin extends Plugin {
    * five times firing five rounds of requests at somebody's board.
    */
   private autoSync(): void {
-    if (!this.settings.relay.sync) return;
-    if (this.settings.relay.provider === "none") return;
+    const overlay = this.settings.commentOverlay;
+    // Sharing brings the site's comments in on the same schedule, whether
+    // or not a tracker is set up: they have no other way into the vault.
+    const sharing = overlay.onPublish && overlay.shareThroughIssues;
+    if (!sharing) {
+      if (!this.settings.relay.sync) return;
+      if (this.settings.relay.provider === "none") return;
+    }
     if (this.syncing) return;
     if (Date.now() - this.lastSync < AUTO_SYNC_INTERVAL) return;
     // Not awaited: this runs behind a request a browser is waiting on, and a
@@ -1519,6 +1661,7 @@ export default class VaultPublisherPlugin extends Plugin {
 
   private async runSync(quiet: boolean): Promise<void> {
     const store = this.reviewStore();
+    await this.pullSharedComments(store, quiet);
     const raw = await store.readComments();
     if (!raw) {
       if (!quiet) {
@@ -1827,6 +1970,44 @@ export default class VaultPublisherPlugin extends Plugin {
       }
 
       const overlay = this.settings.commentOverlay;
+
+      /*
+       * Shared comments, checked against the repository as it actually is
+       * rather than as the settings remember it: a repository made private
+       * on GitHub since would hide every comment from every visitor, and a
+       * locked site would publish its review as public issues.
+       */
+      let shared: SharedConfig | undefined;
+      if (overlay.onPublish && overlay.shareThroughIssues) {
+        const signin = normalizeSigninUrl(overlay.signinUrl);
+        if (repo.private && !signin) {
+          say(
+            `shared comments: off, because ${repo.full_name} is private and no ` +
+              "sign-in service is set: visitors could not read the comments",
+          );
+        } else if (this.settings.publishPassword && !repo.private) {
+          say(
+            "shared comments: off, because the site is locked with a password " +
+              `and ${repo.full_name} is public, so its comments would not be`,
+          );
+        } else {
+          const [owner, name] = repo.full_name.split("/");
+          shared = {
+            owner,
+            repo: name,
+            api: github.apiBase || GITHUB_COM_API,
+            web: githubWebFor(github.apiBase || GITHUB_COM_API),
+            ...(signin ? { signin } : {}),
+            ...(repo.private ? { private: true } : {}),
+          };
+          say(
+            `shared comments: kept as issues on ${repo.full_name}` +
+              (signin ? ", with sign-in" : "") +
+              (repo.private ? " (private: readers sign in to see them)" : ""),
+          );
+        }
+      }
+
       const result = await this.build({
         /*
          * The overlay in the published site, when it was asked for.
@@ -1838,10 +2019,17 @@ export default class VaultPublisherPlugin extends Plugin {
          */
         reviewOverlay: overlay.onPublish
           ? {
-              reviewer: overlay.reviewer,
+              // No reviewer name: that is the owner's own name for their
+              // preview. Written into every published page, it prefilled
+              // every reader's comments with it -- so readers were never
+              // asked for theirs -- and published it besides.
               published: true,
-              comments: overlay.publishComments,
-              contact: overlay.publishContact,
+              // Sharing is a way of writing comments, so it turns writing on.
+              comments: overlay.publishComments || Boolean(shared),
+              // Only for the file route. With sharing on its field is not
+              // shown, and an address nobody can see must not be published.
+              contact: shared ? undefined : overlay.publishContact,
+              shared,
             }
           : undefined,
       });

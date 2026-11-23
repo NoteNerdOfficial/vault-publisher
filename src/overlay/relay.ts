@@ -324,6 +324,12 @@ export function pendingComments(comments: OverlayComment[]): OverlayComment[] {
 export interface IssueContext {
   /** Site name, for the one line saying where the review happened. */
   site: string;
+  /**
+   * The issue is going somewhere anyone can read it: a public repository.
+   * The note's vault path is then left out, since filing it would publish
+   * the vault's folder names; the page's URL says where instead.
+   */
+  publicRepo?: boolean;
 }
 
 /** One line of a list: an optional lead, then the rest. */
@@ -398,7 +404,13 @@ export function issueDraft(
       ".",
   });
 
-  const footer: IssueLine[] = [{ lead: "Note", text: comment.sourcePath, code: true }];
+  const footer: IssueLine[] = [];
+  // On a public repository the page says where, and the vault path stays
+  // out -- unless there is no page to name, where a path beats an issue
+  // that says nowhere.
+  if (!context.publicRepo || !comment.page) {
+    footer.push({ lead: "Note", text: comment.sourcePath, code: true });
+  }
   if (comment.page) footer.push({ lead: "Page", text: comment.page, code: true });
   // Where the published page is an application, the page alone does not say
   // what the reviewer was looking at: every screen in it shares one file.

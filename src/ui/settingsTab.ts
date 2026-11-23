@@ -1,3 +1,4 @@
+import { normalizeSigninUrl } from "../overlay/shared";
 import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
 import { SiteConfig, isScopeChosen, resolveHomeNote, selectNotes } from "../publish/buildSite";
@@ -223,6 +224,8 @@ export interface SettingsHost {
       onPublish: boolean;
       publishComments: boolean;
       publishContact: string;
+      shareThroughIssues?: boolean;
+      signinUrl?: string;
       reviewer: string;
       reviewFolder: string;
     };
@@ -2297,7 +2300,16 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // comes and goes with it instead of standing empty behind one toggle.
     if (!overlay.enabled) return;
 
-    const root = this.section(container, "Review", false);
+    const root = this.section(container, "Leave a review", false);
+
+    /*
+     * Two halves, because they are two different places with two different
+     * ways back. In the preview the plugin is behind the page, so a comment
+     * lands in the vault the moment it is left. On the published site there
+     * is no plugin, so how a reader's comment reaches you is a choice -- and
+     * it used to be spread across two settings that looked independent.
+     */
+    new Setting(root).setName("In your preview").setHeading();
 
     this.note(
       root,
@@ -2308,7 +2320,10 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     new Setting(root)
       .setName("Your name")
-      .setDesc("Shown against the comments you leave. Optional.")
+      .setDesc(
+        "Shown against the comments you leave in the preview. Optional. " +
+          "Never written into the published site.",
+      )
       .addText((text) =>
         text
           .setPlaceholder("Alex")
@@ -2319,93 +2334,11 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }),
       );
 
-    /*
-     * The overlay on the published site: three settings, in the order the
-     * decisions are actually made.
-     *
-     * Shipping the overlay, inviting people to write into it, and telling
-     * them where to send what they wrote are separate choices, and the
-     * second is much the largest. So they nest, each one off until the one
-     * above it is on.
-     *
-     * The copy is written for an invited reviewer rather than for a
-     * passing reader, because that is who this works for. There is no way
-     * back from a published page: a reviewer exports a file and sends it,
-     * which somebody who was asked to review the site will do and somebody
-     * who wandered in will not.
-     */
-    new Setting(root)
-      .setName("Include in the published site")
-      .setDesc(
-        "Puts the overlay on published pages, so someone you send the site " +
-          "to can read a review on it. Your vault's folder names never go " +
-          "with it: a published page groups comments by its own URL.",
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(overlay.onPublish).onChange(async (value) => {
-          overlay.onPublish = value;
-          await this.host.saveSettings();
-          this.display();
-        }),
-      );
-
-    if (overlay.onPublish) {
-      this.note(
-        root,
-        "A published page has no plugin behind it, so comments live in the " +
-          "reader's own browser and reach you only as a file they export " +
-          "and send. Best suited to reviewers you asked, rather than to " +
-          "whoever happens to visit.",
-      );
-
-      new Setting(root)
-        .setName("Let readers write comments")
-        .setDesc(
-          "Off, the published overlay only reads: pins, the comment list, " +
-            "and import and export. On, anyone who can open the site can " +
-            "leave comments in their own browser.",
-        )
-        .addToggle((toggle) =>
-          toggle.setValue(overlay.publishComments).onChange(async (value) => {
-            overlay.publishComments = value;
-            await this.host.saveSettings();
-          }),
-        );
-
-      /*
-       * Not nested under "let readers write comments".
-       *
-       * Exporting works on a read-only published page too -- it is how
-       * somebody passes on a review they imported -- so the address is
-       * useful whenever the overlay is published at all. It used to be
-       * hidden when commenting was off while still being written into
-       * every page, which meant a stale address could publish with
-       * nothing in the settings showing it.
-       */
-      new Setting(root)
-        .setName("Where to send a review")
-        .setDesc(
-          "Shown when a reader exports their comments, with the reminder " +
-            "to put the file in your review folder. A link is safer than " +
-            "an email address: this is written into every published page, " +
-            "where anything can read it.",
-        )
-        .addText((text) =>
-          text
-            .setPlaceholder("https://github.com/you/repo/issues/new")
-            .setValue(overlay.publishContact)
-            .onChange(async (value) => {
-              overlay.publishContact = value.trim();
-              await this.host.saveSettings();
-            }),
-        );
-    }
-
     new Setting(root)
       .setName("Review folder")
       .setDesc(
-        "Where comments are saved as you leave them, and where the imported " +
-          "review note is written.",
+        "Where comments are saved as you leave them, where a file a reader " +
+          "sends you goes, and where the imported review note is written.",
       )
       .addText((text) =>
         text
@@ -2434,12 +2367,125 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           }
         }),
       );
+
+    this.renderPublishedReview(root);
+  }
+
+  /*
+   * The published half: shipping the overlay, inviting readers to write
+   * into it, and how what they write reaches you. Each is off until the one
+   * above it is on, in the order the decisions are made.
+   */
+  private renderPublishedReview(root: HTMLElement): void {
+    const overlay = this.host.settings.commentOverlay;
+
+    new Setting(root).setName("On the published site").setHeading();
+
+    new Setting(root)
+      .setName("Include in the published site")
+      .setDesc(
+        "Puts the overlay on published pages, so someone you send the site " +
+          "to can read a review on it. Your vault's folder names never go " +
+          "with it: a published page groups comments by its own URL.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(overlay.onPublish).onChange(async (value) => {
+          overlay.onPublish = value;
+          await this.host.saveSettings();
+          this.display();
+        }),
+      );
+
+    if (!overlay.onPublish) return;
+
+    new Setting(root)
+      .setName("Let readers write comments")
+      .setDesc(
+        "Off, the published overlay only reads: pins, the comment list, " +
+          "and import and export. On, readers can leave comments too.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(overlay.publishComments).onChange(async (value) => {
+          overlay.publishComments = value;
+          await this.host.saveSettings();
+        }),
+      );
+
+    /*
+     * One choice, where there used to be two settings that each looked like
+     * the answer: an address for exported files, and sharing through GitHub
+     * issues. They are alternatives -- with sharing on, nobody exports -- so
+     * each option shows only the field it uses.
+     *
+     * Not nested under "let readers write comments". Exporting works on a
+     * read-only page too -- it is how somebody passes on a review they
+     * imported -- so the file route and its address apply whenever the
+     * overlay is published at all.
+     */
+    const blocked = this.sharingBlocker();
+    const sharing = Boolean(overlay.shareThroughIssues) && !blocked;
+    const github = this.host.settings.github;
+    const repo = github.owner && github.repo ? `${github.owner}/${github.repo}` : "";
+
+    new Setting(root)
+      .setName("How readers' comments reach you")
+      .setDesc(
+        sharing
+          ? `Each comment is posted as an issue on ${repo}, and everyone who ` +
+              "opens the site sees every comment as a pin. Readers need a " +
+              "GitHub account to post." +
+              (github.private ? "" : " The repository is public, so the comments are too.")
+          : "A reader's comments stay in their own browser until they export " +
+              "them as a file and send it to you. Put the file in the review " +
+              "folder to bring it in. Best for reviewers you asked.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("file", "A file they send you");
+        // Only offered when it can work; the reason is said below otherwise.
+        if (!blocked) dropdown.addOption("issues", `GitHub issues on ${repo}`);
+        dropdown.setValue(sharing ? "issues" : "file");
+        dropdown.onChange(async (value: string) => {
+          overlay.shareThroughIssues = value === "issues";
+          await this.host.saveSettings();
+          this.display();
+        });
+      });
+
+    if (sharing) {
+      this.signinSetting(root);
+      return;
+    }
+
+    new Setting(root)
+      .setName("Address shown when a reader exports")
+      .setDesc(
+        "Tells a reader where to send the file they export: an email " +
+          "address or a link. It does not send anything by itself. A link " +
+          "is safer than an email address: this is written into every " +
+          "published page, where anything can read it.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("https://example.com/send-us-your-review")
+          .setValue(overlay.publishContact)
+          .onChange(async (value) => {
+            overlay.publishContact = value.trim();
+            await this.host.saveSettings();
+          }),
+      );
+
+    if (blocked) {
+      this.note(root, `Posting comments as GitHub issues is not available: ${blocked}`);
+      // A private repository becomes usable once there is a sign-in
+      // service, so the field that unlocks it is offered right here.
+      if (repo && github.private) this.signinSetting(root);
+    }
   }
 
   /**
    * Filing review comments as issues.
    *
-   * Straight after the Review section rather than beside the GitHub
+   * Straight after the Leave a review section rather than beside the GitHub
    * connection, because this is a thing done to a comment, not a thing done
    * to the site. Drawn by `display` rather than from inside `renderReview`,
    * though: nested, it sat between the Open button and the Publish button,
@@ -2451,7 +2497,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * this.
    */
   private renderRelay(container: HTMLElement): void {
-    // Nothing to file from, so nothing to configure. It follows the Review
+    // Nothing to file from, so nothing to configure. It follows the review
     // section and reads as part of it, which means it should come and go
     // with it rather than offering a tracker for comments that cannot exist.
     if (!this.host.settings.commentOverlay.enabled) return;
@@ -2459,7 +2505,12 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     const relay = this.host.settings.relay;
     const github = this.host.settings.github;
 
-    const root = this.section(container, "Issue tracker", false);
+    /*
+     * Labelled in its title, because it sits straight under "Leave a review"
+     * and reads as part of it -- and the review section covers the published
+     * site too, where filing does not exist. The note below says why.
+     */
+    const root = this.section(container, "Issue tracker (preview builds only)", false);
 
     /*
      * The one thing about this section that cannot be worked out from it.
@@ -2479,8 +2530,10 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       "Filing works in a preview opened with \u201cOpen preview in " +
         "browser\u201d, which is the only build with the plugin behind it. " +
         "Published pages carry no Send action: a static host has nothing to " +
-        "file through. Reviewing a published site means exporting the " +
-        "comments and importing them here, then filing from a preview.",
+        "file through. To file a published site's comments, bring them into " +
+        "the vault first, then file from a preview: a sync brings them in " +
+        "when they are shared as GitHub issues, and otherwise a reader " +
+        "exports them and you import them.",
     );
 
     new Setting(root)
@@ -3005,6 +3058,64 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     });
 
     return details.createDiv({ cls: "osp-section-body" });
+  }
+
+  /*
+   * Why comments cannot be shared through GitHub issues, or empty when they
+   * can. Said rather than hidden: a locked site and a missing repository
+   * are both things the owner can change.
+   *
+   * What the repository is, here, is what the settings remember it was
+   * created as -- the best this screen has. The publish checks it again
+   * against the repository itself.
+   */
+  private sharingBlocker(): string {
+    const overlay = this.host.settings.commentOverlay;
+    const github = this.host.settings.github;
+    const repo = github.owner && github.repo ? `${github.owner}/${github.repo}` : "";
+    const locked = Boolean(this.host.settings.publishPassword);
+    const signin = normalizeSigninUrl(overlay.signinUrl ?? "");
+    if (!repo) {
+      return "set the GitHub repository the site publishes to first. The comments are kept as issues on it.";
+    }
+    if (github.private && !signin) {
+      return `${repo} is private, so visitors could only read the comments signed in. Add a sign-in service to use it.`;
+    }
+    if (locked && !github.private) {
+      return `the site is locked with a password and ${repo} is public, so the comments would not be private. Use a private repository with a sign-in service.`;
+    }
+    return "";
+  }
+
+  /* The owner's own sign-in Worker, for comments shared as GitHub issues. */
+  private signinSetting(root: HTMLElement): void {
+    const overlay = this.host.settings.commentOverlay;
+    const signin = normalizeSigninUrl(overlay.signinUrl ?? "");
+    new Setting(root)
+      .setName("Sign-in service (optional)")
+      .setDesc(
+        "The address of your own sign-in Worker, from " +
+          "examples/github-signin-worker in the plugin's repository. With " +
+          "one, readers sign in with GitHub once and post from the page, " +
+          "and a private repository works. Without one, each comment opens " +
+          "GitHub's own form, which needs no setup.",
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("https://review-signin.you.workers.dev")
+          .setValue(overlay.signinUrl ?? "")
+          .onChange(async (value: string) => {
+            overlay.signinUrl = value.trim();
+            await this.host.saveSettings();
+          });
+        // Redrawn on leaving the field rather than per keystroke, which
+        // would take the focus away mid-word: a private repository's
+        // option appears once an address is in.
+        text.inputEl.addEventListener("blur", () => this.display());
+      });
+    if (overlay.signinUrl && !signin) {
+      this.note(root, "That is not an https address, so it will not be used.");
+    }
   }
 
   private note(root: HTMLElement, text?: string): HTMLElement {

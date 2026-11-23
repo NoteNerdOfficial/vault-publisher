@@ -191,6 +191,36 @@ export const OVERLAY_SCRIPT = `(function () {
   var PUBLISHED = config.published === true;
 
   /*
+   * Where this published site keeps its shared comments: a public
+   * repository whose issues every visitor reads and any reader can add to,
+   * through GitHub's own form. See \`overlay/shared.ts\` for the marker that
+   * makes an issue a review comment. Null on a preview, and on a site that
+   * does not share.
+   */
+  var SHARED =
+    PUBLISHED &&
+    config.shared &&
+    typeof config.shared.owner === "string" &&
+    typeof config.shared.repo === "string" &&
+    config.shared.owner &&
+    config.shared.repo
+      ? {
+          owner: config.shared.owner,
+          repo: config.shared.repo,
+          // github.com unless the site is on an Enterprise Server.
+          api: String(config.shared.api || "https://api.github.com").replace(/\\/+$/, ""),
+          web: String(config.shared.web || "https://github.com").replace(/\\/+$/, ""),
+          // The owner's own sign-in Worker, when there is one.
+          signin:
+            typeof config.shared.signin === "string" && /^https:\\/\\//.test(config.shared.signin)
+              ? config.shared.signin.replace(/\\/+$/, "")
+              : "",
+          // Readable only signed in.
+          private: config.shared.private === true,
+        }
+      : null;
+
+  /*
    * Where a reader should send a review they have exported.
    *
    * A published site has no way back. The file is the whole channel, and a
@@ -1846,6 +1876,8 @@ export const OVERLAY_SCRIPT = `(function () {
       delete row.fx;
       delete row.fy;
     }
+    if (row.pending !== true) delete row.pending;
+    if (row.awaitingSignin !== true) delete row.awaitingSignin;
     if (!Array.isArray(row.reveal)) delete row.reveal;
     if (!row.opener || typeof row.opener.block !== "string") delete row.opener;
     row.blockText = typeof row.blockText === "string" ? row.blockText : "";
@@ -1920,9 +1952,20 @@ export const OVERLAY_SCRIPT = `(function () {
     }
   }
 
+  /*
+   * The comments this browser made, without the ones read from the site's
+   * shared issues. Those live on GitHub: storing or exporting them would
+   * hand the reader a copy of everybody else's comments as their own.
+   */
+  function ownRows() {
+    var out = [];
+    for (var i = 0; i < all.length; i++) if (!all[i].shared) out.push(all[i]);
+    return out;
+  }
+
   function writeAll() {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(all));
+      localStorage.setItem(STORE_KEY, JSON.stringify(ownRows()));
     } catch (e) {}
     // localStorage first and unconditionally: it is the copy that survives
     // the plugin not running, and it must not depend on a request.
@@ -2051,7 +2094,7 @@ export const OVERLAY_SCRIPT = `(function () {
       version: SCHEMA,
       site: SITE,
       exportedAt: new Date().toISOString(),
-      comments: all,
+      comments: ownRows(),
       withdrawn: withdrawn,
     });
   }
@@ -3683,6 +3726,8 @@ export const OVERLAY_SCRIPT = `(function () {
       pin.setAttribute("data-comment", comment.id);
       pin.setAttribute("title", squash(comment.text));
       if (comment.resolved) pin.setAttribute("data-resolved", "");
+      // Not on GitHub yet: drawn faded until the issue it becomes is read.
+      if (comment.pending) pin.setAttribute("data-pending", "");
       if (comment.id === selected) pin.setAttribute("data-selected", "");
       // Correction ink while it is open, graphite once it is dealt with, so
       // what is left to do on a page is readable from the pins alone.
@@ -3865,8 +3910,8 @@ export const OVERLAY_SCRIPT = `(function () {
     panelTally.textContent = rows.length
       ? open_ + " open, " + (rows.length - open_) + " resolved"
       : "Nothing marked yet";
-    panelMeta.textContent = panelSummary(rows);
-    panelMeta.hidden = !rows.length;
+    panelMeta.textContent = sharedError || panelSummary(rows);
+    panelMeta.hidden = !rows.length && !sharedError;
 
     var now = sortBy === "priority" ? ORDERS[1] : ORDERS[0];
     var other = sortBy === "priority" ? ORDERS[0] : ORDERS[1];
@@ -3881,6 +3926,28 @@ export const OVERLAY_SCRIPT = `(function () {
     sideBtn.appendChild(icon(side === "right" ? ICONS.toLeft : ICONS.toRight));
 
     clear(list);
+    /*
+     * Signing in, offered where the comments are: on a private repository
+     * it is the only way to see any, and on a public one the way to post
+     * without a GitHub tab each time.
+     */
+    if (SHARED && SHARED.signin && !signedIn()) {
+      var invite = el("div", "co-pop-note co-shared-note co-signin");
+      invite.appendChild(
+        el(
+          "div",
+          "co-warn",
+          authNote ||
+            (SHARED.private
+              ? "Sign in with GitHub to see and post comments."
+              : "Sign in with GitHub to post from this page."),
+        ),
+      );
+      var inviteBtn = el("button", "co-reopen", "Sign in");
+      inviteBtn.addEventListener("click", signIn);
+      invite.appendChild(inviteBtn);
+      list.appendChild(invite);
+    }
     var shown = [];
     for (var j = 0; j < rows.length; j++) if (passes(rows[j])) shown.push(rows[j]);
 
@@ -4033,7 +4100,9 @@ export const OVERLAY_SCRIPT = `(function () {
      * against a different one, which is the difference between "this is
      * wrong" and "this was wrong when they read it".
      */
-    if (comment.imported) {
+    // A shared comment is not imported from anywhere: it is an issue on the
+    // site's repository, read live, and the issue link beside it says so.
+    if (comment.imported && !comment.shared) {
       var came = el("span", "co-tag", "Imported");
       came.setAttribute("title", "Imported from " + comment.imported);
       name.appendChild(came);
@@ -4184,12 +4253,15 @@ export const OVERLAY_SCRIPT = `(function () {
     // A span rather than a button where nothing here may be changed: a
     // control that opens a menu to set a value, on a build that cannot set
     // it, is worse than the plain statement of the value.
-    var priBtn = el(CAN_COMMENT ? "button" : "span", "co-pri");
+    // A shared comment's priority is what its poster chose; nobody else's
+    // browser can change it on GitHub.
+    var setsPri = CAN_COMMENT && !comment.shared;
+    var priBtn = el(setsPri ? "button" : "span", "co-pri");
     priBtn.setAttribute("data-level", comment.priority);
     priBtn.setAttribute("title", "Priority: " + PRI[comment.priority].label);
     priBtn.appendChild(el("span", "co-pri-mark", PRI[comment.priority].mark));
     priBtn.appendChild(el("span", null, PRI[comment.priority].label));
-    if (CAN_COMMENT) {
+    if (setsPri) {
       priBtn.addEventListener("click", function (event) {
         event.stopPropagation();
         togglePriMenu(comment, priBtn);
@@ -4341,7 +4413,17 @@ export const OVERLAY_SCRIPT = `(function () {
       var mark = el("span");
       mark.appendChild(icon(ICONS.resolve));
       done.appendChild(mark);
-      done.appendChild(el("span", null, "Resolved"));
+      done.appendChild(
+        el(
+          "span",
+          null,
+          comment.shared
+            ? comment.declined
+              ? "Closed on GitHub as not planned"
+              : "Closed on GitHub"
+            : "Resolved",
+        ),
+      );
       popup.appendChild(done);
     }
 
@@ -4351,7 +4433,81 @@ export const OVERLAY_SCRIPT = `(function () {
      * and an input that discards what is typed into it is worse than no
      * input.
      */
-    if (CAN_COMMENT) {
+    if (comment.shared) {
+      /*
+       * A shared comment's thread is the issue's, on GitHub: reading it
+       * there costs nothing, and fetching every issue's comments here would
+       * cost a request each out of sixty an hour.
+       */
+      var talk = el("div", "co-pop-note co-shared-note");
+      var count_ = comment.replyCount || 0;
+      var link = el(
+        "a",
+        "co-ext",
+        count_ === 1
+          ? "1 reply on GitHub"
+          : count_
+            ? count_ + " replies on GitHub"
+            : "Reply on GitHub",
+      );
+      link.setAttribute("href", comment.external ? comment.external.url : "#");
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noopener");
+      talk.appendChild(link);
+      popup.appendChild(talk);
+    } else if (comment.pending) {
+      var waiting = el("div", "co-pop-note co-shared-note");
+      var failed = postErrors[comment.id];
+      var viaForm = !SHARED.signin || (!signedIn() && !comment.awaitingSignin);
+      waiting.appendChild(
+        el(
+          "div",
+          "co-warn",
+          failed
+            ? failed
+            : comment.awaitingSignin
+              ? "Waiting for you to sign in with GitHub."
+              : viaForm
+                ? "Posting: finish in the GitHub tab. Everyone sees it once it is posted."
+                : "Posting to GitHub\u2026",
+        ),
+      );
+      var acts_ = el("div", "co-shared-acts");
+      if (SHARED.signin && failed && signedIn()) {
+        var again_ = el("button", "co-reopen", "Try again");
+        again_.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          postComment(comment);
+          renderPopup();
+        });
+        acts_.appendChild(again_);
+      }
+      if (SHARED.signin && !signedIn()) {
+        var login_ = el("button", "co-reopen", "Sign in");
+        login_.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          comment.awaitingSignin = true;
+          writeAll();
+          signIn();
+        });
+        acts_.appendChild(login_);
+      }
+      if (viaForm || failed) {
+        var retry = el("button", "co-reopen", viaForm && !failed ? "Open the form again" : "Use GitHub's form");
+        retry.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          window.open(issueFormUrl(comment), "_blank", "noopener");
+        });
+        acts_.appendChild(retry);
+      }
+      waiting.appendChild(acts_);
+      popup.appendChild(waiting);
+    }
+
+    if (CAN_COMMENT && !comment.shared && !SHARED) {
       var reply = el("div", "co-pop-reply");
       reply.appendChild(el("div", "co-avatar", initial(author)));
       var replyField = field(
@@ -4390,6 +4546,8 @@ export const OVERLAY_SCRIPT = `(function () {
     // away from it would be answering a question nobody asked.
     var onward = !comment.resolved && siblings.length > 1;
     var resolveBtn = el("button", "co-act");
+    // Closing the issue is how a shared comment is resolved, on GitHub.
+    if (comment.shared || comment.pending) resolveBtn.hidden = true;
     resolveBtn.setAttribute("data-primary", "");
     resolveBtn.setAttribute("title", comment.resolved ? "Reopen" : "Resolve");
     resolveBtn.appendChild(icon(ICONS.check, 15));
@@ -4441,7 +4599,7 @@ export const OVERLAY_SCRIPT = `(function () {
       foot.appendChild(sendBtn);
     }
 
-    if (CAN_COMMENT) {
+    if (CAN_COMMENT && !comment.shared) {
       var moreBtn = el("button", "co-pop-btn");
       moreBtn.setAttribute("title", "More");
       moreBtn.appendChild(icon(ICONS.more));
@@ -4930,6 +5088,8 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   function resolveAndNext(comment) {
+    // Resolved on GitHub, by closing the issue, by whoever can.
+    if (comment.shared) return;
     var reopening = comment.resolved;
     comment.resolved = !comment.resolved;
     writeAll();
@@ -5298,6 +5458,27 @@ export const OVERLAY_SCRIPT = `(function () {
       replies: [],
     });
 
+    var made = all[all.length - 1];
+    if (SHARED) {
+      /*
+       * Posted by the reader, on GitHub, in a tab of its own. Opened here,
+       * inside the click that sent the comment, which is what lets the
+       * browser open a tab at all. The comment waits in this browser,
+       * marked as posting, until the issue it becomes is read back.
+       */
+      made.pending = true;
+      if (!SHARED.signin) {
+        window.open(issueFormUrl(made), "_blank", "noopener");
+      } else if (readAuth()) {
+        postComment(made);
+      } else {
+        // Asked once the draft has closed, below; the buttons in it are
+        // clicks of their own, which is what a new tab needs.
+        window.setTimeout(function () {
+          askHowToPost(made);
+        }, 0);
+      }
+    }
     writeAll();
     closeDraft();
     render();
@@ -5449,11 +5630,26 @@ export const OVERLAY_SCRIPT = `(function () {
      * whole, not about the list the panel is showing: exporting while a
      * filter is on still writes every comment out.
      */
+    if (SHARED && SHARED.signin) {
+      var auth = readAuth();
+      menu.appendChild(
+        auth
+          ? item(
+              "Sign out of GitHub" + (auth.login ? " (" + auth.login + ")" : ""),
+              ICONS.user,
+              null,
+              signOut,
+            )
+          : item("Sign in with GitHub", ICONS.user, null, signIn),
+      );
+      menu.appendChild(el("div", "co-menu-rule"));
+    }
+
     var out = item("Export comments", ICONS.download, null, exportComments);
-    if (!all.length) out.setAttribute("disabled", "");
+    if (!ownRows().length) out.setAttribute("disabled", "");
     out.setAttribute(
       "title",
-      all.length
+      ownRows().length
         ? "Write every comment in this review to a file"
         : "Nothing to export yet"
     );
@@ -5588,7 +5784,7 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   function exportComments() {
-    if (!all.length) return;
+    if (!ownRows().length) return;
     var name = exportName();
     var blob = new Blob([payload()], { type: "application/json" });
     var url = URL.createObjectURL(blob);
@@ -5947,7 +6143,7 @@ export const OVERLAY_SCRIPT = `(function () {
    * comments on pages they were not looking at went with it.
    */
   function confirmClear() {
-    var total = all.length;
+    var total = ownRows().length;
     var elsewhere = total - mine().length;
     openModal("Clear all comments?", function (body) {
       body.appendChild(
@@ -5969,8 +6165,15 @@ export const OVERLAY_SCRIPT = `(function () {
       go.setAttribute("data-danger", "");
       go.disabled = !total;
       go.addEventListener("click", function () {
-        for (var i = 0; i < all.length; i++) withdraw(all[i]);
+        // Only this browser's own: the shared ones are issues on GitHub,
+        // and clearing a local list does not delete anybody's issue.
+        var kept = [];
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].shared) kept.push(all[i]);
+          else withdraw(all[i]);
+        }
         all.length = 0;
+        for (var k = 0; k < kept.length; k++) all.push(kept[k]);
         selected = null;
         popup.hidden = true;
         writeAll();
@@ -6487,6 +6690,652 @@ export const OVERLAY_SCRIPT = `(function () {
     },
   };
 
+  /* --- shared comments, kept as GitHub issues ------------------------ */
+
+  /*
+   * The published site's side of \`overlay/shared.ts\`.
+   *
+   * Reading: the repository's issues, fetched without signing in -- which a
+   * public repository allows, sixty requests an hour per visitor -- once per
+   * visit rather than per page, kept for a few minutes in the tab's session
+   * storage, and drawn as pins wherever their marker says.
+   *
+   * Writing: GitHub's own "new issue" form, opened prefilled, so the reader
+   * posts as themselves and nothing here ever holds a token.
+   */
+  var SHARED_MARKER = "osp-review";
+  var SHARED_TTL = 5 * 60 * 1000;
+  var SHARED_PAGES = 3;
+  var SHARED_TEXT_LIMIT = 4000;
+  var sharedError = "";
+  var sharedLoading = false;
+  var sharedFetchedAt = 0;
+
+  function sharedCacheKey() {
+    return "osp-shared:" + SHARED.owner + "/" + SHARED.repo;
+  }
+
+  function readSharedCache() {
+    try {
+      var raw = sessionStorage.getItem(sharedCacheKey());
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      return parsed && Array.isArray(parsed.issues) ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeSharedCache(issues) {
+    try {
+      sessionStorage.setItem(
+        sharedCacheKey(),
+        JSON.stringify({ at: Date.now(), issues: issues }),
+      );
+    } catch (e) {}
+  }
+
+  /* Only what is read back, so the cache stays small. */
+  function trimIssue(issue) {
+    return {
+      number: issue.number,
+      title: issue.title || "",
+      body: issue.body || "",
+      state: issue.state || "",
+      state_reason: issue.state_reason || null,
+      html_url: issue.html_url || "",
+      created_at: issue.created_at || "",
+      comments: issue.comments || 0,
+      user: { login: issue.user && issue.user.login ? issue.user.login : "" },
+    };
+  }
+
+  /* The marker in an issue body, as \`readSharedMarker\` reads it. */
+  function readMarker(body) {
+    var match = /<!--\\s*osp-review\\s+(\\{[\\s\\S]*?\\})\\s*-->/.exec(String(body || ""));
+    if (!match) return null;
+    try {
+      var pin = JSON.parse(match[1]);
+      if (!pin || typeof pin.id !== "string" || typeof pin.page !== "string") return null;
+      return pin;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* What the reader wrote, as \`sharedText\` reads it. */
+  function markerText(body, fallback) {
+    var text = String(body || "");
+    var cut = text.search(/(^|\\n)-{3,}\\s*\\n/);
+    var above = (cut === -1
+      ? text.replace(/<!--\\s*osp-review\\s+(\\{[\\s\\S]*?\\})\\s*-->/, "")
+      : text.slice(0, cut)
+    ).trim();
+    var lines = above.split("\\n");
+    while (lines.length && /^\\s*>/.test(lines[lines.length - 1])) lines.pop();
+    var out = lines.join("\\n").trim();
+    return out || fallback || "";
+  }
+
+  /* An issue as a comment row, flagged as shared. */
+  function rowFromIssue(issue) {
+    var pin = readMarker(issue.body);
+    if (!pin) return null;
+    var closed = issue.state === "closed";
+    var row = {
+      id: "gh-" + SHARED.owner + "-" + SHARED.repo + "-" + issue.number,
+      shared: true,
+      origin: pin.id,
+      page: pin.page,
+      sourcePath: pin.page,
+      block: pin.block || null,
+      blockText: typeof pin.blockText === "string" ? pin.blockText : "",
+      route: pin.route || null,
+      view: pin.view || null,
+      context: pin.context || null,
+      frame: pin.frame || undefined,
+      froute: pin.froute || null,
+      fx: typeof pin.fx === "number" ? pin.fx : null,
+      fy: typeof pin.fy === "number" ? pin.fy : null,
+      x: typeof pin.x === "number" ? pin.x : 0,
+      y: typeof pin.y === "number" ? pin.y : 0,
+      rx: typeof pin.rx === "number" ? pin.rx : null,
+      ry: typeof pin.ry === "number" ? pin.ry : null,
+      cx: typeof pin.cx === "number" ? pin.cx : null,
+      cy: typeof pin.cy === "number" ? pin.cy : null,
+      author: issue.user && issue.user.login ? issue.user.login : "Anonymous",
+      text: markerText(issue.body, issue.title),
+      createdAt: issue.created_at || "",
+      // Closed is closed, here: the pin goes grey either way, and the card
+      // says which kind of closed it was.
+      resolved: closed,
+      declined: closed && issue.state_reason === "not_planned",
+      priority: pin.priority,
+      replyCount: issue.comments || 0,
+      agent: null,
+      imported: "github",
+      external: {
+        provider: "github",
+        key: SHARED.owner + "/" + SHARED.repo + "#" + issue.number,
+        url:
+          issue.html_url ||
+          SHARED.web + "/" + SHARED.owner + "/" + SHARED.repo + "/issues/" + issue.number,
+        filedAt: issue.created_at || "",
+      },
+      replies: [],
+    };
+    return tidy(row);
+  }
+
+  /*
+   * Puts the latest shared issues in the list, in place of the last lot, and
+   * lets go of this browser's own comments that have now been posted: the
+   * issue is the comment from here on.
+   */
+  var lastIssues = [];
+
+  function useSharedIssues(issues) {
+    lastIssues = issues;
+    var rows = [];
+    var posted = Object.create(null);
+    for (var i = 0; i < issues.length; i++) {
+      var row = rowFromIssue(issues[i]);
+      if (!row) continue;
+      rows.push(row);
+      posted[row.origin] = true;
+    }
+
+    var kept = [];
+    var dropped = false;
+    for (var k = 0; k < all.length; k++) {
+      if (all[k].shared) continue;
+      if (all[k].pending && posted[all[k].id]) {
+        if (selected === all[k].id) selected = null;
+        dropped = true;
+        continue;
+      }
+      kept.push(all[k]);
+    }
+    all.length = 0;
+    for (var m = 0; m < kept.length; m++) all.push(kept[m]);
+    for (var n = 0; n < rows.length; n++) all.push(rows[n]);
+
+    if (dropped) {
+      try {
+        localStorage.setItem(STORE_KEY, JSON.stringify(ownRows()));
+      } catch (e) {}
+    }
+    render();
+  }
+
+  function sharedPage(number) {
+    return (
+      SHARED.api +
+      "/repos/" +
+      encodeURIComponent(SHARED.owner) +
+      "/" +
+      encodeURIComponent(SHARED.repo) +
+      "/issues?state=all&per_page=100&sort=created&direction=desc&page=" +
+      number
+    );
+  }
+
+  /*
+   * Fetches the issues, at most a few pages of a hundred, newest first. A
+   * fresh copy in the session is used instead unless \`force\` says the
+   * reader has just posted something and is waiting to see it.
+   */
+  function loadShared(force) {
+    if (!SHARED || !window.fetch || sharedLoading) return;
+    var cached = readSharedCache();
+    if (cached) useSharedIssues(cached.issues);
+    if (cached && !force && Date.now() - cached.at < SHARED_TTL) return;
+
+    sharedLoading = true;
+    withToken(function (token) {
+      // A private repository's issues are for signed-in readers only.
+      if (SHARED.private && !token) {
+        sharedLoading = false;
+        sharedError = SHARED.signin
+          ? "Sign in with GitHub to see this site's comments."
+          : "";
+        renderPanel();
+        return;
+      }
+      fetchShared(token);
+    });
+  }
+
+  function fetchShared(token) {
+    var headers = { Accept: "application/vnd.github+json" };
+    // Signed in, the reader has their own five thousand requests an hour,
+    // and a private repository's issues to read.
+    if (token) headers.Authorization = "Bearer " + token;
+    var got = [];
+    (function next(number) {
+      fetch(sharedPage(number), { headers: headers })
+        .then(function (response) {
+          if (!response.ok) throw response.status;
+          return response.json();
+        })
+        .then(function (list) {
+          if (!Array.isArray(list)) throw 0;
+          for (var i = 0; i < list.length; i++) {
+            if (!list[i].pull_request) got.push(trimIssue(list[i]));
+          }
+          if (list.length === 100 && number < SHARED_PAGES) {
+            next(number + 1);
+            return;
+          }
+          sharedLoading = false;
+          sharedFetchedAt = Date.now();
+          sharedError = "";
+          writeSharedCache(got);
+          useSharedIssues(got);
+        })
+        .catch(function (status) {
+          sharedLoading = false;
+          sharedFetchedAt = Date.now();
+          sharedError =
+            status === 403 || status === 429
+              ? "GitHub is limiting requests from this connection, so shared comments may be out of date for a while."
+              : "Could not reach GitHub to load the shared comments.";
+          renderPanel();
+        });
+    })(1);
+  }
+
+  /*
+   * Back from the GitHub tab with something still posting: look again, but
+   * not more than every fifteen seconds, which is one request out of sixty
+   * an hour each time.
+   */
+  function lookForPosted() {
+    if (!SHARED) return;
+    var waiting = false;
+    for (var i = 0; i < all.length; i++) if (all[i].pending) waiting = true;
+    if (!waiting) return;
+    if (Date.now() - sharedFetchedAt < 15000) return;
+    loadShared(true);
+  }
+
+  if (SHARED) {
+    window.addEventListener("focus", lookForPosted);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") lookForPosted();
+    });
+  }
+
+  /*
+   * The prefilled "new issue" form for a comment: what the reader wrote,
+   * the words it is about, a link to where it was left, and the marker.
+   */
+  function issueFormUrl(comment) {
+    var parts = issueParts(comment);
+    return (
+      SHARED.web +
+      "/" +
+      encodeURIComponent(SHARED.owner) +
+      "/" +
+      encodeURIComponent(SHARED.repo) +
+      "/issues/new?title=" +
+      encodeURIComponent(parts.title) +
+      "&body=" +
+      encodeURIComponent(parts.body)
+    );
+  }
+
+  /* The issue a comment becomes: its title and its body, marker included. */
+  function issueParts(comment) {
+    var pin = { v: 1, id: comment.id, page: comment.page || SOURCE_PATH };
+    var fields = [
+      "block", "blockText", "route", "view", "context", "frame", "froute",
+      "rx", "ry", "cx", "cy", "fx", "fy", "x", "y", "priority",
+    ];
+    for (var i = 0; i < fields.length; i++) {
+      var value = comment[fields[i]];
+      if (value === null || value === undefined || value === "") continue;
+      pin[fields[i]] = typeof value === "number" ? Math.round(value * 10000) / 10000 : value;
+    }
+    if (pin.blockText) pin.blockText = clip(pin.blockText);
+
+    var text = String(comment.text || "").slice(0, SHARED_TEXT_LIMIT);
+    var here = location.href.split("#")[0].replace(/[?&]osp-comment=[^&]*/, "");
+    var page = document.title || comment.page || "this page";
+    var body =
+      text +
+      (comment.blockText ? "\\n\\n> " + clip(comment.blockText) : "") +
+      "\\n\\n---\\n" +
+      "Left on [" + page.replace(/[\\[\\]]/g, "") + "](" + here + ")" +
+      (screenName(comment) ? ", " + screenName(comment) : "") +
+      ".\\n\\n" +
+      // \`>\` escaped so nothing the reader wrote can close the comment early.
+      "<!-- " + SHARED_MARKER + " " + JSON.stringify(pin).replace(/>/g, "\\\\u003e") + " -->";
+
+    var first = text.split("\\n")[0].replace(/\\s+/g, " ").trim();
+    var title = first.length > 80 ? first.slice(0, 79).replace(/\\s+\\S*$/, "") + "…" : first;
+    return { title: title || "Review comment", body: body };
+  }
+
+  /* --- signing in, through the owner's own Worker --------------------- */
+
+  /*
+   * With a sign-in service (see \`examples/github-signin-worker\`), a reader
+   * signs in with GitHub once and then posts from the page, rather than
+   * through a GitHub tab per comment. The Worker only ever makes the one
+   * exchange that needs the app's secret; everything else goes from here to
+   * GitHub directly, with the reader's own token.
+   *
+   * The token is kept in this site's local storage. It is a GitHub App
+   * token, so it can do no more than the owner's app was allowed -- issues,
+   * on the repositories the app was installed on -- and it expires within
+   * hours; the refresh token that renews it is what a reader signing out
+   * throws away.
+   */
+  var AUTH_KEY = "osp-github-auth";
+  var NONCE_KEY = "osp-auth-nonce";
+  var HASH_KEY = "osp-auth-hash";
+  var postErrors = Object.create(null);
+  var authNote = "";
+
+  function readAuth() {
+    try {
+      var raw = localStorage.getItem(AUTH_KEY);
+      var auth = raw ? JSON.parse(raw) : null;
+      return auth && typeof auth.access === "string" ? auth : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeAuth(auth) {
+    try {
+      if (auth) localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+      else localStorage.removeItem(AUTH_KEY);
+    } catch (e) {}
+  }
+
+  /* Tokens as the Worker hands them over, as the store keeps them. */
+  function storeTokens(tokens, login) {
+    var now = Date.now();
+    var auth = {
+      access: tokens.access_token,
+      // No expiry means a token that does not expire: an app with expiring
+      // tokens switched off, which is the owner's choice to make.
+      expiresAt: tokens.expires_in ? now + tokens.expires_in * 1000 : 0,
+      refresh: tokens.refresh_token || "",
+      refreshExpiresAt: tokens.refresh_token_expires_in
+        ? now + tokens.refresh_token_expires_in * 1000
+        : 0,
+      login: login || "",
+    };
+    writeAuth(auth);
+    return auth;
+  }
+
+  function signedIn() {
+    return !!(SHARED && SHARED.signin && readAuth());
+  }
+
+  /*
+   * A token that works now, renewed through the Worker when it has run out,
+   * or null: never signed in, signed out, or the renewal refused.
+   */
+  function withToken(then) {
+    var auth = SHARED && SHARED.signin ? readAuth() : null;
+    if (!auth) return then(null);
+    if (!auth.expiresAt || auth.expiresAt - 60000 > Date.now()) return then(auth.access);
+    if (!auth.refresh || (auth.refreshExpiresAt && auth.refreshExpiresAt < Date.now())) {
+      writeAuth(null);
+      return then(null);
+    }
+    fetch(SHARED.signin + "/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: auth.refresh }),
+    })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (tokens) {
+        if (!tokens || !tokens.access_token) {
+          writeAuth(null);
+          then(null);
+          return;
+        }
+        then(storeTokens(tokens, auth.login).access);
+      })
+      .catch(function () {
+        then(null);
+      });
+  }
+
+  function randomNonce() {
+    var out = "";
+    var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    var bytes = new Uint8Array(24);
+    if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+    else for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    for (var j = 0; j < bytes.length; j++) out += chars.charAt(bytes[j] % chars.length);
+    return out;
+  }
+
+  /*
+   * Off to GitHub, through the Worker, and back to this page. The fragment
+   * the page had is put back afterwards: on a prototype it is the screen.
+   */
+  function signIn() {
+    if (!SHARED || !SHARED.signin) return;
+    var nonce = randomNonce();
+    try {
+      sessionStorage.setItem(NONCE_KEY, nonce);
+      sessionStorage.setItem(HASH_KEY, location.hash || "");
+    } catch (e) {}
+    location.href =
+      SHARED.signin +
+      "/login?return=" +
+      encodeURIComponent(location.href.split("#")[0]) +
+      "&nonce=" +
+      nonce;
+  }
+
+  function signOut() {
+    writeAuth(null);
+    render();
+  }
+
+  function decodeAuth(value) {
+    try {
+      var padded = value.replace(/-/g, "+").replace(/_/g, "/");
+      var binary = atob(padded + "===".slice((padded.length + 3) % 4));
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /*
+   * Back from signing in: the tokens are in the fragment, which no server
+   * saw. Taken out of the address at once, checked against the nonce this
+   * tab sent -- a link somebody else built, carrying their tokens, would
+   * sign a reader in as them -- and then whatever was waiting is posted.
+   */
+  function finishSignIn() {
+    if (!SHARED || !SHARED.signin) return;
+    var match = /(?:^#|&)osp-auth=([^&]+)/.exec(location.hash || "");
+    if (!match) return;
+    var data = decodeAuth(match[1]);
+    var expected = "";
+    var saved = "";
+    try {
+      expected = sessionStorage.getItem(NONCE_KEY) || "";
+      saved = sessionStorage.getItem(HASH_KEY) || "";
+      sessionStorage.removeItem(NONCE_KEY);
+      sessionStorage.removeItem(HASH_KEY);
+    } catch (e) {}
+    try {
+      history.replaceState(history.state, "", location.pathname + location.search + saved);
+      // A router that read the address while it held the tokens reads it again.
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    } catch (e) {}
+
+    if (!data || !expected || data.nonce !== expected) return;
+    if (data.error || !data.access_token) {
+      authNote = data.error === "cancelled" ? "Sign-in was cancelled." : "GitHub did not sign you in.";
+      return;
+    }
+    storeTokens(data, "");
+    fetch(SHARED.api + "/user", {
+      headers: { Authorization: "Bearer " + data.access_token, Accept: "application/vnd.github+json" },
+    })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (user) {
+        if (user && user.login) {
+          var auth = readAuth();
+          if (auth) {
+            auth.login = user.login;
+            writeAuth(auth);
+          }
+          // Posted as them on GitHub, so named as them here too.
+          if (!author) {
+            author = user.login;
+            writeName(user.login);
+          }
+        }
+      })
+      .catch(function () {})
+      .then(function () {
+        postWaiting();
+        loadShared(true);
+      });
+  }
+
+  /* The comments that were waiting for the reader to sign in. */
+  function postWaiting() {
+    for (var i = 0; i < all.length; i++) {
+      var row = all[i];
+      if (row.shared || !row.pending || !row.awaitingSignin) continue;
+      delete row.awaitingSignin;
+      postComment(row);
+    }
+    writeAll();
+  }
+
+  /*
+   * Posts a comment as an issue, as the signed-in reader. What GitHub hands
+   * back is the issue, which goes straight into the list in place of the
+   * comment it was: nobody waits for the next fetch to see it.
+   */
+  function postComment(comment) {
+    delete postErrors[comment.id];
+    withToken(function (token) {
+      if (!token) {
+        postErrors[comment.id] = "Sign in with GitHub again to post this.";
+        redrawCard(comment);
+        return;
+      }
+      var parts = issueParts(comment);
+      fetch(
+        SHARED.api +
+          "/repos/" +
+          encodeURIComponent(SHARED.owner) +
+          "/" +
+          encodeURIComponent(SHARED.repo) +
+          "/issues",
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ title: parts.title, body: parts.body }),
+        },
+      )
+        .then(function (response) {
+          return response
+            .json()
+            .catch(function () {
+              return null;
+            })
+            .then(function (issue) {
+              return { ok: response.ok, status: response.status, issue: issue };
+            });
+        })
+        .then(function (result) {
+          if (result.ok && result.issue && result.issue.number) {
+            addIssue(trimIssue(result.issue));
+            return;
+          }
+          if (result.status === 401) writeAuth(null);
+          postErrors[comment.id] =
+            result.status === 401
+              ? "Your GitHub sign-in has run out. Sign in again to post this."
+              : result.status === 403 || result.status === 404
+                ? "GitHub would not take it from this sign-in. The site's GitHub app may not be installed on " +
+                  SHARED.owner + "/" + SHARED.repo + ". Post it through GitHub's form instead."
+                : "GitHub did not take it (" + result.status + ").";
+          redrawCard(comment);
+        })
+        .catch(function () {
+          postErrors[comment.id] = "Could not reach GitHub to post this.";
+          redrawCard(comment);
+        });
+    });
+  }
+
+  function redrawCard(comment) {
+    if (selected === comment.id) renderPopup();
+    renderPins();
+  }
+
+  /* An issue just made, into the list and the visit's copy, ahead of a fetch. */
+  function addIssue(issue) {
+    var cached = readSharedCache();
+    var issues = (cached ? cached.issues : lastIssues).slice();
+    issues.unshift(issue);
+    writeSharedCache(issues);
+    useSharedIssues(issues);
+  }
+
+  /*
+   * How a comment gets to GitHub when the reader is not signed in yet, on a
+   * site with a sign-in service: sign in once, or this one through the form.
+   */
+  function askHowToPost(comment) {
+    openModal("Post to GitHub", function (body) {
+      body.appendChild(
+        el(
+          "p",
+          null,
+          "Comments on this site are GitHub issues on " +
+            SHARED.owner + "/" + SHARED.repo +
+            ". Sign in with GitHub once to post from this page, or post this one through GitHub's own form.",
+        ),
+      );
+      var go = el("button", "co-submit", "Sign in with GitHub");
+      go.addEventListener("click", function () {
+        comment.awaitingSignin = true;
+        writeAll();
+        closeModal();
+        signIn();
+      });
+      var form = el("button", "co-reopen", "Use GitHub's form");
+      form.addEventListener("click", function () {
+        closeModal();
+        window.open(issueFormUrl(comment), "_blank", "noopener");
+      });
+      var row = el("div", "co-shared-note");
+      row.appendChild(form);
+      row.appendChild(go);
+      body.appendChild(row);
+    });
+  }
+
   /* --- arriving from another page's panel ---------------------------- */
 
   /*
@@ -6532,6 +7381,8 @@ export const OVERLAY_SCRIPT = `(function () {
   setMode("view");
   showWanted();
   pull();
+  finishSignIn();
+  loadShared(false);
 })();
 `;
 

@@ -137,9 +137,12 @@ function settle(): Promise<void> {
   return new Promise((done) => setTimeout(done, 0));
 }
 
-/** The section headings, in the order they are drawn. */
+/**
+ * The section headings, in the order they are drawn. Only the ones that
+ * open and close a section: a section may have headings of its own inside.
+ */
 function sections(root: HTMLElement): string[] {
-  return Array.from(root.querySelectorAll(".setting-item-heading")).map(
+  return Array.from(root.querySelectorAll("summary .setting-item-heading")).map(
     (node) => node.querySelector(".setting-item-name")?.textContent ?? "",
   );
 }
@@ -185,8 +188,8 @@ describe("how the panel is ordered", () => {
       "Appearance",
       "GitHub",
       "Password",
-      "Review",
-      "Issue tracker",
+      "Leave a review",
+      "Issue tracker (preview builds only)",
       "On startup",
       "Related plugins",
     ]);
@@ -218,9 +221,11 @@ describe("how the panel is ordered", () => {
   // Issue tracker used to be drawn from inside the review section, which put
   // a dozen Jira fields in the middle of it.
   it("shows the issue tracker after review, and only with review on", () => {
-    expect(sections(render())).not.toContain("Issue tracker");
+    expect(sections(render())).not.toContain("Issue tracker (preview builds only)");
     const on = sections(render({ overlay: { enabled: true } }));
-    expect(on.indexOf("Issue tracker")).toBe(on.indexOf("Review") + 1);
+    expect(on.indexOf("Issue tracker (preview builds only)")).toBe(
+      on.indexOf("Leave a review") + 1,
+    );
   });
 });
 
@@ -267,6 +272,93 @@ describe("the review overlay, as a build option", () => {
     const on = render({ overlay: { enabled: true } });
     expect(row(on, "Review folder")).not.toBeNull();
     expect(row(on, "Import review comments")).not.toBeNull();
+  });
+});
+
+/**
+ * Leave a review, in two halves: the preview, where the plugin is behind the
+ * page, and the published site, where how a reader's comment reaches you is
+ * one choice rather than two settings that each looked like the answer.
+ */
+describe("the Leave a review section", () => {
+  function names(root: HTMLElement): string[] {
+    const section = Array.from(root.querySelectorAll("details.osp-section")).find(
+      (node) => node.querySelector("summary .setting-item-name")?.textContent === "Leave a review",
+    );
+    const body = section?.querySelector(".osp-section-body");
+    return Array.from(body?.querySelectorAll(".setting-item-name") ?? []).map(
+      (node) => node.textContent ?? "",
+    );
+  }
+
+  function options(root: HTMLElement): string[] {
+    const select = row(root, "How readers' comments reach you")?.querySelector("select");
+    return Array.from(select?.options ?? []).map((option) => option.value);
+  }
+
+  it("splits the preview from the published site", () => {
+    const list = names(render({ overlay: { enabled: true, onPublish: true } }));
+    const preview = list.indexOf("In your preview");
+    const published = list.indexOf("On the published site");
+    expect(preview).toBe(0);
+    expect(published).toBeGreaterThan(list.indexOf("Import review comments"));
+    expect(list.indexOf("Your name")).toBeLessThan(published);
+    expect(list.indexOf("Review folder")).toBeLessThan(published);
+    expect(list.indexOf("Let readers write comments")).toBeGreaterThan(published);
+  });
+
+  it("says the name stays out of the published site", () => {
+    expect(desc(render({ overlay: { enabled: true } }), "Your name")).toContain(
+      "Never written into the published site",
+    );
+  });
+
+  it("asks nothing about the published site until the overlay goes there", () => {
+    const root = render({ overlay: { enabled: true } });
+    expect(row(root, "Include in the published site")).not.toBeNull();
+    expect(row(root, "How readers' comments reach you")).toBeNull();
+  });
+
+  it("shows the export address only for the file route", () => {
+    const root = render({ overlay: { enabled: true, onPublish: true } });
+    expect(options(root)).toEqual(["file", "issues"]);
+    expect(row(root, "Address shown when a reader exports")).not.toBeNull();
+    expect(row(root, "Sign-in service (optional)")).toBeNull();
+  });
+
+  it("shows the sign-in service, and no address, for GitHub issues", () => {
+    const root = render({
+      overlay: { enabled: true, onPublish: true, shareThroughIssues: true },
+    });
+    expect(row(root, "How readers' comments reach you")?.querySelector("select")?.value).toBe(
+      "issues",
+    );
+    expect(row(root, "Address shown when a reader exports")).toBeNull();
+    expect(row(root, "Sign-in service (optional)")).not.toBeNull();
+  });
+
+  it("does not offer GitHub issues that cannot work, and says why", () => {
+    const root = render({
+      overlay: { enabled: true, onPublish: true, shareThroughIssues: true },
+      github: { owner: "", repo: "" },
+    });
+    expect(options(root)).toEqual(["file"]);
+    expect(root.textContent).toContain("Posting comments as GitHub issues is not available");
+  });
+
+  it("offers the sign-in service that unlocks a private repository", () => {
+    const root = render({
+      overlay: { enabled: true, onPublish: true },
+      github: { private: true },
+    });
+    expect(options(root)).toEqual(["file"]);
+    expect(row(root, "Sign-in service (optional)")).not.toBeNull();
+
+    const unlocked = render({
+      overlay: { enabled: true, onPublish: true, signinUrl: "https://signin.example.test" },
+      github: { private: true },
+    });
+    expect(options(unlocked)).toEqual(["file", "issues"]);
   });
 });
 
@@ -1124,7 +1216,7 @@ describe("how the panel collapses", () => {
       "Angular, React and other built apps",
       "Appearance",
       "Password",
-      "Review",
+      "Leave a review",
       "On startup",
     ]) {
       expect(sectionNode(root, name)?.hasAttribute("open")).toBe(false);

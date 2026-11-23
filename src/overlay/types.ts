@@ -249,6 +249,12 @@ export interface OverlayComment {
    * can build again.
    */
   opener?: { block: string; text: string };
+  /**
+   * Written on a published site that shares comments through GitHub issues,
+   * from the moment the reader is sent to GitHub's form until the issue it
+   * becomes is read back. Only ever in that reader's browser.
+   */
+  pending?: boolean;
   author: string;
   text: string;
   /** ISO 8601. */

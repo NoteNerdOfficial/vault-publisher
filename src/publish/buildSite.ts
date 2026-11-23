@@ -1,3 +1,4 @@
+import type { SharedConfig } from "../overlay/shared";
 import { App, TFile } from "obsidian";
 import { createRenderHost, renderFile } from "../render/renderNote";
 import { waitForDataviewIndex } from "../render/settle";
@@ -222,6 +223,7 @@ export function asIsPageContent(
         comments: overlay.comments !== false,
         published: overlay.published,
         contact: overlay.contact,
+        shared: overlay.shared,
       })
     : html;
 
@@ -470,6 +472,12 @@ export interface SiteConfig {
      * to and a file is the only way back to whoever owns the site.
      */
     contact?: string;
+    /**
+     * The public repository whose issues hold this site's shared comments,
+     * when sharing is on. A reader posts through GitHub's own form and every
+     * visitor's overlay reads the issues back. See `overlay/shared.ts`.
+     */
+    shared?: SharedConfig;
   };
   /**
    * Largest single attachment to publish, in bytes. Defaults to 25 MiB.
@@ -1382,6 +1390,7 @@ export async function buildSite(
               comments: config.reviewOverlay.comments !== false,
               published: config.reviewOverlay.published,
               contact: config.reviewOverlay.contact,
+              shared: config.reviewOverlay.shared,
             }
           : undefined,
         shell: {

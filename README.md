@@ -193,7 +193,7 @@ because vaults are full of HTML nobody wrote as a web page: saved articles, a
 plugin's bundled help, an export somebody made once.
 
 The one thing that can be added is the review overlay, and only if you ask
-for it: with **Review → Include in the published site** on, a prototype gets
+for it: with **Leave a review → Include in the published site** on, a prototype gets
 the same comment layer as every note, so a reviewer can pin a comment to it on
 the live site. It is appended after your file between two `osp-review`
 comments, never inserted into your markup, and it groups comments under the
@@ -409,6 +409,24 @@ It runs over a local preview by default and can be shipped into the published
 site as well, which is a separate switch, as is letting a reader of that site
 write rather than only read.
 
+The settings are in two sections. **Leave a review** has two halves:
+
+- **In your preview:** the name your comments are signed with, the vault
+  folder the review is kept in, and **Import review comments**. The name is
+  never written into the published site.
+- **On the published site:** **Include in the published site**, then **Let
+  readers write comments**, then **How readers' comments reach you**:
+  - **A file they send you**: a reader exports their comments and sends you
+    the file, to the address you give in **Address shown when a reader
+    exports**.
+  - **GitHub issues**: the comments are shared on the site's repository (see
+    below). This option is missing when the repository cannot carry them,
+    and the section says why.
+
+**Issue tracker (preview builds only)** files comments with GitHub, Jira or
+Asana. It is labelled that way because filing only works in a preview (see
+the end of this section).
+
 ![Leaving a comment on a built page: switching to comment mode, clicking a
 paragraph, which outlines it and opens a draft box with a priority chooser,
 typing, sending, and the comment appearing in the review
@@ -457,6 +475,55 @@ was left on, the panel names that screen, and clicking the comment sends the
 frame back to it. This needs the screen to be published from the same site as
 the frame, which is how a prototype folder is published anyway.
 
+**Shared comments through GitHub issues.** With **How readers' comments
+reach you** set to **GitHub issues**, a published site's comments are kept as
+issues on the repository the site publishes to, and everyone who opens the site sees every
+comment as a pin. A reader leaves a comment as usual, and the overlay opens
+GitHub's own "New issue" form, already filled in. The reader submits it,
+signed in as themselves, so there is no token to store and no server. Until
+the issue appears, the reader's pin is shown faded as posting.
+
+Every visitor's overlay reads the repository's issues without signing in,
+once per visit, and draws them where they were left. An issue closed on
+GitHub shows as closed. Replies are read on GitHub, from a link on the card.
+A sync in the plugin brings these comments into the vault's review file, so
+the preview and the review note show them too.
+
+This needs a public repository, since visitors read the issues without
+signing in, and a GitHub account for anyone who posts. It is refused for a
+site locked with a password, whose review would otherwise be public.
+
+**Optional sign-in.** A site owner can add their own small sign-in service, a
+Cloudflare Worker and a GitHub App, both under their own accounts. Reviewers
+then sign in with GitHub once and post from the page without a GitHub tab per
+comment. With sign-in, the repository can also be private, including on GitHub
+Enterprise Server: reviewers sign in to read the comments as well, and a
+locked site can then share comments too. The Worker and its setup guide are in
+[`examples/github-signin-worker`](examples/github-signin-worker/README.md). The
+issue identifies itself with a hidden marker in its body rather than a
+label, because GitHub drops labels from a prefilled form unless the poster
+can triage the repository. Nothing from the vault goes into a shared issue,
+and **Send to GitHub** from the preview also leaves the note's vault path
+out of any issue it files on a public repository.
+
+**In a company setting.** Where Cloudflare is not allowed, or GitHub is a
+company Enterprise Server, there are three ways to get readers' comments:
+
+- **Run the sign-in service yourself.** `worker.js` uses only standard web
+  APIs, so it runs on an internal host as well as on Cloudflare. Point it at
+  the Enterprise Server with `GITHUB_URL`. It must be reachable by reviewers
+  over HTTPS and must itself be able to reach GitHub. Reviewers then sign in
+  with their company GitHub accounts, and the repository can stay private.
+- **Use GitHub issues without sign-in.** Each comment goes through GitHub's
+  prefilled form, so there is nothing to host. Every visitor must be able to
+  read the repository's issues without signing in, though, and most company
+  Enterprise Servers allow nothing to be read that way. In practice, this
+  works only for a public repository on github.com.
+- **Set How readers' comments reach you to A file they send you.** Readers
+  export their comments and send you the file, and you import it. Nothing
+  leaves the reader's browser except the file they choose to send, so this
+  works behind any firewall and needs no GitHub access at all.
+
 A published page keys its comments on its own URL and never on the vault path
 behind it, so no folder names reach a reader. `pageMap.ts` is the other half:
 a publish records which note produced which page, in the vault beside the
@@ -464,11 +531,13 @@ review file, so an imported review links back to the writing rather than to the
 HTML.
 
 An open comment can be filed as an issue in GitHub, Jira or Asana and synced
-back, which is what `src/tracker/` is for. Filing goes through the plugin's
-own local server, so the Send action exists in a preview opened in a browser
-and in no published page: a static host has nothing to file through. Reviewing
-a published site means exporting the comments, importing them, and filing from
-a preview.
+back, which is what `src/tracker/` and the **Issue tracker (preview builds
+only)** settings are for. Filing goes through the plugin's own local server, so
+the Send action exists in a preview opened in a browser and in no published
+page: a static host has nothing to file through. To file a published site's
+comments, bring them into the vault first, then file from a preview. Comments
+shared as GitHub issues come in with a sync. Otherwise a reader exports their
+comments and you import them.
 
 ## Layout
 
@@ -540,11 +609,14 @@ src/overlay/    reviewing a built site, and getting the comments back
   server.ts         a local server for the review preview
   importReview.ts   turning a saved review into a note in the vault
   relay.ts          turning a review comment into an issue in a tracker
+  shared.ts         comments shared as GitHub issues: the marker in an
+                    issue's body, and reading an issue back as a comment
 src/tracker/    the trackers a comment can be filed with
   jira.ts, asana.ts   per-provider request and response shapes
   request.ts          the one HTTP call they make, and what to say when it fails
 src/github/
-  client.ts       Git Data API: blobs, tree, commit, ref, Pages
+  client.ts       Git Data API: blobs, tree, commit, ref, Pages, and the
+                  issues a shared review is kept in
 src/platform/   things only a desktop Electron host can do
   secrets.ts      token encryption via the OS keychain
   migrate.ts      carrying settings across a change of plugin id
@@ -575,6 +647,11 @@ each demonstrating one feature and explaining what to look for:
 
 Read `examples/html-as-is/about-this-demo.md` before building that one. It is
 published as an ordinary note and it is the tour.
+
+One more is not for a vault: **`examples/github-signin-worker/`** is the
+optional sign-in service for shared comments. It is a Cloudflare Worker that
+you deploy under your own accounts, with a README that walks through setting
+up the GitHub App and the Worker.
 
 ## Development
 

@@ -1243,6 +1243,16 @@ export const OVERLAY_CSS = `
   font-size: 12px;
 }
 .osp-overlay .co-filed .co-warn { flex-basis: 100%; }
+/* A comment still being posted to GitHub, and the thread that lives there. */
+.osp-overlay .co-pin[data-pending] { opacity: 0.55; }
+.osp-overlay .co-shared-note {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.osp-overlay .co-shared-acts { display: flex; flex: none; gap: 6px; }
+.osp-overlay .co-signin { margin: 8px 12px; }
 /* A comment inside something shut, and the tap that would open it again. */
 .osp-overlay .co-shut {
   flex-direction: row;

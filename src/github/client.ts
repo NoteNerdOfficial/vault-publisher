@@ -1,3 +1,4 @@
+import type { SharedIssue } from "../overlay/shared";
 import { requestUrl, RequestUrlResponse } from "obsidian";
 import { bodyText, describeNotJson, jsonBody } from "../platform/response";
 import { encodeUrlPath } from "../publish/urls";
@@ -520,6 +521,20 @@ export class GitHubClient {
    * same thing: an issue closed as "not planned" is a decision not to do the
    * work.
    */
+  /**
+   * One page of the repository's issues, open and closed, newest first.
+   *
+   * The issues endpoint lists pull requests too; the caller tells them apart
+   * by the `pull_request` field, which only they carry.
+   */
+  async listIssues(page: number): Promise<SharedIssue[]> {
+    return this.request<SharedIssue[]>(
+      "GET",
+      `/repos/${this.config.owner}/${this.config.repo}/issues` +
+        `?state=all&per_page=100&sort=created&direction=desc&page=${page}`,
+    );
+  }
+
   async getIssue(
     number: number,
   ): Promise<{ state: string; state_reason: string | null }> {

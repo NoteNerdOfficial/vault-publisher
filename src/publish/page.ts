@@ -1,3 +1,4 @@
+import type { SharedConfig } from "../overlay/shared";
 /**
  * Wrapping rendered content in a page.
  *
@@ -823,6 +824,8 @@ export function buildPage(options: {
     published?: boolean;
     /** Where a reader should send an exported review. */
     contact?: string;
+    /** Where shared comments are kept as issues, on a published build. */
+    shared?: SharedConfig;
   };
 }): string {
   const { meta, content, headings } = options;
@@ -893,7 +896,7 @@ ${description ? `<meta name="description" content="${escapeHtml(description)}">`
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}">` : ""}
 <link rel="stylesheet" href="${root}assets/obsidian.css">
 <link rel="stylesheet" href="${root}assets/site.css">
-${overlay ? reviewOverlayMeta({ sourcePath: overlay.sourcePath, url: meta.url, siteName: meta.siteName, reviewer: overlay.reviewer, tracker: overlay.tracker, comments: overlay.comments, published: overlay.published, contact: overlay.contact }) : ""}
+${overlay ? reviewOverlayMeta({ sourcePath: overlay.sourcePath, url: meta.url, siteName: meta.siteName, reviewer: overlay.reviewer, tracker: overlay.tracker, comments: overlay.comments, published: overlay.published, contact: overlay.contact, shared: overlay.shared }) : ""}
 <script>${THEME_BOOT}</script>
 </head>
 <body>
@@ -1032,6 +1035,8 @@ export interface ReviewOverlayConfig {
    * the export says what it saved and nothing more.
    */
   contact?: string;
+  /** Where shared comments are kept as issues, on a published build. */
+  shared?: SharedConfig;
 }
 
 /**
@@ -1059,6 +1064,10 @@ export function reviewOverlayMeta(config: ReviewOverlayConfig): string {
     // what it carried before either of these existed.
     ...(config.published ? { published: true } : {}),
     ...(config.contact ? { contact: config.contact } : {}),
+    // Only on a published page: a preview has the plugin to talk to.
+    ...(config.shared && config.published
+      ? { shared: config.shared }
+      : {}),
   });
   return `<meta name="osp-review" content="${escapeHtml(content)}">`;
 }

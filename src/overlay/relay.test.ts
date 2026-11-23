@@ -444,6 +444,26 @@ describe("the issue a comment becomes", () => {
     expect(body(draft)).toContain("- Reviewer, 2026-10-28");
   });
 
+  /*
+   * A public repository's issues are readable by anyone, so the note's vault
+   * path -- the vault's folder names -- stays out of them, and the page's URL
+   * says where instead.
+   */
+  it("leaves the vault path out of an issue on a public repository", () => {
+    const draft = issueDraft(comment(), TARGET, { site: "Handbook", publicRepo: true });
+
+    expect(body(draft)).not.toContain("notes/Plan.md");
+    expect(body(draft)).toContain("- **Page**: `notes/plan.html`");
+  });
+
+  it("names the note on a public repository only when there is no page to name", () => {
+    const draft = issueDraft(comment({ page: "" }), TARGET, {
+      site: "Handbook",
+      publicRepo: true,
+    });
+    expect(body(draft)).toContain("- **Note**: `notes/Plan.md`");
+  });
+
   it("says when a comment was about the page rather than a block", () => {
     const draft = issueDraft(comment({ block: null, blockText: "" }), TARGET, {
       site: "Handbook",

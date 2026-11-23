@@ -453,6 +453,20 @@ describe("the overlay on a page this module did not build", () => {
    * when the build is a publish, and this is the assertion that the meta
    * writes down whatever it is handed without reaching for anything else.
    */
+  it("names the repository shared comments live in, on a published page only", () => {
+    const shared = {
+      owner: "acme",
+      repo: "site",
+      api: "https://api.github.com",
+      web: "https://github.com",
+    };
+    expect(reviewOverlayMeta({ ...config, published: true, shared })).toContain(
+      "shared&quot;:{&quot;owner&quot;:&quot;acme&quot;,&quot;repo&quot;:&quot;site&quot;",
+    );
+    // A preview has the plugin to talk to.
+    expect(reviewOverlayMeta({ ...config, shared })).not.toContain("shared");
+  });
+
   it("carries only the key it was given, and says when commenting is off", () => {
     const meta = reviewOverlayMeta({
       ...config,
