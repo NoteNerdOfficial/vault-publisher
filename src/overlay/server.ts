@@ -1065,7 +1065,7 @@ export function editRequest(body: Record<string, unknown>): EditRequest | string
     if (!isPlace(body.place)) return "Expected before, after or inside.";
     const kind = body.kind;
     if (!INSERT_KINDS.includes(kind as InsertKind)) return "Unknown thing to insert.";
-    const request: EditRequest & { op: "insert" } = { op, at: body.at as number | null, place: body.place, kind: kind as InsertKind };
+    const request: EditRequest & { op: "insert" } = { op, at: body.at, place: body.place, kind: kind as InsertKind };
     if (body.like !== undefined) {
       // Class names and a heading level, nothing that could carry markup.
       const like = body.like as Record<string, unknown> | null;

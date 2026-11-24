@@ -174,7 +174,7 @@ function readComment(value: unknown, index: number): OverlayComment {
       ? {
           opener: {
             block: (row.opener as Record<string, string>).block,
-            text: String((row.opener as Record<string, unknown>).text ?? ""),
+            text: ((t: unknown) => (typeof t === "string" ? t : ""))((row.opener as Record<string, unknown>).text),
           },
         }
       : {}),

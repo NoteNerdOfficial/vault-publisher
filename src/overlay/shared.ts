@@ -243,7 +243,7 @@ export function commentFromIssue(
 export function applyShared(raw: string, incoming: OverlayComment[]): string | null {
   let document: { comments?: unknown[] } & Record<string, unknown>;
   try {
-    document = JSON.parse(raw);
+    document = JSON.parse(raw) as typeof document;
   } catch {
     return null;
   }

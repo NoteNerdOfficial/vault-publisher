@@ -1158,8 +1158,9 @@ export default class VaultPublisherPlugin extends Plugin {
       if (!next) return;
       await store.writeComments(next);
       if (!quiet) {
-        const added = (JSON.parse(next).comments as unknown[]).length -
-          ((JSON.parse(raw).comments as unknown[]) ?? []).length;
+        const count = (text: string): number =>
+          ((JSON.parse(text) as { comments?: unknown[] }).comments ?? []).length;
+        const added = count(next) - count(raw);
         new Notice(`Vault Publisher: brought in ${added} comment${added === 1 ? "" : "s"} from the published site.`, 6000);
       }
     } catch {
