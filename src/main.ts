@@ -66,6 +66,7 @@ import {
   normalizeSigninUrl,
 } from "./overlay/shared";
 import {
+  EditStore,
   RelayOutcome,
   ReviewServer,
   ReviewServerAddress,
@@ -140,6 +141,17 @@ const PREVIEW_FOLDER = "_site-preview";
  * from under it, which is why `importReview` treats it separately.
  */
 const LIVE_COMMENTS = "comments.json";
+
+/**
+ * Which vault file each as-is page in the preview was copied from, kept in
+ * the plugin's own folder so the edit notch still finds its files after
+ * Obsidian restarts. Not in the review folder: every `.json` there is read
+ * as a review to import.
+ */
+const PREVIEW_SOURCES_FILE = "preview-pages.json";
+
+/** Inside the review folder, where an edited file's original is kept. */
+const EDIT_BACKUPS = "edit-backups";
 
 interface Settings {
   autoRun: AutoRunMode;
@@ -436,6 +448,12 @@ export default class VaultPublisherPlugin extends Plugin {
    * actually reviewing.
    */
   private reviewServer: ReviewServer | null = null;
+
+  /**
+   * Preview path to vault path, for every as-is page in the last preview
+   * build. Null until read from disk or set by a build.
+   */
+  private previewSources: Map<string, string> | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -855,6 +873,8 @@ export default class VaultPublisherPlugin extends Plugin {
       console.warn(`vault-publisher: could not remove ${failure.path}: ${failure.reason}`);
     }
 
+    await this.savePreviewSources([...result.htmlFiles.sources, ...result.htmlFiles.stylesheets]);
+
     const removed = pruned.removed.length
       ? `, removed ${pruned.removed.length} stale ${pruned.removed.length === 1 ? "file" : "files"}`
       : "";
@@ -1181,8 +1201,68 @@ export default class VaultPublisherPlugin extends Plugin {
     };
   }
 
+  private previewSourcesPath(): string {
+    return normalizePath(`${this.manifest.dir ?? ""}/${PREVIEW_SOURCES_FILE}`);
+  }
+
+  private async savePreviewSources(sources: Array<{ url: string; sourcePath: string }>): Promise<void> {
+    this.previewSources = new Map(sources.map((page) => [page.url.replace(/^\/+/, ""), page.sourcePath]));
+    try {
+      await this.app.vault.adapter.write(
+        this.previewSourcesPath(),
+        JSON.stringify({ pages: Object.fromEntries(this.previewSources) }, null, 2),
+      );
+    } catch (error) {
+      // The map is still in memory for this session; only a restart loses it.
+      console.warn("vault-publisher: could not save the preview's page sources", error);
+    }
+  }
+
+  private async loadPreviewSources(): Promise<void> {
+    if (this.previewSources) return;
+    this.previewSources = new Map();
+    const adapter = this.app.vault.adapter;
+    const path = this.previewSourcesPath();
+    try {
+      if (!(await adapter.exists(path))) return;
+      const parsed = JSON.parse(await adapter.read(path)) as { pages?: Record<string, unknown> };
+      for (const [url, source] of Object.entries(parsed.pages ?? {})) {
+        if (typeof source === "string" && source) this.previewSources.set(url, source);
+      }
+    } catch {
+      // Unreadable: the next preview build writes a good one.
+    }
+  }
+
+  /**
+   * What the edit notch may write: the vault files behind the preview's
+   * as-is pages, named by the last preview build, and nothing else.
+   */
+  private editStore(): EditStore {
+    const adapter = this.app.vault.adapter;
+    const backups = () => normalizePath(`${this.settings.commentOverlay.reviewFolder}/${EDIT_BACKUPS}`);
+    return {
+      sourceFor: (previewPath) => this.previewSources?.get(previewPath.replace(/^\/+/, "")) ?? null,
+      readSource: async (vaultPath) =>
+        (await adapter.exists(vaultPath)) ? adapter.read(vaultPath) : null,
+      writeSource: (vaultPath, text) => adapter.write(vaultPath, text),
+      writePreview: (previewPath, text) =>
+        adapter.write(normalizePath(`${PREVIEW_FOLDER}/${previewPath}`), text),
+      backup: async (vaultPath, text) => {
+        const dir = backups();
+        if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        // Flattened, and not ending in .html, so a backup is never itself
+        // picked up and published as a page.
+        const name = `${stamp} ${vaultPath.replace(/\//g, "__")}.bak`;
+        await adapter.write(normalizePath(`${dir}/${name}`), text);
+      },
+    };
+  }
+
   /** Starts the review server if it is not already up. */
   async startReviewServer(): Promise<ReviewServerAddress> {
+    await this.loadPreviewSources();
     if (!this.reviewServer) {
       this.reviewServer = new ReviewServer({
         store: this.reviewStore(),
@@ -1195,6 +1275,7 @@ export default class VaultPublisherPlugin extends Plugin {
         // worth putting back in step, and it costs nothing when there is
         // nothing to do.
         touched: () => this.autoSync(),
+        edit: this.editStore(),
       });
     }
     return this.reviewServer.start();

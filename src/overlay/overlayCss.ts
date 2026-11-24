@@ -255,6 +255,9 @@ export const OVERLAY_CSS = `
    sized from the number of modes rather than assuming three, or it would
    cover a third of a control with two buttons in it. */
 .osp-overlay .co-modes[data-modes="2"] .co-mode-slider { width: calc(50% - 2px); }
+/* Four, in a local preview of an as-is page, where Edit joins them. */
+.osp-overlay .co-mode-slider[data-at="3"] { transform: translateX(300%); }
+.osp-overlay .co-modes[data-modes="4"] .co-mode-slider { width: calc(25% - 1px); }
 
 .osp-overlay .co-mode {
   position: relative;

@@ -1527,6 +1527,7 @@ export async function buildSite(
     files.push({ path: target.url, content });
     htmlStats.published++;
     htmlStats.publishedPages.push(`${target.sourcePath} -> ${target.url}`);
+    htmlStats.sources.push({ url: target.url, sourcePath: target.sourcePath });
 
     // An `app://` URL carries the vault's absolute path, so the author's
     // home directory. The note pipeline strips those; this one may not touch
@@ -1602,6 +1603,9 @@ export async function buildSite(
       htmlStats.companions++;
       htmlStats.companionBytes += data.byteLength;
       files.push({ path: companion.url, content: data });
+      // A copy byte for byte, so the edit notch can write to the vault file
+      // and the preview copy alike.
+      if (/\.css$/i.test(path)) htmlStats.stylesheets.push({ url: companion.url, sourcePath: path });
     } catch (error) {
       skipped.push({
         path,

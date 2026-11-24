@@ -35,5 +35,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NoteNerdOfficial/vault-publisher.git"
+  },
+  "dependencies": {
+    "parse5": "^7.3.0"
   }
 }

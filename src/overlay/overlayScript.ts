@@ -2697,6 +2697,16 @@ export const OVERLAY_SCRIPT = `(function () {
       ["path", { d: "M16 12h.01" }],
     ],
     panel: [["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }], ["path", { d: "M15 3v18" }]],
+    /* Lucide's pencil, for edit mode. */
+    pencil: [
+      [
+        "path",
+        {
+          d: "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+        },
+      ],
+      ["path", { d: "m15 5 4 4" }],
+    ],
     toLeft: [
       ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
       ["path", { d: "M9 3v18" }],
@@ -3067,6 +3077,17 @@ export const OVERLAY_SCRIPT = `(function () {
         ["view", ICONS.cursor, "View mode \\u2014 read and click the page (V)"],
         ["review", ICONS.panel, "Review mode \\u2014 read the comments (R)"],
       ];
+  /*
+   * Edit mode, when the page came with the edit notch in it.
+   *
+   * Nothing here knows how to edit. The review server adds the edit script
+   * to an as-is page in a local preview, and only there; that script leaves
+   * \`window.__ospEdit\` behind, and this adds a mode that hands it the
+   * shadow root to draw in. A build never contains it, so on a published
+   * site this is always false.
+   */
+  var EDIT = window.__ospEdit && typeof window.__ospEdit.enter === "function" ? window.__ospEdit : null;
+  if (EDIT) MODES.push(["edit", ICONS.pencil, EDIT.title]);
   // The sliding chip is sized off this, so it has to be told how many stops
   // it has rather than assuming three.
   modes.setAttribute("data-modes", String(MODES.length));
@@ -5984,6 +6005,8 @@ export const OVERLAY_SCRIPT = `(function () {
     // button for: the capture sheet would go over the page with no visible
     // way to take it off again.
     if (next === "comment" && !CAN_COMMENT) return;
+    if (next === "edit" && !EDIT) return;
+    if (mode === "edit" && next !== "edit") EDIT.exit();
     mode = next;
     capture.hidden = next !== "comment";
     panel.hidden = next !== "review";
@@ -6000,6 +6023,7 @@ export const OVERLAY_SCRIPT = `(function () {
     clearPanelOfNotch();
     placeNotch();
     render();
+    if (next === "edit") EDIT.enter({ shadow: shadow, wrap: wrap, notch: notch });
   }
 
   function indexOfMode(name) {
@@ -6729,6 +6753,12 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
 
+    if (key === "e") {
+      if (!EDIT) return;
+      event.preventDefault();
+      setMode("edit");
+      return;
+    }
     if (key === "c" && !CAN_COMMENT) return;
     if (key === "v" || key === "c" || key === "r") {
       event.preventDefault();
@@ -7877,7 +7907,8 @@ export const OVERLAY_SCRIPT = `(function () {
     if (!revealMark(comment) || !reached(comment)) chaseMark(comment);
   }
 
-  setMode("view");
+  // Edit mode survives a reload, which is what "Reload to keep editing" is.
+  setMode(EDIT && !hidden && EDIT.resume() ? "edit" : "view");
   showWanted();
   pull();
   finishSignIn();

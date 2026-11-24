@@ -498,6 +498,16 @@ export interface HtmlFileStats {
    */
   publishedPages: string[];
   /**
+   * The same pages as data: published URL and the vault file behind it.
+   *
+   * What the edit notch needs to find the file a preview page came from.
+   * Kept beside the readable list rather than parsed out of it, since a
+   * path may itself contain " -> ".
+   */
+  sources: Array<{ url: string; sourcePath: string }>;
+  /** Stylesheets carried beside those pages: published URL and vault file. */
+  stylesheets: Array<{ url: string; sourcePath: string }>;
+  /**
    * Files beside a published page that nothing referenced, so nothing
    * published. See `findUnreferencedFiles`.
    */
@@ -514,6 +524,8 @@ export function emptyHtmlFileStats(): HtmlFileStats {
     appShells: [],
     baseHrefs: [],
     publishedPages: [],
+    sources: [],
+    stylesheets: [],
     unreferenced: [],
   };
 }

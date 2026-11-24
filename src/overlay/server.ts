@@ -31,6 +31,21 @@
 import { createServer, IncomingMessage, Server, ServerResponse } from "http";
 import { OVERLAY_SCHEMA_VERSION, OverlayExternalIssue } from "./types";
 import { scalarText } from "../text";
+import {
+  EditRequest,
+  StyleProps,
+  TextEdit,
+  applyEdits,
+  hashText,
+  invertEdits,
+  linkedStylesheets,
+  planCssRule,
+  planOp,
+  prepareForEditing,
+  shiftsOf,
+} from "./edit";
+import { editInjection } from "./editScript";
+import { isPropertyName, isSafeSelector, isSafeValue, isWidthQuery } from "./editCss";
 
 /** Everything the server is allowed to touch, so it can touch nothing else. */
 export interface ReviewStore {
@@ -55,6 +70,58 @@ export interface ReviewStore {
    */
   readPages(): Promise<string | null>;
 }
+
+/**
+ * What the edit notch may touch: the vault files behind the preview's as-is
+ * pages, and nothing else.
+ *
+ * Separate from `ReviewStore` because it is a different power. Comments are
+ * the reviewer's own file; this writes to the author's work. A server built
+ * without one serves every page exactly as before and has no edit route.
+ */
+export interface EditStore {
+  /**
+   * The vault path of the as-is page served at this preview path, or null
+   * for anything else -- a rendered note, an asset, a page this build did not
+   * copy. Only paths this answers for can ever be written.
+   */
+  sourceFor(previewPath: string): string | null;
+  readSource(vaultPath: string): Promise<string | null>;
+  writeSource(vaultPath: string, text: string): Promise<void>;
+  /** Replaces the preview copy, so a reload shows the edit without a build. */
+  writePreview(previewPath: string, text: string): Promise<void>;
+  /** Keeps the file as it was before this session's first edit to it. */
+  backup(vaultPath: string, text: string): Promise<void>;
+}
+
+/**
+ * One edit the notch can take back, and put back again.
+ *
+ * Kept per page, not per file: an edit to a page's linked stylesheet is
+ * undone from that page like any other. `file` is the vault file it
+ * changed, `preview` that file's preview path.
+ */
+interface EditRecord {
+  id: string;
+  file: string;
+  preview: string;
+  /** True when the file is the page itself, so its stamps move. */
+  html: boolean;
+  forward: TextEdit[];
+  inverse: TextEdit[];
+  relocated?: Array<[number, number]>;
+  /** The file's hash before and after: each way is refused if it moved. */
+  beforeHash: string;
+  afterHash: string;
+}
+
+interface PageHistory {
+  undo: EditRecord[];
+  redo: EditRecord[];
+}
+
+/** How many edits a file keeps for undo. */
+const UNDO_DEPTH = 100;
 
 /**
  * What came of asking for one comment to be filed in a tracker.
@@ -90,6 +157,11 @@ export interface ReviewServerOptions {
    * fail.
    */
   touched?: () => void;
+  /**
+   * Turns on the edit notch for as-is pages. Absent, the server never
+   * stamps a page, never injects the edit script and answers no edit route.
+   */
+  edit?: EditStore;
   /** 0, the default, takes whatever port the OS offers. */
   port?: number;
   /** Injectable so a test is not at the mercy of a random value. */
@@ -271,6 +343,13 @@ export function previewPathFor(url: string): string | null {
 export class ReviewServer {
   private server: Server | null = null;
   private address: ReviewServerAddress | null = null;
+  /** Undo and redo per page, newest last. Lives as long as the server. */
+  private readonly history = new Map<string, PageHistory>();
+  /** Files already backed up this session. */
+  private readonly backedUp = new Set<string>();
+  /** Edits run one at a time, so two quick ones cannot both read the old file. */
+  private editQueue: Promise<unknown> = Promise.resolve();
+  private editCount = 0;
 
   constructor(private readonly options: ReviewServerOptions) {}
 
@@ -419,6 +498,13 @@ export class ReviewServer {
         return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
       }
 
+      if (path === "/api/edit" && this.options.edit) {
+        if (request.method !== "POST") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        return await this.postEdit(request, response, this.options.edit);
+      }
+
       if (path === "/api/relay") {
         if (request.method !== "POST") {
           return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
@@ -556,6 +642,174 @@ export class ReviewServer {
     send(response, 200, MIME.json, JSON.stringify(outcome));
   }
 
+  /**
+   * One edit to an as-is page's file, or the undo of the last one.
+   *
+   * The body names the page by its preview path, the element by its stamp,
+   * and the file by the hash it was served with. Everything else -- which
+   * file, which characters -- is worked out here.
+   */
+  private async postEdit(
+    request: IncomingMessage,
+    response: ServerResponse,
+    edit: EditStore,
+  ): Promise<void> {
+    const raw = await readBody(request);
+    if (raw === null) return send(response, 413, MIME.json, `{"error":"too large"}`);
+
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(raw) as typeof body;
+    } catch {
+      return send(response, 400, MIME.json, `{"error":"not valid JSON"}`);
+    }
+    if (!body || typeof body !== "object") {
+      return send(response, 400, MIME.json, `{"error":"expected an object"}`);
+    }
+
+    const page = typeof body.page === "string" ? body.page : "";
+    const vaultPath = page && /\.html?$/i.test(page) ? edit.sourceFor(page) : null;
+    if (!vaultPath) {
+      return send(response, 404, MIME.json, JSON.stringify({ error: "This page cannot be edited." }));
+    }
+
+    const run = async (): Promise<[number, unknown]> => {
+      const source = await edit.readSource(vaultPath);
+      if (source === null) {
+        return [404, { error: "The file behind this page is not in the vault any more." }];
+      }
+      if (body.hash !== hashText(source)) {
+        return [409, { conflict: true, error: "The file has changed since this page loaded. Reload to keep editing." }];
+      }
+
+      const history = this.history.get(page) ?? { undo: [], redo: [] };
+      this.history.set(page, history);
+
+      if (body.op === "undo" || body.op === "redo") {
+        const undoing = body.op === "undo";
+        const from = undoing ? history.undo : history.redo;
+        const last = from[from.length - 1];
+        // No id is a page that reloaded since the edit and no longer knows
+        // it: the server steps back on its own, and the page reloads.
+        const blind = body.id === undefined || body.id === null;
+        if (!last || (!blind && last.id !== body.id)) {
+          return [409, { conflict: true, error: `${undoing ? "Undo" : "Redo"} is out of step with the file. Reload to keep editing.` }];
+        }
+        const text = last.html ? source : await edit.readSource(last.file);
+        if (text === null || hashText(text) !== (undoing ? last.afterHash : last.beforeHash)) {
+          return [409, { conflict: true, error: `The file changed since that edit, so it can't be ${undoing ? "undone" : "redone"} from here.` }];
+        }
+        from.pop();
+        const edits = undoing ? last.inverse : last.forward;
+        const next = applyEdits(text, edits);
+        await this.writeEdited(edit, last.preview, last.file, text, next);
+        (undoing ? history.redo : history.undo).push(last);
+        return [
+          200,
+          {
+            id: last.id,
+            hash: last.html ? hashText(next) : body.hash,
+            edits: last.html ? shiftsOf(edits) : [],
+            relocated: last.relocated,
+            reload: blind,
+            ...this.counts(history),
+          },
+        ];
+      }
+
+      const request = editRequest(body);
+      if (typeof request === "string") return [400, { error: request }];
+
+      // A rule in a linked stylesheet: the edit lands in that file instead.
+      let file = vaultPath;
+      let preview = page;
+      let text = source;
+      let planned;
+      if (request.op === "rule-style" && typeof request.sheet === "string") {
+        const sheetPath = request.sheet;
+        const sheetFile = sheetPath.endsWith(".css") ? edit.sourceFor(sheetPath) : null;
+        if (!sheetFile || !linkedStylesheets(source, page).includes(sheetPath)) {
+          return [404, { error: "That stylesheet can't be edited from this page." }];
+        }
+        const css = await edit.readSource(sheetFile);
+        if (css === null) return [404, { error: "That stylesheet is not in the vault any more." }];
+        file = sheetFile;
+        preview = sheetPath;
+        text = css;
+        planned = planCssRule(css, request.path, request.selector, request.props);
+      } else {
+        planned = planOp(source, request);
+      }
+      if (!planned.ok) return [422, { error: planned.error }];
+      if (!planned.edits.length) return [200, { id: null, hash: body.hash, edits: [], ...this.counts(history) }];
+
+      const next = applyEdits(text, planned.edits);
+      if (!this.backedUp.has(file)) {
+        await edit.backup(file, text);
+        this.backedUp.add(file);
+      }
+      await this.writeEdited(edit, preview, file, text, next);
+
+      const html = file === vaultPath;
+      const record: EditRecord = {
+        id: `e${++this.editCount}`,
+        file,
+        preview,
+        html,
+        forward: planned.edits,
+        inverse: invertEdits(text, planned.edits),
+        relocated: planned.relocated,
+        beforeHash: hashText(text),
+        afterHash: hashText(next),
+      };
+      history.undo.push(record);
+      if (history.undo.length > UNDO_DEPTH) history.undo.shift();
+      // A new edit starts a new branch: what was undone is not coming back.
+      history.redo = [];
+      return [
+        200,
+        {
+          id: record.id,
+          hash: html ? record.afterHash : body.hash,
+          edits: html ? shiftsOf(planned.edits) : [],
+          relocated: planned.relocated,
+          ...this.counts(history),
+        },
+      ];
+    };
+
+    const result = this.editQueue.then(run, run);
+    this.editQueue = result.catch(() => undefined);
+    const [status, answer] = await result;
+    send(response, status, MIME.json, JSON.stringify(answer));
+  }
+
+  private counts(history: PageHistory): { undo: number; redo: number } {
+    return { undo: history.undo.length, redo: history.redo.length };
+  }
+
+  /** How much a page could undo and redo, for a page that has just loaded. */
+  historyOf(page: string): { undo: number; redo: number } {
+    const history = this.history.get(page);
+    return history ? this.counts(history) : { undo: 0, redo: 0 };
+  }
+
+  /** Writes the vault file, then the preview copy with its appendix kept. */
+  private async writeEdited(
+    edit: EditStore,
+    page: string,
+    vaultPath: string,
+    before: string,
+    after: string,
+  ): Promise<void> {
+    await edit.writeSource(vaultPath, after);
+    const preview = await this.options.store.readPreview(page);
+    const text =
+      preview === null ? "" : typeof preview === "string" ? preview : new TextDecoder().decode(preview);
+    const appendix = text.startsWith(before) ? text.slice(before.length) : "";
+    await edit.writePreview(page, after + appendix);
+  }
+
   private async getFile(url: string, response: ServerResponse): Promise<void> {
     const path = previewPathFor(url);
     if (!path) {
@@ -567,9 +821,153 @@ export class ReviewServer {
       return send(response, 404, "text/plain; charset=utf-8", "Not found.");
     }
 
+    const edit = this.options.edit;
+    const vaultPath = edit && /\.html?$/i.test(path) ? edit.sourceFor(path) : null;
+    if (edit && vaultPath) {
+      const preview = typeof file === "string" ? file : new TextDecoder().decode(file);
+      const html = await editablePage(edit, path, vaultPath, preview, this.historyOf(path));
+      return send(response, 200, MIME.html, html, { "Cache-Control": "no-store" });
+    }
+
     const body = typeof file === "string" ? file : Buffer.from(file);
     send(response, 200, mimeFor(path), body, { "Cache-Control": "no-store" });
   }
+}
+
+/** Largest text the notch will write in one go: a paragraph, not a book. */
+const MAX_EDIT_TEXT = 100_000;
+
+function isOffset(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/** Declarations from a body, each checked, or why they cannot be written. */
+function styleProps(raw: unknown): StyleProps | string {
+  if (!Array.isArray(raw) || !raw.length || raw.length > 8) return "Expected declarations to set.";
+  const out: StyleProps = [];
+  for (const pair of raw) {
+    if (!Array.isArray(pair) || pair.length !== 2) return "Expected declarations to set.";
+    const [prop, value] = pair as unknown[];
+    if (typeof prop !== "string" || !isPropertyName(prop)) return "Expected a CSS property.";
+    if (typeof value !== "string" || !isSafeValue(value)) return "That value can't be written.";
+    out.push([prop, value]);
+  }
+  return out;
+}
+
+/** The request in a body, or why it is not one. */
+export function editRequest(body: Record<string, unknown>): EditRequest | string {
+  const op = body.op;
+  if (op === "add-rule") {
+    const props = styleProps(body.props);
+    if (typeof props === "string") return props;
+    if (body.sheet !== null && !isOffset(body.sheet)) return "Expected a stylesheet.";
+    if (typeof body.selector !== "string" || !isSafeSelector(body.selector)) return "That selector can't be written.";
+    if (body.media !== undefined && (typeof body.media !== "string" || !isWidthQuery(body.media))) {
+      return "Expected a width condition.";
+    }
+    return {
+      op,
+      sheet: body.sheet,
+      selector: body.selector,
+      props,
+      ...(body.media ? { media: body.media } : {}),
+    };
+  }
+  if (op === "rule-style" || op === "inline-style") {
+    const props = styleProps(body.props);
+    if (typeof props === "string") return props;
+    if (op === "inline-style") {
+      if (!isOffset(body.at)) return "Expected an element.";
+      return { op, at: body.at, props };
+    }
+    const sheet = body.sheet;
+    if (!isOffset(sheet) && !(typeof sheet === "string" && sheet.length < 512 && sheet.endsWith(".css"))) {
+      return "Expected a stylesheet.";
+    }
+    const path = body.path;
+    if (!Array.isArray(path) || !path.length || path.length > 4 || !path.every(isOffset)) {
+      return "Expected a rule.";
+    }
+    if (typeof body.selector !== "string" || body.selector.length > 1000) return "Expected a selector.";
+    return { op, sheet, path, selector: body.selector, props };
+  }
+  if (op === "texts") {
+    if (!isOffset(body.at)) return "Expected an element.";
+    const texts = body.texts;
+    if (
+      !Array.isArray(texts) ||
+      texts.length > 500 ||
+      !texts.every((t) => typeof t === "string") ||
+      texts.join("").length > MAX_EDIT_TEXT
+    ) {
+      return "Expected the new text.";
+    }
+    return { op, at: body.at, texts };
+  }
+  if (op !== "delete" && op !== "hide" && op !== "duplicate" && op !== "move" && op !== "text") {
+    return "Unknown edit.";
+  }
+  if (!isOffset(body.at)) return "Expected an element.";
+  if (op === "move") {
+    if (!isOffset(body.target)) return "Expected where to move it.";
+    if (body.place !== "before" && body.place !== "after" && body.place !== "inside") {
+      return "Expected before, after or inside.";
+    }
+    return { op, at: body.at, target: body.target, place: body.place };
+  }
+  if (op === "text") {
+    if (typeof body.text !== "string" || body.text.length > MAX_EDIT_TEXT) return "Expected the new text.";
+    return { op, at: body.at, text: body.text };
+  }
+  return { op, at: body.at };
+}
+
+/**
+ * An as-is page with the edit notch in it.
+ *
+ * The preview copy is the vault file with the review appendix after it, so
+ * the file is served from the vault -- stamped -- and the appendix is taken
+ * off the end of the preview. If the preview does not start with the file,
+ * the file has changed since the build, and offsets into it would name the
+ * wrong elements: the page is served as built, with the edit script there
+ * only to say why it cannot edit.
+ */
+async function editablePage(
+  edit: EditStore,
+  previewPath: string,
+  vaultPath: string,
+  preview: string,
+  history: { undo: number; redo: number },
+): Promise<string> {
+  const source = await edit.readSource(vaultPath);
+  if (source === null || !preview.startsWith(source)) {
+    const reason =
+      source === null
+        ? "The file behind this page is not in the vault any more."
+        : "The file has changed since this preview was built. Rebuild the preview to edit it.";
+    return prepareForEditing(
+      preview,
+      editInjection({ page: previewPath, hash: "", ok: false, reason }),
+      { stamp: false },
+    );
+  }
+  return (
+    prepareForEditing(
+      source,
+      editInjection({
+        page: previewPath,
+        hash: hashText(source),
+        ok: true,
+        history,
+        // The linked stylesheets this page may edit: in the vault, and named
+        // by the page itself.
+        sheets: linkedStylesheets(source, previewPath).filter(
+          (sheet) => sheet.endsWith(".css") && edit.sourceFor(sheet) !== null,
+        ),
+      }),
+    ) + preview.slice(source.length)
+  );
 }
 
 function send(
