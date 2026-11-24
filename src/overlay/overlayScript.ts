@@ -3080,11 +3080,11 @@ export const OVERLAY_SCRIPT = `(function () {
     ? [
         ["view", ICONS.cursor, "View mode \\u2014 read and click the page (V)"],
         ["comment", ICONS.bubble, "Comment mode \\u2014 click to drop a pin (C)"],
-        ["review", ICONS.panel, "Review mode \\u2014 step through and resolve (R)"],
+        ["review", ICONS.panel, "Review mode \\u2014 step through and resolve"],
       ]
     : [
         ["view", ICONS.cursor, "View mode \\u2014 read and click the page (V)"],
-        ["review", ICONS.panel, "Review mode \\u2014 read the comments (R)"],
+        ["review", ICONS.panel, "Review mode \\u2014 read the comments"],
       ];
   /*
    * Edit mode, when the page came with the edit notch in it.

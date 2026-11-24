@@ -1296,6 +1296,8 @@ export default class VaultPublisherPlugin extends Plugin {
         if (folder && !(await adapter.exists(folder))) await adapter.mkdir(folder);
         await adapter.writeBinary(target, await adapter.readBinary(vaultPath));
       },
+      readImage: async (vaultPath) =>
+        (await adapter.exists(vaultPath)) ? adapter.readBinary(vaultPath) : null,
     };
   }
 

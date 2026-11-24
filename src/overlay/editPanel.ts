@@ -80,6 +80,12 @@ export const EDIT_PANEL = String.raw`
     redo: '<path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/>',
     reload: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+    rect: '<rect x="4" y="4" width="16" height="16" rx="1.5"/>',
+    heading: '<path d="M6 4v16"/><path d="M18 4v16"/><path d="M6 12h12"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+    divider: '<path d="M3 12h18"/><path d="M8 7h8" opacity=".4"/><path d="M8 17h8" opacity=".4"/>',
+    list: '<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+    history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   };
 
   function icon(name, size) {
@@ -615,8 +621,27 @@ export const EDIT_PANEL = String.raw`
 
   /* --- sections -------------------------------------------------------- */
 
+  /* The section to light up once, after an insert or the History button. */
+  var flashSec = null;
+
+  /* Opens the Design tab at a section, unfolded, scrolled to and lit up. */
+  function showSection(id) {
+    tab = "design";
+    if (id && folded[id]) folded[id] = false;
+    flashSec = id || null;
+    refresh();
+    var p = ui && ui.panel;
+    var n = id && p && p.body.querySelector('[data-sec="' + id + '"]');
+    if (n && n.scrollIntoView) n.scrollIntoView({ block: "nearest" });
+    setTimeout(function () {
+      if (flashSec === id) flashSec = null;
+    }, 1500);
+  }
+
   function section(id, title, css, body, action) {
     var box = el("div", "ep-sec");
+    box.setAttribute("data-sec", id);
+    if (flashSec === id) box.setAttribute("data-flash", "");
     var closed = !!folded[id];
     if (closed) box.setAttribute("data-closed", "");
     var head = el("div", "ep-sec-head");
@@ -1715,6 +1740,9 @@ export const EDIT_PANEL = String.raw`
     out.push(section("shortcuts", "Shortcuts", "Keys in Edit mode", function () {
       var k = MAC ? { cmd: "⌘", alt: "⌥", shift: "⇧" } : { cmd: "Ctrl+", alt: "Alt+", shift: "Shift+" };
       var rows = [
+        ["Frame / rectangle / text", "F / R / T"],
+        ["Image", k.shift + k.cmd + "K"],
+        ["Place it at the selection", "Enter, with a tool out"],
         ["Select more", "Shift-click"],
         ["Into its layers / up", "Enter / " + k.shift + "Enter"],
         ["Next layer", "Tab"],

@@ -70,12 +70,28 @@ export type EditRequest =
   | { op: "copy"; at: number; target: number; place: Place }
   | { op: "wrap"; at: number; last: number; props: StyleProps }
   | { op: "unwrap"; at: number }
-  | { op: "insert"; at: number | null; place: Place; kind: InsertKind; src?: string };
+  | { op: "insert"; at: number | null; place: Place; kind: InsertKind; src?: string; like?: InsertLike; props?: StyleProps };
 
 export type Place = "before" | "after" | "inside";
 
-/** What Insert can put on a page: Figma's frame, rectangle, text and image. */
-export type InsertKind = "frame" | "rect" | "text" | "image";
+/**
+ * What Insert can put on a page: Figma's frame, rectangle, text and image,
+ * and the pieces a prototype is made of, which can take the look of one
+ * already on the page.
+ */
+export type InsertKind = "frame" | "rect" | "text" | "image" | "heading" | "button" | "link" | "input" | "divider" | "list";
+
+export const INSERT_KINDS: readonly InsertKind[] = ["frame", "rect", "text", "image", "heading", "button", "link", "input", "divider", "list"];
+
+/**
+ * The look a new layer borrows from one on the page: its classes, and for a
+ * heading its level. Classes rather than copied styles, so the new button
+ * follows the page's stylesheet as the old one does.
+ */
+export interface InsertLike {
+  cls?: string;
+  tag?: string;
+}
 
 /**
  * Declarations to set, in order: a size is several at once (`width` and
@@ -427,24 +443,60 @@ function styleAttribute(props: StyleProps): string {
   return style ? ` style=${quoteAttribute(style)}` : "";
 }
 
+/** A class attribute for new markup, or nothing. */
+function classAttribute(cls: string | undefined): string {
+  return cls ? ` class=${quoteAttribute(cls)}` : "";
+}
+
+/**
+ * Declarations for new markup: the kind's own, with any the request brings
+ * (a size drawn on the page) taking the place of the same property. A drawn
+ * height on a frame replaces its minimum height as well.
+ */
+function mergedProps(base: StyleProps, extra: StyleProps | undefined): StyleProps {
+  if (!extra?.length) return base;
+  const names = new Set(extra.map(([p]) => p));
+  if (names.has("height")) names.add("min-height");
+  return [...base.filter(([p]) => !names.has(p)), ...extra];
+}
+
 /** The markup Insert writes for each kind. */
-function insertMarkup(kind: InsertKind, src?: string): string {
+export function insertMarkup(
+  kind: InsertKind,
+  options: { src?: string; like?: InsertLike; props?: StyleProps } = {},
+): string {
+  const cls = classAttribute(options.like?.cls);
+  const props = options.props;
   switch (kind) {
     case "frame":
-      return `<div${styleAttribute([
+      return `<div${styleAttribute(mergedProps([
         ["display", "flex"],
         ["flex-direction", "column"],
         ["gap", "8px"],
         ["padding", "16px"],
         ["min-height", "80px"],
         ["background-color", "#ffffff"],
-      ])}></div>`;
+      ], props))}></div>`;
     case "rect":
-      return `<div${styleAttribute([["width", "100px"], ["height", "100px"], ["background-color", "#d9d9d9"]])}></div>`;
+      return `<div${styleAttribute(mergedProps([["width", "100px"], ["height", "100px"], ["background-color", "#d9d9d9"]], props))}></div>`;
     case "text":
       return "<p>Text</p>";
     case "image":
-      return `<img src=${quoteAttribute(src ?? "")} alt=""${styleAttribute([["width", "240px"], ["height", "auto"]])}>`;
+      return `<img src=${quoteAttribute(options.src ?? "")} alt=""${styleAttribute(mergedProps([["width", "240px"], ["height", "auto"]], props))}>`;
+    case "heading": {
+      const tag = /^h[1-6]$/.test(options.like?.tag ?? "") ? options.like!.tag! : "h2";
+      return `<${tag}${cls}>Heading</${tag}>`;
+    }
+    case "button":
+      return `<button type="button"${cls}>Button</button>`;
+    case "link":
+      return `<a href="#"${cls}>Link</a>`;
+    case "input":
+      return `<input${cls} placeholder="Placeholder">`;
+    case "divider":
+      return `<hr${cls}>`;
+    case "list":
+      return `<ul${cls}><li>Item</li><li>Item</li><li>Item</li></ul>`;
   }
 }
 
@@ -554,7 +606,7 @@ export function planOp(source: string, request: EditRequest): OpResult {
   }
 
   if (request.op === "insert") {
-    const markup = insertMarkup(request.kind, request.src);
+    const markup = insertMarkup(request.kind, request);
     let target: Element | null;
     let place = request.place;
     if (request.at === null) {

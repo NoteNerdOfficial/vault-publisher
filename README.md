@@ -554,10 +554,11 @@ works like Figma's. The notch gets a fourth mode, the pencil, and what you
 change is written straight into the page's file in the vault. There is no
 separate design file to keep in step with the code.
 
-![Edit mode on a pricing page: the middle plan card is selected, with its
-size and name on the page, a bar under the page with Edit text, Duplicate,
-Hide, Delete and Insert, and the Design panel on the right showing the
-card's auto layout, sizing, appearance, fill and stroke.](media/edit-mode.png)
+![Edit mode on a pricing page: the middle plan card is selected, the
+Rectangle tool is out on the bar under the page, a blue line above the
+card's button shows where the rectangle would go, and the Design panel on the
+right shows the card's auto layout, sizing, appearance, fill and
+stroke.](media/edit-mode.png)
 
 Edit mode needs **Publish HTML files as-is** and **Include comment and edit
 tools**. It exists only in a preview opened from the plugin, because the
@@ -568,10 +569,23 @@ carries it, even with comments switched on there.
 press Esc to go back up. Shift-click adds layers to the selection.
 Right-click opens a menu with the same actions as the bar.
 
-**The bar** under the page has **Edit text**, **Duplicate**, **Hide**,
-**Delete**, **Insert** (a frame, a rectangle, text, or an image from the
-page's folder), and **Undo** and **Redo**. Drag a layer to move it, or to
-reorder it inside its parent. Hold Alt while dragging to drag a copy.
+**The bar** under the page has **Edit text**, **Duplicate**, **Hide** and
+**Delete**, then the insert tools, then **Undo**, **Redo** and **History**.
+Drag a layer to move it, or to reorder it inside its parent. Hold Alt while
+dragging to drag a copy.
+
+**Adding layers.** The tools are **Frame** (F), **Rectangle** (R), **Text**
+(T) and **Image** (Shift+Cmd+K), and **More** has a heading, button, link,
+input, divider and list. Pick one and the page shows where it would land:
+a blue line between two layers, or an outline round an empty frame. Click to
+add it there, drag to give a frame, rectangle or image a size, press Enter
+to put it by the selection instead, or Esc to put the tool down. The new
+layer is selected, text is ready to type, and the panel opens at the section
+you are likely to want next. A button, heading, link or input takes the
+classes of one already on the page, so a new button looks like the page's
+main one rather than a browser default. Images come from the page's own
+folder, shown as thumbnails with a search. R adds a rectangle in Edit mode,
+as in Figma, so Review mode is a click on the notch.
 
 **The panel** docks to the left or the right and has two tabs:
 
@@ -581,8 +595,8 @@ reorder it inside its parent. Hold Alt while dragging to drag a copy.
   (opacity, corner radius, blend), Text, Fill (colours, gradients, how an
   image fills), Stroke, Effects (shadows and blurs), State and Code. With
   nothing selected, it shows the page: its background, the page at phone and
-  tablet sizes, its colour and size variables, the edit history, and the
-  shortcuts.
+  tablet sizes, its colour and size variables, the edit history (also one
+  click away from **History** on the bar), and the shortcuts.
 - **Layers**, the page as a tree, with search, a toggle to show or hide each
   layer, and drag to reorder.
 

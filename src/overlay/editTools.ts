@@ -412,55 +412,349 @@ export const EDIT_TOOLS = String.raw`
 
   /* --- inserting ------------------------------------------------------- */
 
+  /*
+   * What Insert can add. The first four are Figma's tools, each with its
+   * key; the rest are in More, and take the look of one already on the page.
+   * 'focus' is the panel section opened once the layer is in.
+   */
   var INSERTS = {
-    frame: { label: "Frame", what: "frame" },
-    rect: { label: "Rectangle", what: "rectangle" },
-    text: { label: "Text", what: "text" },
-    image: { label: "Image", what: "image" },
+    frame: { label: "Frame", what: "frame", icon: "frame", key: "F", sized: true, focus: "autolayout" },
+    rect: { label: "Rectangle", what: "rectangle", icon: "rect", key: "R", sized: true, focus: "fill" },
+    text: { label: "Text", what: "text", icon: "text", key: "T", focus: "text", words: true },
+    image: { label: "Image", what: "image", icon: "image", sized: true, focus: "fill" },
+    heading: { label: "Heading", what: "heading", icon: "heading", focus: "text", words: true, like: "h2, h3, h1, h4" },
+    button: { label: "Button", what: "button", icon: "button", focus: "fill", words: true, like: "button" },
+    link: { label: "Link", what: "link", icon: "link", focus: "text", words: true, like: "a[href]" },
+    input: { label: "Input", what: "input", icon: "input", focus: "stroke", like: "input" },
+    divider: { label: "Divider", what: "divider", icon: "divider", focus: "stroke", like: "hr" },
+    list: { label: "List", what: "list", icon: "list", focus: "text", like: "ul" },
   };
+  var MORE = ["heading", "button", "link", "input", "divider", "list"];
+
+  /* The tool being placed: { kind, src, like }, or null. */
+  var placing = null;
+  /* Where it would land under the pointer, in dropAt's shape. */
+  var spot = null;
+  /* A press while placing: where it started, to tell a click from a drawn size. */
+  var placePress = null;
+
+  /* The page's own classes on a layer, the ones safe to copy. */
+  function classesOf(n) {
+    return String(n.getAttribute("class") || "").trim().split(/\s+/).filter(function (c) {
+      return /^-?[A-Za-z_][\w-]*$/.test(c);
+    }).join(" ");
+  }
+
+  /*
+   * The layer on the page a new one of this kind should look like: a
+   * button that reads as the main one if there is one, otherwise the first
+   * with a class, otherwise the first.
+   */
+  function lookFor(kind) {
+    var k = INSERTS[kind];
+    if (!k.like) return null;
+    var found = Array.prototype.filter.call(document.querySelectorAll(k.like), function (n) {
+      return !ours(n) && !n.hasAttribute("data-osp-new") && (kind !== "input" || !/^(checkbox|radio|hidden|submit|button|range|color|file)$/i.test(n.type || ""));
+    });
+    if (!found.length) return null;
+    var best = null;
+    if (kind === "button") {
+      best = found.filter(function (n) {
+        return /primary|cta|main|accent/i.test(n.getAttribute("class") || "");
+      })[0];
+    }
+    if (kind === "heading") {
+      // The commonest level, so a card's title beats the page's one h1.
+      var counts = {};
+      found.forEach(function (n) {
+        counts[n.tagName] = (counts[n.tagName] || 0) + 1;
+      });
+      var top = found.slice().sort(function (a, b) {
+        return counts[b.tagName] - counts[a.tagName];
+      })[0];
+      found = found.filter(function (n) {
+        return n.tagName === top.tagName;
+      });
+    }
+    best = best || found.filter(classesOf)[0] || found[0];
+    var like = {};
+    var cls = classesOf(best);
+    if (cls) like.cls = cls;
+    if (kind === "heading") like.tag = best.tagName.toLowerCase();
+    var words = String(best.getAttribute("placeholder") || best.textContent || "").replace(/\s+/g, " ").trim();
+    return { like: like, from: best, words: words.length > 22 ? words.slice(0, 21) + "…" : words };
+  }
+
+  /* What More says each kind will look like. */
+  function lookNote(kind) {
+    var look = INSERTS[kind].like ? lookFor(kind) : null;
+    if (!look) return "";
+    if (!look.like.cls && kind !== "heading") return "";
+    return look.words ? "like “" + look.words + "”" : "like this page's";
+  }
 
   /* The element the server writes, made the same way here. */
-  function insertNode(kind, src) {
+  function insertNode(kind, src, like, props) {
     var made;
-    if (kind === "text") {
-      made = document.createElement("p");
-      made.textContent = "Text";
-      return made;
+    var tag = { text: "p", image: "img", heading: like && like.tag ? like.tag : "h2", button: "button", link: "a", input: "input", divider: "hr", list: "ul" }[kind] || "div";
+    made = document.createElement(tag);
+    if (like && like.cls) made.setAttribute("class", like.cls);
+    if (kind === "text") made.textContent = "Text";
+    if (kind === "heading") made.textContent = "Heading";
+    if (kind === "button") {
+      made.setAttribute("type", "button");
+      made.textContent = "Button";
+    }
+    if (kind === "link") {
+      made.setAttribute("href", "#");
+      made.textContent = "Link";
+    }
+    if (kind === "input") made.setAttribute("placeholder", "Placeholder");
+    if (kind === "list") {
+      for (var i = 0; i < 3; i++) made.appendChild(document.createElement("li")).textContent = "Item";
     }
     if (kind === "image") {
-      made = document.createElement("img");
       made.setAttribute("src", src);
       made.setAttribute("alt", "");
-      made.style.width = "240px";
-      made.style.height = "auto";
-      return made;
     }
-    made = document.createElement("div");
-    var props = kind === "frame"
+    var base = kind === "frame"
       ? [["display", "flex"], ["flex-direction", "column"], ["gap", "8px"], ["padding", "16px"], ["min-height", "80px"], ["background-color", "#ffffff"]]
-      : [["width", "100px"], ["height", "100px"], ["background-color", "#d9d9d9"]];
-    props.forEach(function (pair) {
+      : kind === "rect"
+      ? [["width", "100px"], ["height", "100px"], ["background-color", "#d9d9d9"]]
+      : kind === "image"
+      ? [["width", "240px"], ["height", "auto"]]
+      : [];
+    if (props && props.length) {
+      var names = {};
+      props.forEach(function (p) {
+        names[p[0]] = 1;
+      });
+      if (names.height) names["min-height"] = 1;
+      base = base.filter(function (p) {
+        return !names[p[0]];
+      }).concat(props);
+    }
+    base.forEach(function (pair) {
       made.style.setProperty(pair[0], pair[1]);
     });
     return made;
   }
 
-  function insert(kind, src) {
-    if (busy || unavailable || stale) return;
+  /* Where a new layer goes with no pointer to say: by the selection. */
+  function selectionSpot() {
     var target = selected && !whyNot(selected) ? selected : null;
-    var place = target ? (holds(target) ? "inside" : "after") : "inside";
-    var made = insertNode(kind, src);
+    if (!target) return { target: null, place: "inside" };
+    return { target: target, place: holds(target) ? "inside" : "after" };
+  }
+
+  function spotWords(s) {
+    if (!s || !s.target) return "at the end of the page";
+    if (s.place === "inside") return "inside " + label(s.target);
+    return s.place + " " + label(s.target) + (s.parent ? ", in " + label(s.parent) : "");
+  }
+
+  /* Layers that can hold a new one. */
+  function holder(n) {
+    return !!CONTAINER[n.tagName] && stampOf(n) !== null && !whyNot(n);
+  }
+
+  function layersIn(box) {
+    return Array.prototype.filter.call(box.children, function (k) {
+      return !ours(k) && stampOf(k) !== null && !whyNot(k);
+    });
+  }
+
+  function besideSpot(n, x, y) {
+    var r = n.getBoundingClientRect();
+    var across = runsAcross(n);
+    var before = across ? x < r.left + r.width / 2 : y < r.top + r.height / 2;
+    var parent = elementOf(n.parentElement);
+    return { target: n, place: before ? "before" : "after", across: across, parent: parent };
+  }
+
+  /*
+   * Where a click at (x, y) puts a new layer. Inside the nearest layer that
+   * can hold one, between the two of its layers the pointer is between;
+   * near that layer's edge, beside it instead, so a new card can go between
+   * two cards; into an empty one, inside it.
+   */
+  function spotAt(x, y) {
+    var n = elementOf(elementAtPoint(x, y));
+    var box = n;
+    while (box && !holder(box)) box = elementOf(box.parentElement);
+    if (!box) {
+      var top = layersIn(document.body);
+      if (n) {
+        for (var t = n; t && !isRoot(t); t = t.parentElement) {
+          if (top.indexOf(t) >= 0) return besideSpot(t, x, y);
+        }
+      }
+      var last = top[top.length - 1];
+      return last ? { target: last, place: "after", across: false, parent: null } : { target: null, place: "inside" };
+    }
+    var r = box.getBoundingClientRect();
+    var kids = layersIn(box);
+    var EDGE = 6;
+    var nearEdge = x - r.left < EDGE || r.right - x < EDGE || y - r.top < EDGE || r.bottom - y < EDGE;
+    if (kids.length && nearEdge && !isRoot(box.parentElement) && !whyNot(box)) return besideSpot(box, x, y);
+    if (!kids.length) return { target: box, place: "inside", box: r };
+    var across = axis(box) !== "column";
+    var pool = kids;
+    if (across) {
+      // A row that wraps: the line the pointer is on.
+      var line = kids.filter(function (k) {
+        var kr = k.getBoundingClientRect();
+        return y >= kr.top && y <= kr.bottom;
+      });
+      if (line.length) pool = line;
+    }
+    for (var i = 0; i < pool.length; i++) {
+      var kr = pool[i].getBoundingClientRect();
+      if ((across ? x < kr.left + kr.width / 2 : y < kr.top + kr.height / 2)) {
+        return { target: pool[i], place: "before", across: runsAcross(pool[i]), parent: box };
+      }
+    }
+    var end = pool[pool.length - 1];
+    return { target: end, place: "after", across: runsAcross(end), parent: box };
+  }
+
+  /* The page shows a crosshair while a tool is out. */
+  function crosshair(on) {
+    var have = document.getElementById("osp-placing");
+    quiet(function () {
+      if (on && !have) {
+        var style = document.createElement("style");
+        style.id = "osp-placing";
+        style.textContent = "html, html * { cursor: crosshair !important; }";
+        (document.head || document.documentElement).appendChild(style);
+      } else if (!on && have) have.remove();
+    });
+  }
+
+  /* Picks up a tool; the same one again puts it down. */
+  function armTool(kind, src) {
+    if (busy || unavailable || stale || editing) return;
+    if (placing && placing.kind === kind && !src) return stopPlacing();
+    closeMenus();
+    var look = lookFor(kind);
+    placing = { kind: kind, src: src || null, like: look ? look.like : null };
+    spot = null;
+    placePress = null;
+    message = "";
+    crosshair(true);
+    refresh();
+  }
+
+  function stopPlacing() {
+    if (!placing) return;
+    placing = null;
+    spot = null;
+    placePress = null;
+    crosshair(false);
+    if (ui && ui.ghost) ui.ghost.hidden = true;
+    refresh();
+  }
+
+  /* What the bar says while a tool is out. */
+  function placingHint() {
+    var k = INSERTS[placing.kind];
+    if (placePress && placePress.moved && k.sized) return "Release to add the " + k.what + " at this size, " + spotWords(placePress.spot) + ".";
+    if (spot) return "Click to add the " + k.what + " " + spotWords(spot) + (k.sized ? ", or drag to give it a size" : "") + ". Esc to stop.";
+    return "Click where the " + k.what + " goes" + (k.sized ? ", or drag to size it" : "") + ". Enter puts it " + spotWords(selectionSpot()) + ". Esc to stop.";
+  }
+
+  /* The pointer while a tool is out: moving shows where, a click places. */
+  function placingPointer(event) {
+    if (event.type === "contextmenu") return stopPlacing();
+    if (event.type === "pointerdown" && event.button === 0) {
+      var at = spotAt(event.clientX, event.clientY);
+      placePress = { x: event.clientX, y: event.clientY, spot: at, moved: false };
+      spot = at;
+      draw();
+      return;
+    }
+    if (event.type === "pointerup" && placePress) {
+      var p = placePress;
+      placePress = null;
+      var props = null;
+      var k = INSERTS[placing.kind];
+      if (p.moved && k.sized) {
+        var w = Math.max(8, Math.round(Math.abs(event.clientX - p.x)));
+        var h = Math.max(8, Math.round(Math.abs(event.clientY - p.y)));
+        props = placing.kind === "image" ? [["width", w + "px"]] : [["width", w + "px"], ["height", h + "px"]];
+      }
+      if (ui && ui.ghost) ui.ghost.hidden = true;
+      var tool = placing;
+      insert(tool.kind, tool.src, p.spot, props, tool.like);
+    }
+  }
+
+  function placingMove(event) {
+    if (placePress) {
+      if (!placePress.moved && Math.abs(event.clientX - placePress.x) + Math.abs(event.clientY - placePress.y) > DRAG_START) placePress.moved = true;
+      if (placePress.moved && INSERTS[placing.kind].sized && ui && ui.ghost) {
+        var g = toHost({
+          left: Math.min(placePress.x, event.clientX),
+          top: Math.min(placePress.y, event.clientY),
+          width: Math.abs(event.clientX - placePress.x),
+          height: Math.abs(event.clientY - placePress.y),
+        });
+        ui.ghost.hidden = false;
+        ui.ghost.style.left = g.left + "px";
+        ui.ghost.style.top = g.top + "px";
+        ui.ghost.style.width = g.width + "px";
+        ui.ghost.style.height = g.height + "px";
+        ui.ghost.firstChild.textContent = Math.round(Math.abs(event.clientX - placePress.x)) + " × " + Math.round(Math.abs(event.clientY - placePress.y));
+      }
+      refresh();
+      return;
+    }
+    spot = ours(event.target) ? null : spotAt(event.clientX, event.clientY);
+    refresh();
+  }
+
+  /*
+   * Adds a layer: at a spot clicked on the page, or by the selection. The
+   * new layer is selected, its words are ready to type, and the panel opens
+   * at the section a designer reaches for next.
+   */
+  function insert(kind, src, at, props, like) {
+    if (busy || unavailable || stale) return;
+    if (like === undefined) {
+      var look = lookFor(kind);
+      like = look ? look.like : null;
+    }
+    var where = at || selectionSpot();
+    var target = where.target;
+    var place = where.place;
+    var made = insertNode(kind, src, like, props);
     var body = { op: "insert", at: target ? stampOf(target) : null, place: place, kind: kind };
     if (src) body.src = src;
+    if (like && (like.cls || like.tag)) body.like = like;
+    if (props && props.length) body.props = props;
+    var said = spotWords(where);
+    placing = null;
+    spot = null;
+    placePress = null;
+    crosshair(false);
     act(
       body,
       "new " + INSERTS[kind].what,
       function (data) {
         remap(data.edits);
         made.setAttribute(ATTR, String(data.created));
+        if (kind === "list") {
+          // Its items, from the markup's fixed shape: the opening tag, then
+          // "<li>Item</li>" three times.
+          var open = "<ul" + (like && like.cls ? ' class="' + like.cls + '"' : "") + ">";
+          Array.prototype.forEach.call(made.children, function (li, i) {
+            li.setAttribute(ATTR, String(data.created + open.length + i * 13));
+          });
+        }
         quiet(function () {
           if (!target) document.body.appendChild(made);
           else if (place === "inside") target.appendChild(made);
+          else if (place === "before") target.parentNode.insertBefore(made, target);
           else target.parentNode.insertBefore(made, target.nextSibling);
         });
       },
@@ -471,8 +765,9 @@ export const EDIT_TOOLS = String.raw`
       },
       function () {
         selectMany([made]);
-        message = "Added a " + INSERTS[kind].what + (target ? (place === "inside" ? " inside " : " after ") + label(target) : " at the end of the page") + ".";
-        if (kind === "text") startText();
+        message = "Added a" + (/^[aeiou]/.test(INSERTS[kind].what) ? "n " : " ") + INSERTS[kind].what + " " + said + ".";
+        showSection(INSERTS[kind].focus);
+        if (INSERTS[kind].words && retypable(made)) startText();
       },
     );
   }
@@ -493,6 +788,96 @@ export const EDIT_TOOLS = String.raw`
       .catch(function () {
         done([]);
       });
+  }
+
+  /* --- the insert menus ------------------------------------------------ */
+
+  /* Opens one of the bar's two pop-ups, or closes it if it is open. */
+  function openPop(which, anchor) {
+    var box = ui.insertMenu;
+    if (!box.hidden && box.getAttribute("data-pop") === which) return closeMenus();
+    closeMenus();
+    box.textContent = "";
+    box.setAttribute("data-pop", which);
+    if (which === "more") moreMenu(box);
+    else imagePicker(box);
+    box.hidden = false;
+    anchor.setAttribute("aria-expanded", "true");
+    var b = anchor.getBoundingClientRect();
+    var bar = ui.bar.getBoundingClientRect();
+    box.style.left = Math.max(0, Math.min(bar.width - box.offsetWidth, b.left - bar.left + b.width / 2 - box.offsetWidth / 2)) + "px";
+  }
+
+  function moreMenu(box) {
+    box.appendChild(el("div", "ed-menu-note", "More layers"));
+    MORE.forEach(function (kind) {
+      var k = INSERTS[kind];
+      var b = el("button", "ed-menu-item ed-menu-rich");
+      b.type = "button";
+      b.innerHTML = icon(k.icon, 14) + "<span></span><kbd></kbd>";
+      b.children[1].textContent = k.label;
+      b.children[2].textContent = lookNote(kind);
+      b.addEventListener("click", function (event) {
+        event.stopPropagation();
+        closeMenus();
+        armTool(kind);
+      });
+      box.appendChild(b);
+    });
+  }
+
+  function imagePicker(box) {
+    box.appendChild(el("div", "ed-menu-note", "Images in this page's folder"));
+    var search = el("input", "ed-search");
+    search.type = "search";
+    search.placeholder = "Search images";
+    search.setAttribute("aria-label", "Search images");
+    box.appendChild(search);
+    var grid = el("div", "ed-thumbs");
+    box.appendChild(grid);
+    var all = [];
+    function fill() {
+      grid.textContent = "";
+      var q = search.value.trim().toLowerCase();
+      var shown = all.filter(function (src) {
+        return src.toLowerCase().indexOf(q) >= 0;
+      }).slice(0, 60);
+      if (!shown.length) {
+        grid.appendChild(el("p", "ed-thumbs-empty", all.length ? "No image matches." : "No images in this page's folder. Add one to the folder in your vault, then reopen this."));
+        return;
+      }
+      shown.forEach(function (src) {
+        var t = el("button", "ed-thumb");
+        t.type = "button";
+        t.title = src;
+        var img = el("img");
+        img.alt = "";
+        img.loading = "lazy";
+        // From the vault through the server: an image is only in the
+        // preview once it has been inserted.
+        img.src = "/api/image?page=" + encodeURIComponent(PAGE) + "&src=" + encodeURIComponent(src);
+        img.addEventListener("error", function () {
+          img.replaceWith(node("span", "ed-thumb-none", icon("image", 18)));
+        });
+        t.appendChild(img);
+        t.appendChild(el("span", null, src.split("/").pop()));
+        t.addEventListener("click", function (event) {
+          event.stopPropagation();
+          closeMenus();
+          armTool("image", src);
+        });
+        grid.appendChild(t);
+      });
+    }
+    search.addEventListener("input", fill);
+    grid.appendChild(el("p", "ed-thumbs-empty", "Looking…"));
+    loadImages(function (list) {
+      all = list;
+      fill();
+    });
+    setTimeout(function () {
+      search.focus();
+    }, 0);
   }
 
   /* --- properties ------------------------------------------------------ */

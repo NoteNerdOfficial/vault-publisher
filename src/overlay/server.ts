@@ -33,6 +33,9 @@ import { OVERLAY_SCHEMA_VERSION, OverlayExternalIssue } from "./types";
 import { scalarText } from "../text";
 import {
   EditRequest,
+  INSERT_KINDS,
+  InsertKind,
+  InsertLike,
   Place,
   StyleProps,
   TextEdit,
@@ -103,6 +106,8 @@ export interface EditStore {
   images?(vaultPath: string): Promise<string[]>;
   /** Copies a vault file into the preview, so a new image shows without a build. */
   copyToPreview?(vaultPath: string, previewPath: string): Promise<void>;
+  /** A vault image's bytes, for Insert's picker to show before it is in the preview. */
+  readImage?(vaultPath: string): Promise<ArrayBuffer | null>;
   /** A link that opens a vault file at a line in the chosen editor, or null for none. */
   editorLink?(vaultPath: string, line: number, column: number): { url: string; name: string } | null;
 }
@@ -534,6 +539,31 @@ export class ReviewServer {
         const images = await imagesFor(this.options.edit, vaultPath);
         return send(response, 200, MIME.json, JSON.stringify({ images: images.map((i) => i.src) }), {
           "Cache-Control": "no-store",
+        });
+      }
+
+      /*
+       * One of the page's images, for the picker's thumbnails: straight from
+       * the vault, since an image is only copied into the preview once it is
+       * inserted. Only the files /api/images lists, and an SVG opened on its
+       * own runs nothing.
+       */
+      if (path === "/api/image" && this.options.edit) {
+        if (request.method !== "GET") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        const query = new URLSearchParams((request.url ?? "").split("?")[1] ?? "");
+        const page = query.get("page") ?? "";
+        const vaultPath = /\.html?$/i.test(page) ? this.options.edit.sourceFor(page) : null;
+        const image = vaultPath && this.options.edit.readImage
+          ? (await imagesFor(this.options.edit, vaultPath)).find((i) => i.src === query.get("src"))
+          : undefined;
+        const bytes = image ? await this.options.edit.readImage!(image.vault) : null;
+        if (!image || !bytes) return send(response, 404, "text/plain; charset=utf-8", "Not found.");
+        return send(response, 200, mimeFor(image.src), Buffer.from(bytes), {
+          "Cache-Control": "no-store",
+          "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+          "X-Content-Type-Options": "nosniff",
         });
       }
 
@@ -1034,15 +1064,38 @@ export function editRequest(body: Record<string, unknown>): EditRequest | string
     if (body.at !== null && !isOffset(body.at)) return "Expected where to put it.";
     if (!isPlace(body.place)) return "Expected before, after or inside.";
     const kind = body.kind;
-    if (kind !== "frame" && kind !== "rect" && kind !== "text" && kind !== "image") return "Unknown thing to insert.";
+    if (!INSERT_KINDS.includes(kind as InsertKind)) return "Unknown thing to insert.";
+    const request: EditRequest & { op: "insert" } = { op, at: body.at as number | null, place: body.place, kind: kind as InsertKind };
+    if (body.like !== undefined) {
+      // Class names and a heading level, nothing that could carry markup.
+      const like = body.like as Record<string, unknown> | null;
+      if (!like || typeof like !== "object") return "Expected the layer to look like.";
+      const out: InsertLike = {};
+      if (like.cls !== undefined) {
+        if (typeof like.cls !== "string" || like.cls.length > 200 || !/^-?[A-Za-z_][\w-]*( -?[A-Za-z_][\w-]*)*$/.test(like.cls)) {
+          return "Expected class names.";
+        }
+        out.cls = like.cls;
+      }
+      if (like.tag !== undefined) {
+        if (typeof like.tag !== "string" || !/^h[1-6]$/.test(like.tag)) return "Expected a heading level.";
+        out.tag = like.tag;
+      }
+      request.like = out;
+    }
+    if (body.props !== undefined) {
+      const props = styleProps(body.props);
+      if (typeof props === "string") return props;
+      request.props = props;
+    }
     if (kind === "image") {
       // Checked against the page's own images later; here only its shape.
       if (typeof body.src !== "string" || !/^[\w\-./ ]{1,300}$/.test(body.src) || body.src.includes("..")) {
         return "Expected an image.";
       }
-      return { op, at: body.at, place: body.place, kind, src: body.src };
+      request.src = body.src;
     }
-    return { op, at: body.at, place: body.place, kind };
+    return request;
   }
   if (op === "wrap") {
     if (!isOffset(body.at) || !isOffset(body.last)) return "Expected the layers to frame.";

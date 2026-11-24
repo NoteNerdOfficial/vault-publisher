@@ -1912,6 +1912,13 @@ ${EDIT_PANEL}
       return;
     }
     if (ours(event.target)) return;
+    if (placing) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if ((event.type === "pointerdown" || event.type === "mousedown") && event.button !== 2) closeMenus();
+      placingPointer(event);
+      return;
+    }
     if (editing) {
       // Inside the words being typed, the pointer places the caret, which
       // the press does. The click after it would activate the element --
@@ -2025,6 +2032,12 @@ ${EDIT_PANEL}
     if (passthrough) return;
     self.shared.hover = self;
     measuring = !!event.altKey;
+    if (placing) {
+      event.stopImmediatePropagation();
+      hovered = null;
+      placingMove(event);
+      return;
+    }
     if (press) {
       event.stopImmediatePropagation();
       if (!dragging && Math.abs(event.clientX - press.x) + Math.abs(event.clientY - press.y) > DRAG_START) {
@@ -2150,6 +2163,15 @@ ${EDIT_PANEL}
       return;
     }
 
+    if (placing && (key === "Escape" || key === "Enter")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type !== "keydown") return;
+      if (closeMenus()) return;
+      if (key === "Escape") stopPlacing();
+      else insert(placing.kind, placing.src, null, null, placing.like);
+      return;
+    }
     if (key === "Escape") {
       if (closeMenus()) {
         event.stopImmediatePropagation();
@@ -2249,6 +2271,11 @@ ${EDIT_PANEL}
     selBox.appendChild(tag);
     var others = el("div", "ed-others");
     var dropLine = el("div", "ed-drop");
+    var dropParent = el("div", "ed-box ed-drop-parent");
+    dropParent.hidden = true;
+    var ghost = el("div", "ed-ghost");
+    ghost.appendChild(el("span"));
+    ghost.hidden = true;
     var guideX = el("div", "ed-guide");
     var guideY = el("div", "ed-guide");
     var measure = el("div", "ed-measure");
@@ -2264,7 +2291,9 @@ ${EDIT_PANEL}
     layer.appendChild(others);
     layer.appendChild(hoverBox);
     layer.appendChild(selBox);
+    layer.appendChild(dropParent);
     layer.appendChild(dropLine);
+    layer.appendChild(ghost);
     layer.appendChild(guideX);
     layer.appendChild(guideY);
     layer.appendChild(measure);
@@ -2283,13 +2312,34 @@ ${EDIT_PANEL}
     var hideBtn = barButton("eyeOff", "Hide", "Hide it: adds display: none to the file (" + (MAC ? "\u21e7\u2318H" : "Shift+Ctrl+H") + ")", hideOrShow);
     var deleteBtn = barButton("trash", "Delete", "Delete it from the file (Delete)", removeAll);
     deleteBtn.classList.add("ed-danger");
-    var insertBtn = barButton("plus", "Insert", "Add a frame, rectangle, text or image", toggleInsert);
+    // Figma's tools, by icon and key. A tool stays out until it is used or
+    // put down, and the page shows where it would land.
+    var tools = {};
+    ["frame", "rect", "text", "image"].forEach(function (kind) {
+      var k = INSERTS[kind];
+      var keys = kind === "image" ? (MAC ? "\u21e7\u2318K" : "Shift+Ctrl+K") : k.key;
+      var b = barButton(k.icon, k.label, k.label + " (" + keys + ")" + (kind === "image" ? ": pick one from this page's folder" : ": click the page to place it, or drag to size it"), function () {
+        if (kind === "image") openPop("image", b);
+        else armTool(kind);
+      });
+      b.classList.add("ed-quiet", "ed-tool");
+      b.setAttribute("aria-label", k.label);
+      if (kind !== "image") b.appendChild(el("kbd", "ed-key", k.key));
+      tools[kind] = b;
+    });
+    var moreBtn = barButton("plus", "More", "More: heading, button, link, input, divider and list, in this page's own style", function () {
+      openPop("more", moreBtn);
+    });
+    moreBtn.classList.add("ed-quiet", "ed-tool", "ed-more");
+    moreBtn.setAttribute("aria-label", "More layers");
+    moreBtn.insertAdjacentHTML("beforeend", icon("chev", 10));
+    var historyBtn = barButton("history", "History", "History: every edit this session, with Undo to here", showHistory);
     var undoBtn = barButton("undo", "Undo", "Undo the last edit (" + UNDO_KEY + ")", undo);
     var redoBtn = barButton("redo", "Redo", "Redo what was undone (" + REDO_KEY + ")", redo);
     var reloadBtn = barButton("reload", "Reload", "Reload the page from the file", function () {
       location.reload();
     });
-    [undoBtn, redoBtn].forEach(function (b) {
+    [undoBtn, redoBtn, historyBtn].forEach(function (b) {
       b.classList.add("ed-quiet");
     });
     actions.appendChild(textBtn);
@@ -2297,10 +2347,14 @@ ${EDIT_PANEL}
     actions.appendChild(hideBtn);
     actions.appendChild(deleteBtn);
     actions.appendChild(el("span", "ed-gap"));
-    actions.appendChild(insertBtn);
+    ["frame", "rect", "text", "image"].forEach(function (kind) {
+      actions.appendChild(tools[kind]);
+    });
+    actions.appendChild(moreBtn);
     actions.appendChild(el("span", "ed-gap"));
     actions.appendChild(undoBtn);
     actions.appendChild(redoBtn);
+    actions.appendChild(historyBtn);
     actions.appendChild(reloadBtn);
     var insertMenu = el("div", "ed-menu ed-insert");
     insertMenu.hidden = true;
@@ -2325,12 +2379,16 @@ ${EDIT_PANEL}
       others: others,
       tag: tag,
       dropLine: dropLine,
+      dropParent: dropParent,
+      ghost: ghost,
       guideX: guideX,
       guideY: guideY,
       measure: measure,
       textBtn: textBtn,
       copyBtn: copyBtn,
-      insertBtn: insertBtn,
+      tools: tools,
+      moreBtn: moreBtn,
+      historyBtn: historyBtn,
       insertMenu: insertMenu,
       menu: menu,
       bar: bar,
@@ -2358,7 +2416,8 @@ ${EDIT_PANEL}
     var was = !ui.menu.hidden || !ui.insertMenu.hidden;
     ui.menu.hidden = true;
     ui.insertMenu.hidden = true;
-    ui.insertBtn.removeAttribute("aria-expanded");
+    ui.moreBtn.removeAttribute("aria-expanded");
+    ui.tools.image.removeAttribute("aria-expanded");
     return was;
   }
 
@@ -2376,34 +2435,16 @@ ${EDIT_PANEL}
     box.appendChild(b);
   }
 
-  function toggleInsert() {
-    var box = ui.insertMenu;
-    if (!box.hidden) return closeMenus();
-    closeMenus();
-    box.textContent = "";
-    var where = selected && !whyNot(selected) ? (holds(selected) ? "Inside " + label(selected) : "After " + label(selected)) : "At the end of the page";
-    box.appendChild(el("div", "ed-menu-note", where));
-    menuItem(box, "Frame", "", function () {
-      insert("frame");
-    }, true);
-    menuItem(box, "Rectangle", "", function () {
-      insert("rect");
-    }, true);
-    menuItem(box, "Text", "", function () {
-      insert("text");
-    }, true);
-    var imageNote = el("div", "ed-menu-note", "Images in this page's folder\u2026");
-    box.appendChild(imageNote);
-    loadImages(function (list) {
-      imageNote.textContent = list.length ? "Image" : "No images in this page's folder.";
-      list.slice(0, 40).forEach(function (src) {
-        menuItem(box, src, "", function () {
-          insert("image", src);
-        }, true);
-      });
-    });
-    box.hidden = false;
-    ui.insertBtn.setAttribute("aria-expanded", "true");
+  /* Nothing selected, so the panel shows the page, opened at History. */
+  function showHistory() {
+    stopPlacing();
+    selected = null;
+    selection = [];
+    clearState();
+    context = null;
+    armed = null;
+    message = "";
+    showSection("history");
   }
 
   function openContextMenu(x, y) {
@@ -2483,6 +2524,12 @@ ${EDIT_PANEL}
     var alt = event.altKey;
     var shift = event.shiftKey;
     var key = event.key;
+    // The tools. R is Figma's rectangle here, as it is in Figma; Review
+    // mode is a click on the notch away.
+    if (!mod && !alt && !shift && (letter === "f" || letter === "r" || letter === "t")) {
+      return armTool(letter === "f" ? "frame" : letter === "r" ? "rect" : "text"), true;
+    }
+    if (mod && shift && !alt && letter === "k" && ui) return openPop("image", ui.tools.image), true;
     if (!mod && !alt && shift && letter === "a") return addAutoLayout(), true;
     if (!mod && !alt && !shift && letter === "i" && selected) return eyedrop(), true;
     if (mod && alt && !shift && letter === "c" && selected) return copyProperties(), true;
@@ -2516,6 +2563,7 @@ ${EDIT_PANEL}
 
   function release() {
     if (editing) commitText();
+    stopPlacing();
     selected = null;
     selection = [];
     clearState();
@@ -2583,29 +2631,33 @@ ${EDIT_PANEL}
   /* The line that shows where a drop would put the selection. */
   function drawDrop() {
     var line = ui.dropLine;
-    if (!dragging || !drop) {
+    var shown = placing ? (placePress ? placePress.spot : spot) : dragging ? drop : null;
+    var parent = placing && shown && shown.parent && shown.place !== "inside" ? shown.parent : null;
+    place(ui.dropParent, parent);
+    if (placing && shown && !shown.target) shown = null;
+    if (!shown) {
       line.hidden = true;
       return;
     }
     line.hidden = false;
-    line.toggleAttribute("data-box", !!drop.box);
-    if (drop.box) {
-      var b = toHost(drop.box);
+    line.toggleAttribute("data-box", !!shown.box);
+    if (shown.box) {
+      var b = toHost(shown.place === "inside" && shown.target ? shown.target.getBoundingClientRect() : shown.box);
       line.style.left = b.left + "px";
       line.style.top = b.top + "px";
       line.style.width = b.width + "px";
       line.style.height = b.height + "px";
       return;
     }
-    var r = toHost(drop.target.getBoundingClientRect());
-    if (drop.across) {
-      line.style.left = (drop.place === "before" ? r.left : r.right) - 1 + "px";
+    var r = toHost(shown.target.getBoundingClientRect());
+    if (shown.across) {
+      line.style.left = (shown.place === "before" ? r.left : r.right) - 1 + "px";
       line.style.top = r.top + "px";
       line.style.width = "3px";
       line.style.height = r.height + "px";
     } else {
       line.style.left = r.left + "px";
-      line.style.top = (drop.place === "before" ? r.top : r.bottom) - 1 + "px";
+      line.style.top = (shown.place === "before" ? r.top : r.bottom) - 1 + "px";
       line.style.width = r.width + "px";
       line.style.height = "3px";
     }
@@ -2676,6 +2728,10 @@ ${EDIT_PANEL}
       why ||
       (selected ? hint(selected) : "Click a layer to select it. Double-click to go inside, Esc to go up. Right-click for more.");
     ui.status.toggleAttribute("data-warn", !!(styleBlocked || (!selected && why) || (armed && armed === selected)));
+    if (placing) {
+      ui.status.textContent = placingHint();
+      ui.status.setAttribute("data-placing", "");
+    } else ui.status.removeAttribute("data-placing");
     if (dragging) {
       ui.status.textContent = drop && drop.place === "cell"
         ? "Drop to place it in column " + drop.cell.col + ", row " + drop.cell.row + "."
@@ -2701,7 +2757,14 @@ ${EDIT_PANEL}
     setWord(ui.hideBtn, hiddenAll ? "Show" : "Hide");
     ui.deleteBtn.disabled = !all;
     setWord(ui.deleteBtn, armed && armed === selected ? "Delete anyway" : "Delete");
-    ui.insertBtn.disabled = busy || !!editing || !!unavailable || !!stale;
+    var canInsert = !busy && !editing && !unavailable && !stale;
+    for (var kind in ui.tools) {
+      ui.tools[kind].disabled = !canInsert;
+      ui.tools[kind].toggleAttribute("data-armed", !!placing && placing.kind === kind);
+    }
+    ui.moreBtn.disabled = !canInsert;
+    ui.moreBtn.toggleAttribute("data-armed", !!placing && MORE.indexOf(placing.kind) >= 0);
+    ui.historyBtn.disabled = !log.length;
     ui.undoBtn.disabled = !(log.length || serverHistory.undo) || busy || !!stale;
     ui.redoBtn.disabled = !(redone.length || serverHistory.redo) || busy || !!stale;
     ui.reloadBtn.hidden = !stale;
@@ -2770,6 +2833,7 @@ ${EDIT_PANEL}
       if (!active) return;
       // Words being typed are kept, as leaving any editor does.
       if (editing) commitText();
+      stopPlacing();
       press = null;
       dragging = false;
       drop = null;
@@ -2887,7 +2951,7 @@ export const EDIT_CSS = `
 /* the bar: what to do to the selection */
 .osp-overlay .ed-bar {
   position: fixed; z-index: 6; box-sizing: border-box;
-  width: max-content; max-width: min(640px, calc(100vw - 16px));
+  width: max-content; max-width: min(760px, calc(100vw - 16px));
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; border: 1px solid var(--co-line); border-radius: 12px;
   background: var(--co-bg); color: var(--co-fg);
@@ -2905,7 +2969,7 @@ export const EDIT_CSS = `
 .osp-overlay .ed-status { color: var(--co-fg-2); max-width: 600px; font-size: 12px; }
 .osp-overlay .ed-status[data-warn] { color: var(--co-ink); }
 .osp-overlay .ed-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.osp-overlay .ed-gap { width: 6px; }
+.osp-overlay .ed-gap { width: 1px; height: 18px; margin: 0 4px; background: var(--co-line); }
 .osp-overlay .ed-btn {
   all: unset; cursor: pointer; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px;
   height: 28px; padding: 0 10px; border-radius: 8px; white-space: nowrap;
@@ -2943,6 +3007,40 @@ export const EDIT_CSS = `
 .osp-overlay .ed-menu-sep { height: 1px; margin: 4px 6px; background: var(--co-line); }
 .osp-overlay .ed-menu-note { padding: 6px 8px 2px; color: var(--co-fg-3); font-size: 11px; }
 
+/* the insert tools: icons with their key, blue while one is out */
+.osp-overlay .ed-btn.ed-tool { position: relative; padding: 0 7px; }
+.osp-overlay .ed-tool .ed-key { position: absolute; right: 1px; bottom: 0; font: 600 8.5px/1 Inter, ui-sans-serif, system-ui, sans-serif; color: var(--co-fg-3); pointer-events: none; }
+.osp-overlay .ed-btn.ed-tool[data-armed] { background: #2f6fed; border-color: #2f6fed; }
+.osp-overlay .ed-btn.ed-tool[data-armed] svg, .osp-overlay .ed-tool[data-armed] .ed-key { color: #fff; }
+.osp-overlay .ed-more svg:last-child { width: 10px; margin-left: -3px; }
+.osp-overlay .ed-status[data-placing] { color: #2f6fed; font-weight: 500; }
+.osp-overlay .ed-menu-rich { justify-content: flex-start; gap: 8px; }
+.osp-overlay .ed-menu-rich svg { color: var(--co-fg-2); flex: none; }
+.osp-overlay .ed-menu-rich span { flex: 1; }
+.osp-overlay .ed-menu-rich kbd { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.osp-overlay .ed-menu-rich:hover:not(:disabled) svg { color: #fff; }
+.osp-overlay .ed-insert[data-pop="image"] { width: 300px; }
+.osp-overlay .ed-search {
+  box-sizing: border-box; width: calc(100% - 8px); height: 28px; margin: 6px 4px; padding: 0 8px;
+  border: 1px solid var(--co-line); border-radius: 6px; background: var(--co-bg-2); color: var(--co-fg); font: inherit;
+}
+.osp-overlay .ed-search:focus { outline: 2px solid #2f6fed; outline-offset: -1px; }
+.osp-overlay .ed-thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 4px 4px; }
+.osp-overlay .ed-thumb {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--co-line); border-radius: 6px; background: var(--co-bg);
+}
+.osp-overlay .ed-thumb:hover, .osp-overlay .ed-thumb:focus-visible { outline: 2px solid #2f6fed; outline-offset: -1px; }
+.osp-overlay .ed-thumb img, .osp-overlay .ed-thumb-none { display: grid; place-items: center; width: 100%; height: 58px; object-fit: cover; background: var(--co-bg-2); color: var(--co-fg-3); }
+.osp-overlay .ed-thumb span { padding: 2px 5px; font-size: 10.5px; color: var(--co-fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.osp-overlay .ed-thumbs-empty { grid-column: 1 / -1; margin: 4px; color: var(--co-fg-3); white-space: normal; }
+
+/* where a new layer lands: its container, and the size being drawn */
+.osp-overlay .ed-drop-parent { outline: 1px dashed #2f6fed; outline-offset: -1px; }
+.osp-overlay .ed-ghost { position: fixed; pointer-events: none; outline: 1.5px solid #2f6fed; background: rgba(47, 111, 237, 0.08); }
+.osp-overlay .ed-ghost[hidden] { display: none; }
+.osp-overlay .ed-ghost span { position: absolute; left: 50%; top: 100%; transform: translate(-50%, 4px); padding: 0 5px; border-radius: 3px; background: #2f6fed; color: #fff; font-size: 11px; white-space: nowrap; }
+
 /* a device's width, over the page */
 .osp-overlay .ed-device {
   position: fixed; inset: 0; z-index: 0; pointer-events: auto;
@@ -2976,6 +3074,8 @@ export const EDIT_CSS = `
 .osp-overlay .ep-many { font-weight: 600; }
 .osp-overlay .ep-why { color: var(--co-ink); font-size: 11px; line-height: 15px; }
 .osp-overlay .ep-sec { border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ep-sec[data-flash] { animation: ep-flash 1.4s var(--co-ease); }
+@keyframes ep-flash { 0%, 35% { background: rgba(47, 111, 237, 0.1); } 100% { background: transparent; } }
 .osp-overlay .ep-sec-head { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
 .osp-overlay .ep-sec-toggle { all: unset; cursor: pointer; flex: 1; display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 6px 0 12px; font-weight: 600; font-size: 11px; color: var(--co-fg); }
 .osp-overlay .ep-sec-toggle svg { color: var(--co-fg-3); transition: transform 0.15s var(--co-ease); }

@@ -12,6 +12,7 @@ import {
   lineAt,
   ruleStart,
   planOp,
+  insertMarkup,
   prepareForEditing,
   shiftStamp,
   shiftsOf,
@@ -841,6 +842,34 @@ describe("frame selection, ungroup, insert and paste", () => {
     expect(image).toContain('  <img src="img/cat.png" alt="" style="width: 240px; height: auto">\n</body>');
   });
 
+  it("inserts the pieces a prototype is made of, in the page's own classes", () => {
+    const at = offsetOf(LIST, "<li>Three");
+    const button = stampsAgree(LIST, { op: "insert", at, place: "after", kind: "button", like: { cls: "btn btn-primary" } });
+    expect(button).toContain('    <li>Three</li>\n    <button type="button" class="btn btn-primary">Button</button>\n');
+    const heading = stampsAgree(LIST, { op: "insert", at, place: "before", kind: "heading", like: { tag: "h3", cls: "title" } });
+    expect(heading).toContain('    <h3 class="title">Heading</h3>\n    <li>Three</li>');
+    // A list's items are stamped by the page from the markup's fixed shape,
+    // so only the list itself comes back as created.
+    const plan = planOp(LIST, { op: "insert", at, place: "after", kind: "list" });
+    if (!plan.ok) throw new Error(plan.error);
+    const list = applyEdits(LIST, plan.edits);
+    expect(list.slice(plan.created!)).toMatch(/^<ul><li>Item<\/li><li>Item<\/li><li>Item<\/li><\/ul>\n/);
+    const items = stamps(prepareForEditing(list, "")).filter((n) => n > plan.created!).slice(0, 3);
+    expect(items).toEqual([4, 17, 30].map((d) => plan.created! + d));
+    expect(insertMarkup("link")).toBe('<a href="#">Link</a>');
+    expect(insertMarkup("input", { like: { cls: "field" } })).toBe('<input class="field" placeholder="Placeholder">');
+    expect(insertMarkup("divider")).toBe("<hr>");
+  });
+
+  it("gives a drawn frame its size in place of its minimum height", () => {
+    expect(insertMarkup("frame", { props: [["width", "240px"], ["height", "120px"]] })).toBe(
+      '<div style="display: flex; flex-direction: column; gap: 8px; padding: 16px; background-color: #ffffff; width: 240px; height: 120px"></div>',
+    );
+    expect(insertMarkup("rect", { props: [["width", "40px"], ["height", "30px"]] })).toBe(
+      '<div style="background-color: #d9d9d9; width: 40px; height: 30px"></div>',
+    );
+  });
+
   it("pastes a copy of a layer into another frame, leaving the original", () => {
     const next = stampsAgree(
       LIST,
@@ -887,6 +916,7 @@ describe("insert, groups and removals through the route", () => {
         copyToPreview: async (from, to) => {
           copied.push(`${from} -> ${to}`);
         },
+        readImage: async (path) => (path === "P/img/cat.png" ? new Uint8Array([137, 80, 78, 71]).buffer : null),
       },
     });
     base = `http://127.0.0.1:${(await server.start()).port}`;
@@ -910,6 +940,18 @@ describe("insert, groups and removals through the route", () => {
     expect(await response.json()).toEqual({ images: ["img/cat.png"] });
   });
 
+  it("shows one of them to the picker from the vault, and nothing else", async () => {
+    const get = (src: string) =>
+      fetch(`${base}/api/image?page=p/index.html&src=${encodeURIComponent(src)}`, { headers: { cookie: `osp-review=${TOKEN}` } });
+    const cat = await get("img/cat.png");
+    expect(cat.status).toBe(200);
+    expect(cat.headers.get("content-type")).toBe("image/png");
+    expect(cat.headers.get("content-security-policy")).toContain("sandbox");
+    expect(new Uint8Array(await cat.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71]));
+    expect((await get("../Other/dog.png")).status).toBe(404);
+    expect((await get("notes.md")).status).toBe(404);
+  });
+
   it("inserts one of them and copies it into the preview; refuses any other", async () => {
     const bad = await call({ hash: hashText(HTML), op: "insert", at: null, place: "inside", kind: "image", src: "dog.png" });
     expect(bad.status).toBe(404);
@@ -918,6 +960,19 @@ describe("insert, groups and removals through the route", () => {
     expect(vault["P/index.html"]).toContain('<img src="img/cat.png" alt=""');
     expect(copied).toEqual(["P/img/cat.png -> p/img/cat.png"]);
     expect(typeof good.data.created).toBe("number");
+  });
+
+  it("copies a look by class names only, and refuses anything else", async () => {
+    const at = HTML.indexOf("<p>");
+    const sneaky = await call({ hash: hashText(HTML), op: "insert", at, place: "after", kind: "button", like: { cls: '"><script>' } });
+    expect(sneaky.status).toBe(400);
+    const level = await call({ hash: hashText(HTML), op: "insert", at, place: "after", kind: "heading", like: { tag: "div" } });
+    expect(level.status).toBe(400);
+    const unknown = await call({ hash: hashText(HTML), op: "insert", at, place: "after", kind: "script" });
+    expect(unknown.status).toBe(400);
+    const good = await call({ hash: hashText(HTML), op: "insert", at, place: "after", kind: "button", like: { cls: "btn primary" } });
+    expect(good.status).toBe(200);
+    expect(vault["P/index.html"]).toContain('<p>Body</p>\n  <button type="button" class="btn primary">Button</button>');
   });
 
   it("takes a declaration away, and the attribute with it", async () => {

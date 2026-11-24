@@ -815,17 +815,86 @@ describe("the edit mode", () => {
       expect(document.querySelector("h2 + p")!.getAttribute("data-osp-src")).toBe("145");
     });
 
-    it("inserts a rectangle after the selection and selects it", async () => {
+    function tool(name: string): HTMLButtonElement {
+      const b = shadow().querySelector(`.ed-tool[aria-label="${name}"]`) as HTMLButtonElement | null;
+      if (!b) throw new Error(`no ${name} tool`);
+      return b;
+    }
+
+    it("puts a rectangle after the selection with R and Enter, and selects it", async () => {
       page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
       open(document.querySelector("p")!);
-      click(actionButton("Insert"));
+      key("r", { code: "KeyR" } as KeyboardEventInit);
+      expect(tool("Rectangle").hasAttribute("data-armed")).toBe(true);
+      expect(status()).toContain("Enter puts it after p");
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 118, end: 118, length: 70 }], created: 118 } });
-      click(Array.from(shadow().querySelectorAll(".ed-menu-item")).find((b) => b.textContent === "Rectangle")!);
+      key("Enter");
       await settle();
       expect(calls[0].body).toMatchObject({ op: "insert", at: 110, place: "after", kind: "rect" });
       const made = document.querySelector("p + div") as HTMLElement;
       expect(made.getAttribute("data-osp-src")).toBe("118");
       expect(made.style.width).toBe("100px");
+      expect(tool("Rectangle").hasAttribute("data-armed")).toBe(false);
+      expect(shadow().querySelector('.ep-sec[data-sec="fill"]')!.hasAttribute("data-flash")).toBe(true);
+    });
+
+    it("places text where the page is clicked, and starts typing", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p><p data-osp-src="120">b</p></main>');
+      boot();
+      enter();
+      click(tool("Text"));
+      const [, b] = Array.from(document.querySelectorAll("p"));
+      document.elementsFromPoint = () => [b];
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 128, end: 128, length: 11 }], created: 128 } });
+      const at = (type: string) => b.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 1, clientY: 1, button: 0 }));
+      at("pointerdown");
+      at("pointerup");
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "insert", at: 120, place: "after", kind: "text" });
+      expect(document.querySelectorAll("p")).toHaveLength(3);
+      expect(document.querySelectorAll("p")[2].isContentEditable || document.querySelectorAll("p")[2].getAttribute("contenteditable")).toBeTruthy();
+    });
+
+    it("adds a button in the page's own classes from More", async () => {
+      page("", '<main data-osp-src="100"><button data-osp-src="110" class="btn">a</button><button data-osp-src="140" class="btn btn-primary">b</button></main>');
+      boot();
+      enter();
+      click(shadow().querySelector('.ed-tool[aria-label="More layers"]'));
+      const item = Array.from(shadow().querySelectorAll(".ed-menu-rich")).find((x) => x.textContent?.startsWith("Button"))!;
+      expect(item.textContent).toContain("like \u201cb\u201d");
+      click(item);
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 200, end: 200, length: 60 }], created: 200 } });
+      key("Enter");
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "insert", at: null, place: "inside", kind: "button", like: { cls: "btn btn-primary" } });
+      const made = document.querySelectorAll("button")[2];
+      expect(made.className).toBe("btn btn-primary");
+      expect(made.getAttribute("type")).toBe("button");
+    });
+
+    it("puts a tool down with Esc, without touching the selection", () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
+      open(document.querySelector("p")!);
+      key("f", { code: "KeyF" } as KeyboardEventInit);
+      expect(tool("Frame").hasAttribute("data-armed")).toBe(true);
+      expect(document.getElementById("osp-placing")).not.toBeNull();
+      key("Escape");
+      expect(tool("Frame").hasAttribute("data-armed")).toBe(false);
+      expect(document.getElementById("osp-placing")).toBeNull();
+      expect(calls).toHaveLength(0);
+      expect(shadow().querySelector(".ed-sel")!.hasAttribute("hidden")).toBe(false);
+    });
+
+    it("opens History from the bar", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
+      open(document.querySelector("p")!);
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 110, end: 110, length: 22 }] } });
+      key("h", { metaKey: true, shiftKey: true, code: "KeyH" } as KeyboardEventInit);
+      await settle();
+      click(actionButton("History"));
+      const history = shadow().querySelector('.ep-sec[data-sec="history"]')!;
+      expect(history.hasAttribute("data-flash")).toBe(true);
+      expect(history.textContent).toContain("Latest");
     });
 
     it("copies a layer's look and pastes only what differs", async () => {
