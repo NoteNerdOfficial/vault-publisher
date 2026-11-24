@@ -4,7 +4,7 @@ import { createRenderHost, renderFile } from "../render/renderNote";
 import { waitForDataviewIndex } from "../render/settle";
 import { withDataviewRefreshSuspended } from "../render/dataviewRefresh";
 import { LinkResolver, LinkTarget, rewriteLinks } from "./links";
-import { frameHtmlEmbeds } from "./htmlEmbed";
+import { armFrames, frameHtmlEmbeds } from "./htmlEmbed";
 import { hashContent } from "./incremental";
 
 /** Where the build writes each page's content fingerprint. */
@@ -1178,7 +1178,9 @@ export async function buildSite(
         rendered.push({
           url,
           title,
-          html: renderedNote.html,
+          // The frames get their addresses only now, as text: in the live
+          // document they would have loaded. See FRAME_SRC_ATTR.
+          html: armFrames(renderedNote.html),
           headings,
           outgoing,
           nav: navNoteFor(app, file, url, title, config),

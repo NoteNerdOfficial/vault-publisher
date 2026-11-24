@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { DEFAULT_EMBED_HEIGHT, frameHtmlEmbeds, parseEmbedSize } from "./htmlEmbed";
+import {
+  DEFAULT_EMBED_HEIGHT,
+  FRAME_SRC_ATTR,
+  armFrames,
+  frameHtmlEmbeds,
+  parseEmbedSize,
+} from "./htmlEmbed";
 import { LinkResolver, rewriteLinks } from "./links";
 
 const resolver = new LinkResolver([
@@ -25,6 +31,13 @@ function render(html: string, fromUrl = "notes/spec.html"): HTMLElement {
   return root;
 }
 
+/** The address a frame ends up with in the published HTML. */
+function publishedSrc(root: HTMLElement): string | null {
+  const out = document.createElement("template");
+  out.innerHTML = armFrames(root.innerHTML);
+  return out.content.querySelector("iframe")?.getAttribute("src") ?? null;
+}
+
 /** Roughly what Obsidian draws for a file type it has no embed for. */
 function placeholder(src: string, alt = src): string {
   return (
@@ -44,10 +57,21 @@ describe("frameHtmlEmbeds", () => {
     expect(root.querySelector(".internal-embed")).toBeNull();
 
     const frame = root.querySelector("iframe");
-    expect(frame?.getAttribute("src")).toBe("../proto/index.html");
+    expect(publishedSrc(root)).toBe("../proto/index.html");
     expect(frame?.getAttribute("loading")).toBe("lazy");
     expect(frame?.getAttribute("title")).toBe("Checkout flow");
     expect(root.querySelector(".osp-html-embed-title")?.textContent).toBe("Checkout flow");
+  });
+
+  it("never gives a frame in the live document an address to load", () => {
+    // In Obsidian's own document a frame with a src loads the prototype, and
+    // the build tears it down mid-request: that froze Obsidian behind a
+    // main-process error dialog. The address waits for serialization.
+    const root = render(placeholder("proto/index.html"));
+    const frame = root.querySelector("iframe")!;
+    expect(frame.hasAttribute("src")).toBe(false);
+    expect(frame.getAttribute(FRAME_SRC_ATTR)).toBe("../proto/index.html");
+    expect(armFrames(root.innerHTML)).not.toContain(FRAME_SRC_ATTR);
   });
 
   it("links to the page on its own, made relative like any link", () => {
@@ -67,7 +91,7 @@ describe("frameHtmlEmbeds", () => {
   it("names a page without a title by its file", () => {
     const root = render(placeholder("chart.html"), "spec.html");
     expect(root.querySelector(".osp-html-embed-title")?.textContent).toBe("chart.html");
-    expect(root.querySelector("iframe")?.getAttribute("src")).toBe("./chart.html");
+    expect(publishedSrc(root)).toBe("./chart.html");
   });
 
   it("takes its height from the link text", () => {

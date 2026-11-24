@@ -158,7 +158,8 @@ export function frameHtmlEmbeds(
     stage.setAttribute("style", `height: ${height}px`);
 
     const frame = doc.createElement("iframe");
-    frame.setAttribute("src", href);
+    // Not `src` yet: see FRAME_SRC_ATTR.
+    frame.setAttribute(FRAME_SRC_ATTR, href);
     frame.setAttribute("title", name);
     frame.setAttribute("loading", "lazy");
     frame.setAttribute("style", `height: ${height}px`);
@@ -213,4 +214,26 @@ function liftFigures(root: HTMLElement): void {
     for (const figure of figures) group.appendChild(figure);
     paragraph.replaceWith(group);
   }
+}
+
+/**
+ * Where a frame's address waits until the page is serialized.
+ *
+ * The build works in Obsidian's own document, so an <iframe> with a `src`
+ * starts loading the prototype inside Obsidian the moment it is attached --
+ * and the build attaches each one twice (made, then lifted out of its
+ * paragraph) before throwing the container away. Each of those loads is a
+ * request to Obsidian's main process for an app:// page, abandoned by a
+ * frame that no longer exists, and roughly one build in two lost that race:
+ * the main process threw "Cannot read properties of undefined (reading
+ * 'origin')" into a modal dialog that froze the whole app until it was
+ * dismissed. A frame with no `src` loads nothing, so the address rides in
+ * this attribute and becomes a `src` only in the serialized HTML, which no
+ * live document ever loads.
+ */
+export const FRAME_SRC_ATTR = "data-osp-frame-src";
+
+/** Turns parked frame addresses into real ones, in serialized HTML. */
+export function armFrames(html: string): string {
+  return html.split(` ${FRAME_SRC_ATTR}="`).join(` src="`);
 }

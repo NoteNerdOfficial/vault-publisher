@@ -5,6 +5,7 @@
  * which is a real copy rather than a link back to this repo, so a build here
  * does not reach it on its own.
  */
+import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -41,6 +42,15 @@ const { id, version } = JSON.parse(
  * nobody asked for, and failing with instructions is cheaper than that.
  */
 const PATH_FILE = join(root, ".vault-path");
+
+/**
+ * Where the plugin logs each auto-run, relative to the vault. Mirrors
+ * `OUTPUT_FOLDER` in src/main.ts, which this script cannot import.
+ */
+const RUN_LOG = join("_vault-publisher", "run-log.md");
+
+/** How long a reload's auto-run may take before this stops waiting. */
+const AUTO_RUN_LIMIT_MS = 180_000;
 
 function configuredVault() {
   if (process.argv[2]) return process.argv[2];
@@ -101,6 +111,10 @@ const marker = join(target, ".hotreload");
 const markerWasMissing = !existsSync(marker);
 if (markerWasMissing) writeFileSync(marker, "");
 
+// Read before the copy, so a run the reload starts can be told from an old one.
+const runLog = join(vault, RUN_LOG);
+const runLogBefore = existsSync(runLog) ? readFileSync(runLog, "utf8").length : 0;
+
 /*
  * `styles.css` is optional to Obsidian but not to us once it exists: a copy
  * that skipped it would leave the running plugin with last deploy's rules,
@@ -120,7 +134,7 @@ for (const file of ["main.js", "manifest.json", "styles.css"]) {
 
 console.log(`deployed ${id} v${version} -> ${target}`);
 if (markerWasMissing) console.log("wrote .hotreload (this folder was not watched)");
-reportVaultState(vault);
+if (reportVaultState(vault)) await waitForAutoRun(vault, target);
 
 /**
  * Says whether Obsidian actually has this vault open.
@@ -140,23 +154,34 @@ function reportVaultState(vaultPath) {
     homedir(),
     "Library/Application Support/obsidian/obsidian.json",
   );
-  if (!existsSync(registry)) return;
+  if (!existsSync(registry)) return false;
 
   let vaults;
   try {
     vaults = Object.values(JSON.parse(readFileSync(registry, "utf8")).vaults);
   } catch {
-    return;
+    return false;
   }
 
   const wanted = resolve(vaultPath);
   const entry = vaults.find((v) => resolve(v.path) === wanted);
   const open = vaults.filter((v) => v.open).map((v) => v.path);
 
+  /*
+   * The list says which vaults were open when Obsidian last ran, and keeps
+   * saying so after it quits. Reporting "open" from that alone is how a
+   * deploy into a closed Obsidian once read as a live one.
+   */
+  if (entry?.open && !obsidianRunning()) {
+    console.log("");
+    console.log("WARNING: Obsidian is not running. The vault was open when it last quit,");
+    console.log("  so it will load this build when Obsidian starts, but nothing runs it now.");
+    return false;
+  }
+
   if (entry?.open) {
     console.log("vault is open in Obsidian");
-    reportHotReload(vaultPath);
-    return;
+    return reportHotReload(vaultPath);
   }
 
   console.log("");
@@ -168,6 +193,71 @@ function reportVaultState(vaultPath) {
   console.log(`  deployed to: ${wanted}`);
   console.log(`  open now:    ${open.length ? open.join(", ") : "(none)"}`);
   console.log("  Nothing will run until it is opened as a vault.");
+  return false;
+}
+
+/** Whether an Obsidian process exists. Unknown counts as running. */
+function obsidianRunning() {
+  try {
+    execFileSync("pgrep", ["-x", "Obsidian"], { stdio: "ignore" });
+    return true;
+  } catch (error) {
+    // pgrep exits 1 when nothing matched; anything else means it could not
+    // answer, and a warning built on that would be a guess.
+    return error?.status !== 1;
+  }
+}
+
+/**
+ * Waits out the auto-run the reload starts, and says how it went.
+ *
+ * With autoRun set, every load of the plugin -- so every hot reload --
+ * rebuilds the preview: every note rendered, the folder rewritten. Obsidian
+ * is slow to answer anything for the seconds that takes, and a command or a
+ * debugger call sent straight after a deploy waits behind it. That was
+ * taken for a freeze twice before the run log showed what it was. So the
+ * deploy is not finished until that run is, and a run that failed fails the
+ * deploy rather than scrolling past as a notice.
+ */
+async function waitForAutoRun(vaultPath, pluginDir) {
+  let mode = "none";
+  try {
+    mode = JSON.parse(readFileSync(join(pluginDir, "data.json"), "utf8")).autoRun ?? "none";
+  } catch {
+    // No settings yet means the default, which runs nothing.
+  }
+  if (mode === "none") return;
+
+  console.log(`autoRun is "${mode}": waiting for the reload's run to finish...`);
+  const logPath = join(vaultPath, RUN_LOG);
+  const startedAt = Date.now();
+  let sawStart = false;
+
+  while (Date.now() - startedAt < AUTO_RUN_LIMIT_MS) {
+    await new Promise((r) => setTimeout(r, 500));
+    const fresh = existsSync(logPath) ? readFileSync(logPath, "utf8").slice(runLogBefore) : "";
+    // A log that shrank was rewritten; read it all rather than miss the run.
+    const text = fresh || (existsSync(logPath) && readFileSync(logPath, "utf8").length < runLogBefore
+      ? readFileSync(logPath, "utf8")
+      : "");
+    if (/ start /.test(text)) sawStart = true;
+    const failed = text.match(/ (FAILED [^\n]*)/);
+    if (failed) {
+      console.log(`autoRun ${failed[1]} -- see ${RUN_LOG}`);
+      process.exitCode = 1;
+      return;
+    }
+    const done = text.match(/ (done [^\n]*)/);
+    if (done) {
+      console.log(`autoRun ${done[1]}; Obsidian is free again`);
+      return;
+    }
+    if (!sawStart && Date.now() - startedAt > 20_000) {
+      console.log("NOTE: no auto-run started within 20s of the copy, so the reload may not have happened.");
+      return;
+    }
+  }
+  console.log(`NOTE: the auto-run was still going after ${AUTO_RUN_LIMIT_MS / 1000}s. Obsidian may be slow to answer until it ends.`);
 }
 
 /**
@@ -196,12 +286,12 @@ function reportHotReload(vaultPath) {
     enabled = JSON.parse(readFileSync(enabledList, "utf8"));
   } catch {
     // No list, or unreadable: say nothing rather than guess either way.
-    return;
+    return false;
   }
 
   if (enabled.includes("hot-reload")) {
     console.log("hot-reload is enabled: the plugin will reload on its own");
-    return;
+    return true;
   }
 
   const installed = existsSync(
@@ -222,4 +312,5 @@ function reportHotReload(vaultPath) {
       ? "  pick them up, or enable hot-reload to stop having to."
       : "  pick them up, or install pjeby/hot-reload to stop having to.",
   );
+  return false;
 }
