@@ -193,7 +193,7 @@ because vaults are full of HTML nobody wrote as a web page: saved articles, a
 plugin's bundled help, an export somebody made once.
 
 The one thing that can be added is the review overlay, and only if you ask
-for it: with **Leave a review → Include in the published site** on, a prototype gets
+for it: with **Comments and editing → Include in the published site** on, a prototype gets
 the same comment layer as every note, so a reviewer can pin a comment to it on
 the live site. It is appended after your file between two `osp-review`
 comments, never inserted into your markup, and it groups comments under the
@@ -409,13 +409,18 @@ It runs over a local preview by default and can be shipped into the published
 site as well, which is a separate switch, as is letting a reader of that site
 write rather than only read.
 
-The settings are in two sections. **Leave a review** has two halves:
+The overlay is switched on by **Include comment and edit tools**, next to
+**Build a preview**. The same switch brings Edit mode (see **Editing a
+prototype from its preview** below). The settings are in two sections.
+**Comments and editing** has three parts:
 
-- **In your preview:** the name your comments are signed with, the vault
-  folder the review is kept in, and **Import review comments**. The name is
-  never written into the published site.
-- **On the published site:** **Include in the published site**, then **Let
-  readers write comments**, then **How readers' comments reach you**:
+- **Comments in your preview:** the name your comments are signed with, the
+  vault folder the review is kept in, and **Import review comments**. The
+  name is never written into the published site.
+- **Edit mode:** **Open code in**, the app the Code section opens a file in.
+- **Comments on the published site:** **Include in the published site**,
+  then **Let readers write comments**, then **How readers' comments reach
+  you**:
   - **A file they send you**: a reader exports their comments and sends you
     the file, to the address you give in **Address shown when a reader
     exports**.
@@ -542,6 +547,79 @@ comments, bring them into the vault first, then file from a preview. Comments
 shared as GitHub issues come in with a sync. Otherwise a reader exports their
 comments and you import them.
 
+## Editing a prototype from its preview
+
+An HTML page published as-is can be edited in the preview, with a panel that
+works like Figma's. The notch gets a fourth mode, the pencil, and what you
+change is written straight into the page's file in the vault. There is no
+separate design file to keep in step with the code.
+
+![Edit mode on a pricing page: the middle plan card is selected, with its
+size and name on the page, a bar under the page with Edit text, Duplicate,
+Hide, Delete and Insert, and the Design panel on the right showing the
+card's auto layout, sizing, appearance, fill and stroke.](media/edit-mode.png)
+
+Edit mode needs **Publish HTML files as-is** and **Include comment and edit
+tools**. It exists only in a preview opened from the plugin, because the
+plugin's local server is what writes the file. A published site never
+carries it, even with comments switched on there.
+
+**Selecting.** Click a layer to select it, double-click to go inside it, and
+press Esc to go back up. Shift-click adds layers to the selection.
+Right-click opens a menu with the same actions as the bar.
+
+**The bar** under the page has **Edit text**, **Duplicate**, **Hide**,
+**Delete**, **Insert** (a frame, a rectangle, text, or an image from the
+page's folder), and **Undo** and **Redo**. Drag a layer to move it, or to
+reorder it inside its parent. Hold Alt while dragging to drag a copy.
+
+**The panel** docks to the left or the right and has two tabs:
+
+- **Design**, for the selected layers: Position, Auto layout (direction,
+  wrap or grid, alignment, gap, padding, clip content), Sizing (fixed, hug
+  contents or fill container, with minimum and maximum), Appearance
+  (opacity, corner radius, blend), Text, Fill (colours, gradients, how an
+  image fills), Stroke, Effects (shadows and blurs), State and Code. With
+  nothing selected, it shows the page: its background, the page at phone and
+  tablet sizes, its colour and size variables, the edit history, and the
+  shortcuts.
+- **Layers**, the page as a tree, with search, a toggle to show or hide each
+  layer, and drag to reorder.
+
+**Several layers at once.** With more than one layer selected, a change in
+the panel applies to all of them. Shift+A adds auto layout. Cmd+G frames the
+selection and Cmd+Shift+G ungroups it. Cmd+Alt+C and Cmd+Alt+V copy and paste
+properties from one layer to others.
+
+**Where a change goes.** A value set on the layer's own `style` is changed
+there. A value that comes from a stylesheet rule shared by other layers asks
+first whether to change only this layer or every layer the rule styles. A
+colour can be picked from the page's variables and colours, or made into a
+new variable. **State** shows a layer as hovered, pressed or focused, so
+those styles can be edited too.
+
+**Code** shows where the layer starts in its file, and where each rule that
+styles it is, as a file and line. Click a location to copy it, or use the
+**Open in** link to open the file at that line, in the app chosen under
+**Comments and editing → Open code in**: VS Code by default, or Cursor,
+Windsurf, Zed, VS Code Insiders, Obsidian, or any app with a link format of
+its own. Obsidian opens the file but not the line.
+
+**Measuring and nudging.** Hold Alt over another layer to see the distances
+between it and the selected one. The arrow keys nudge the selection by 1px,
+and by 10px with Shift. I picks a colour from the screen (Chromium browsers
+only).
+
+**Safety.** An edit changes only the characters it has to, so a diff of the
+file shows the change and nothing else. Before the first edit to a file in
+each preview session, a copy of the file is kept in the review folder, under
+`edit-backups/`. Every edit in a session can be undone from the bar or from
+History.
+
+Some things it does not do yet. Gap and padding fields do not offer size
+variables. Putting a detached layer back in the flow keeps the fixed width it
+was given. The panel floats over the page rather than pushing it aside.
+
 ## Layout
 
 ```
@@ -602,7 +680,8 @@ src/publish/    turning rendered HTML into a site
                   asks for them after the page is written
   lockHelpers.ts  the decrypting and file typing those two scripts share
   buildSite.ts    selection, render, assemble
-src/overlay/    reviewing a built site, and getting the comments back
+src/overlay/    reviewing a built site, getting the comments back, and
+                editing an as-is page from its preview
   overlayScript.ts  the overlay as it runs in the browser
   overlayCss.ts     its stylesheet
   types.ts          its data model
@@ -614,6 +693,14 @@ src/overlay/    reviewing a built site, and getting the comments back
   relay.ts          turning a review comment into an issue in a tracker
   shared.ts         comments shared as GitHub issues: the marker in an
                     issue's body, and reading an issue back as a comment
+  edit.ts           Edit mode's writes: each edit planned against the file
+                    as it is now, touching only the characters it must
+  editCss.ts        changing one declaration in a style attribute or a rule
+  editScript.ts     Edit mode as it runs in the browser: selecting, the
+                    bar, and sending edits
+  editPanel.ts      the Design and Layers panel
+  editTools.ts      multi-select, framing, inserting, states, measuring
+  editorLinks.ts    links that open a file at a line in your own editor
 src/tracker/    the trackers a comment can be filed with
   jira.ts, asana.ts   per-provider request and response shapes
   request.ts          the one HTTP call they make, and what to say when it fails
