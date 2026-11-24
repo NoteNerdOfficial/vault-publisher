@@ -500,7 +500,28 @@ export const OVERLAY_SCRIPT = `(function () {
   }
 
   function sameRoute(a, b) {
-    return portableRoute(a) === portableRoute(b);
+    return routeKey(a) === routeKey(b);
+  }
+
+  /*
+   * A route as compared: page-relative, with its query parameters sorted.
+   *
+   * An application that keeps several things in the query writes them in
+   * the order they were last set, so \`?week=2&tab=home\` and
+   * \`?tab=home&week=2\` are one screen reached two ways. Compared as
+   * strings they were two: the pin was hidden on the second, and a click on
+   * its comment reloaded the page it was already on.
+   */
+  function routeKey(route) {
+    var text = portableRoute(route);
+    if (!text) return text;
+    var cut = text.indexOf("#");
+    var hash = cut === -1 ? "" : text.slice(cut);
+    var rest = cut === -1 ? text : text.slice(0, cut);
+    var q = rest.indexOf("?");
+    if (q === -1) return text;
+    var params = rest.slice(q + 1).split("&").filter(Boolean).sort();
+    return rest.slice(0, q) + (params.length ? "?" + params.join("&") : "") + hash;
   }
 
   /*
@@ -5018,15 +5039,33 @@ export const OVERLAY_SCRIPT = `(function () {
     }
 
     /*
+     * Another screen of this application, by its address.
+     *
+     * Asked before the deck, because an application that keeps its screen
+     * in the address -- \`?tab=settings\`, \`#/cart\` -- draws that screen
+     * from it, and the address is the only way to ask for it. Its tabs may
+     * also be siblings shown one at a time, which reads as a deck, and when
+     * the deck was asked first the click swapped which tab panel was
+     * visible and left the application where it was: the tab bar, the
+     * query and everything drawn from it still on the old screen.
+     *
+     * A deck is not affected. Every comment in it carries the same route --
+     * its pages were never in the address bar -- so this says nothing, and
+     * the deck is turned below. Where both differ, the address is followed
+     * and the page is turned once the screen has arrived (\`chaseMark\`).
+     */
+    if (!onThisRoute(next)) {
+      crossTo(next);
+      return;
+    }
+
+    /*
      * Another page of a deck, which is this document and not a navigation.
      *
-     * Asked before the route, and that order matters as much as the one
-     * above. Every comment in a deck carries the same route -- the deck's
-     * pages were never in the address bar -- so \`onThisRoute\` says yes to
-     * all of them and this used to fall straight into the branch below: the
-     * card opened over whichever page happened to be up, \`revealMark\` found
-     * no pin to scroll to, and nothing turned the deck. The pin the
-     * reviewer had just clicked was on another page the whole time.
+     * Every comment in a deck carries the same route, so the route says
+     * nothing here; this used to be missing, and the card opened over
+     * whichever page happened to be up while the pin the reviewer had just
+     * clicked was on another page the whole time.
      */
     /*
      * The same question the pin is drawn by, so the two cannot disagree. It
@@ -5041,26 +5080,22 @@ export const OVERLAY_SCRIPT = `(function () {
       return;
     }
 
-    if (onThisRoute(next)) {
-      // On a screen the frame is not showing: send the frame there first.
-      if (next.frame && !onFrameRoute(next) && sendFrameTo(next)) {
-        glide();
-        openPopup(next.id);
-        chaseMark(next);
-        return;
-      }
-      // On the right address but another of its pages: turn the screen, as
-      // a deck is turned. See \`onFrameView\`.
-      if (next.frame && !onFrameView(next)) {
-        turnToFramePage(next);
-        return;
-      }
+    // On a screen the frame is not showing: send the frame there first.
+    if (next.frame && !onFrameRoute(next) && sendFrameTo(next)) {
       glide();
       openPopup(next.id);
-      revealMark(next);
+      chaseMark(next);
       return;
     }
-    crossTo(next);
+    // On the right address but another of its pages: turn the screen, as
+    // a deck is turned. See \`onFrameView\`.
+    if (next.frame && !onFrameView(next)) {
+      turnToFramePage(next);
+      return;
+    }
+    glide();
+    openPopup(next.id);
+    revealMark(next);
   }
 
   /*
@@ -5162,7 +5197,7 @@ export const OVERLAY_SCRIPT = `(function () {
   function crossTo(next) {
     var there = splitRoute(portableRoute(next.route));
     var here = splitRoute(currentRoute());
-    if (there.base !== here.base) {
+    if (routeKey(there.base) !== routeKey(here.base)) {
       var href = routeHref(there.base);
       location.href = href + deepQuery(href, next.id) + there.hash;
       return;
@@ -5289,6 +5324,16 @@ export const OVERLAY_SCRIPT = `(function () {
       // or two, so which page is up is re-asked on every look.
       checkView();
       blocks = blockIndex();
+      /*
+       * The address reached, and the page under it still another one: an
+       * application whose screen is in the address, and whose tabs also
+       * read as a deck, has drawn its screen now. Turned only if the
+       * application did not get there itself.
+       */
+      if (comment.view && onThisRoute(comment) && !onThisView(comment)) {
+        turnToView(comment.view);
+        redrawForView();
+      }
       /*
        * A frame sent to another address loads its first page; the page the
        * comment is on is turned to once it has.
@@ -7658,7 +7703,13 @@ export const OVERLAY_SCRIPT = `(function () {
     // clicked the row in should still be open when they arrive.
     setMode("review");
     openPopup(comment.id);
-    revealMark(comment);
+    /*
+     * An application loaded at the comment's address draws its screen in
+     * its own time, and may need its page turned or its sheet brought back
+     * once it has; \`chaseMark\` waits for all three, as it does for a step
+     * within the page.
+     */
+    if (!revealMark(comment)) chaseMark(comment);
   }
 
   setMode("view");

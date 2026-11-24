@@ -3935,6 +3935,81 @@ describe("stepping across pages", () => {
     click(arrows(other)[1]);
     expect(back.to).toBe("../notes/plan.html?osp-comment=here");
   });
+
+  /*
+   * An application that keeps its screen in the query, and whose tabs are
+   * also siblings shown one at a time -- which reads as a deck. The address
+   * is what it draws from, so that is what a click has to follow.
+   */
+  describe("an app whose screen is in the query", () => {
+    function mountApp(): void {
+      document.head.innerHTML = `<meta name="osp-review" content='${JSON.stringify({
+        sourcePath: "app/index.html",
+        page: "app/index.html",
+        site: "Prototype",
+        reviewer: "Reviewer",
+        stamp: true,
+      })}'>`;
+      document.body.innerHTML =
+        `<main>` +
+        `<section id="home"><p>Home screen.</p></section>` +
+        `<section id="orders" style="display:none"><p>Order history.</p></section>` +
+        `</main>`;
+      search("/app/index.html?week=2&tab=home");
+    }
+
+    function seedApp(over: Partial<OverlayComment>): void {
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify([
+          row({
+            id: "there",
+            page: "app/index.html",
+            sourcePath: "app/index.html",
+            text: "On the orders tab.",
+            ...over,
+          }),
+        ]),
+      );
+    }
+
+    it("follows the address rather than turning the tabs", () => {
+      mountApp();
+      seedApp({ route: "./?week=1&tab=orders", view: "#orders" });
+      const shadow = run();
+      const went = navigation();
+      mode(shadow, "review");
+      click(shadow.querySelector(".co-row"));
+
+      expect(went.to).toBe("index.html?week=1&tab=orders&osp-comment=there");
+      // The app draws its own tab from the address; the overlay did not.
+      expect((document.getElementById("orders") as HTMLElement).style.display).toBe("none");
+    });
+
+    it("reads the same query in another order as the same screen", () => {
+      mountApp();
+      seedApp({ route: "./?tab=home&week=2", x: 5, y: 5 });
+      const shadow = run();
+      const went = navigation();
+      mode(shadow, "review");
+      click(shadow.querySelector(".co-row"));
+
+      expect(went.to).toBeNull();
+      expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(1);
+    });
+
+    it("still turns a deck, whose pages share one address", () => {
+      mountApp();
+      seedApp({ route: "./?week=2&tab=home", view: "#orders" });
+      const shadow = run();
+      const went = navigation();
+      mode(shadow, "review");
+      click(shadow.querySelector(".co-row"));
+
+      expect(went.to).toBeNull();
+      expect((document.getElementById("orders") as HTMLElement).style.display).not.toBe("none");
+    });
+  });
 });
 
 /**
