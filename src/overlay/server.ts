@@ -49,6 +49,10 @@ import {
   inlineScripts,
   retypeInScripts,
   scriptWords,
+  elementSource,
+  jsonNamed,
+  resolveBeside,
+  type ScriptMatch,
   linkedScripts,
   linkedStylesheets,
   type ScriptClue,
@@ -58,6 +62,7 @@ import {
   shiftsOf,
 } from "./edit";
 import { editInjection } from "./editScript";
+import { diffText, lineDiff } from "./lineDiff";
 import { isPropertyName, isSafeSelector, isSafeValueOrRemoval, isWidthQuery } from "./editCss";
 
 /** Everything the server is allowed to touch, so it can touch nothing else. */
@@ -114,6 +119,11 @@ export interface EditStore {
   copyToPreview?(vaultPath: string, previewPath: string): Promise<void>;
   /** A vault image's bytes, for Insert's picker to show before it is in the preview. */
   readImage?(vaultPath: string): Promise<ArrayBuffer | null>;
+  /**
+   * Saves a change request from Edit mode's Describe stack as a note in the
+   * vault, and says where. Given the page's vault path and the request.
+   */
+  saveChangeRequest?(pageVaultPath: string, request: string): Promise<string>;
   /** A link that opens a vault file at a line in the chosen editor, or null for none. */
   editorLink?(vaultPath: string, line: number, column: number): { url: string; name: string } | null;
 }
@@ -384,6 +394,8 @@ export class ReviewServer {
   private readonly history = new Map<string, PageHistory>();
   /** Files already backed up this session. */
   private readonly backedUp = new Set<string>();
+  /** Each file as it was before this session's first edit to it, for Changes. */
+  private readonly originals = new Map<string, string>();
   /** Edits run one at a time, so two quick ones cannot both read the old file. */
   private editQueue: Promise<unknown> = Promise.resolve();
   private editCount = 0;
@@ -578,6 +590,20 @@ export class ReviewServer {
           return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
         }
         return await this.postWhere(request, response, this.options.edit);
+      }
+
+      if (path === "/api/describe-note" && this.options.edit?.saveChangeRequest) {
+        if (request.method !== "POST") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        return await this.postChangeRequest(request, response, this.options.edit);
+      }
+
+      if (path === "/api/changes" && this.options.edit) {
+        if (request.method !== "POST") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        return await this.postChanges(request, response, this.options.edit);
       }
 
       if (path === "/api/edit" && this.options.edit) {
@@ -826,14 +852,24 @@ export class ReviewServer {
         if (!before || after === null || after.length > 2000) return [400, { error: "Expected the old words and the new." }];
         const files = await this.scriptFiles(edit, source, vaultPath, page);
         const verdict = retypeInScripts(files, before);
-        if (!verdict.ok) return [422, { error: verdict.why }];
-        const target = files[verdict.file];
-        const words = scriptWords(target.text.slice(verdict.start, verdict.end), after, verdict.quote);
-        if (!words.ok) return [422, { error: words.why }];
+        // Where the words are written several times, the page says which.
+        const pick = body.pick;
+        let chosen: ScriptMatch[];
+        if (verdict.ok) chosen = [verdict];
+        else if (verdict.many && typeof pick === "number" && Number.isInteger(pick) && verdict.many[pick]) chosen = [verdict.many[pick]];
+        else if (verdict.many && pick === "all" && verdict.many.every((m) => m.file === verdict.many![0].file)) chosen = verdict.many;
+        else return [422, { error: verdict.why }];
+        const target = files[chosen[0].file];
+        const edits: TextEdit[] = [];
+        for (const m of chosen) {
+          const words = scriptWords(target.text.slice(m.start, m.end), after, m.quote);
+          if (!words.ok) return [422, { error: words.why }];
+          edits.push({ start: m.start, end: m.end, text: words.text });
+        }
         file = target.file;
         preview = target.preview;
         text = target.text;
-        planned = { ok: true as const, edits: [{ start: verdict.start, end: verdict.end, text: words.text }] };
+        planned = { ok: true as const, edits };
       } else if (request.op === "rule-style" && typeof request.sheet === "string") {
         const sheetPath = request.sheet;
         const sheetFile = sheetPath.endsWith(".css") ? edit.sourceFor(sheetPath) : null;
@@ -866,6 +902,7 @@ export class ReviewServer {
       if (!this.backedUp.has(file)) {
         await edit.backup(file, text);
         this.backedUp.add(file);
+        this.originals.set(file, text);
       }
       await this.writeEdited(edit, preview, file, text, next);
 
@@ -928,7 +965,68 @@ export class ReviewServer {
         files.push({ file, preview: src, text, ranges: [[0, text.length]] });
       }
     }
+    // The JSON files those scripts fetch, where a prototype often keeps its
+    // words. Resolved against the page, as fetch does, both in the preview
+    // and beside the page in the vault, since a fetched file is carried
+    // only when its folder is published whole.
+    const named = files.flatMap((f) => jsonNamed(f.text, f.ranges));
+    for (const href of [...new Set(named)].slice(0, 10)) {
+      const preview = resolveBeside(href, page);
+      const file = preview ? edit.sourceFor(preview) ?? resolveBeside(href, vaultPath) : null;
+      // Never a hidden folder, which is where Obsidian keeps its own JSON.
+      if (!preview || !file || !/\.json$/i.test(file) || file.split("/").some((part) => part.startsWith("."))) continue;
+      if (files.some((f) => f.file === file)) continue;
+      const text = await edit.readSource(file);
+      if (text !== null && text.length <= 2_000_000) files.push({ file, preview, text, ranges: [[0, text.length]] });
+    }
     return files;
+  }
+
+  /** A change request saved as a note, beside nothing: its own folder in the vault. */
+  private async postChangeRequest(request: IncomingMessage, response: ServerResponse, edit: EditStore): Promise<void> {
+    const raw = await readBody(request);
+    if (raw === null) return send(response, 413, MIME.json, `{"error":"too large"}`);
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(raw) as typeof body;
+    } catch {
+      return send(response, 400, MIME.json, `{"error":"not valid JSON"}`);
+    }
+    const page = typeof body?.page === "string" ? body.page : "";
+    const vaultPath = page && /\.html?$/i.test(page) ? edit.sourceFor(page) : null;
+    if (!vaultPath) return send(response, 404, MIME.json, `{"error":"This page cannot be edited."}`);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text || text.length > 400_000) return send(response, 400, MIME.json, `{"error":"Expected the request."}`);
+    const path = await edit.saveChangeRequest!(vaultPath, text);
+    send(response, 200, MIME.json, JSON.stringify({ path }), { "Cache-Control": "no-store" });
+  }
+
+  /**
+   * What this session changed in each file the page's edits touched: the
+   * file as it was before the first edit, against the file now.
+   */
+  private async postChanges(request: IncomingMessage, response: ServerResponse, edit: EditStore): Promise<void> {
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse((await readBody(request)) ?? "") as typeof body;
+    } catch {
+      return send(response, 400, MIME.json, `{"error":"not valid JSON"}`);
+    }
+    const page = typeof body?.page === "string" ? body.page : "";
+    if (!page || !/\.html?$/i.test(page) || !edit.sourceFor(page)) {
+      return send(response, 404, MIME.json, `{"error":"This page cannot be edited."}`);
+    }
+    const history = this.history.get(page);
+    const touched = [...new Set([...(history?.undo ?? []), ...(history?.redo ?? [])].map((r) => r.file))];
+    const files = [];
+    for (const file of touched) {
+      const before = this.originals.get(file);
+      const now = await edit.readSource(file);
+      if (before === undefined || now === null || before === now) continue;
+      const hunks = lineDiff(before, now);
+      files.push({ file, hunks, text: diffText(file, hunks) });
+    }
+    send(response, 200, MIME.json, JSON.stringify({ files }), { "Cache-Control": "no-store" });
   }
 
   private async postWhere(request: IncomingMessage, response: ServerResponse, edit: EditStore): Promise<void> {
@@ -953,7 +1051,10 @@ export class ReviewServer {
     };
 
     const answer: { layer: unknown; rules: unknown[]; script?: unknown[]; retype?: unknown } = { layer: null, rules: [] };
-    if (isOffset(body.at) && body.at < source.length) answer.layer = place(vaultPath, source, body.at);
+    if (isOffset(body.at) && body.at < source.length) {
+      const html = elementSource(source, body.at);
+      answer.layer = { ...place(vaultPath, source, body.at), html: html === null ? null : html.slice(0, 6000) };
+    }
     const find = body.find as Record<string, unknown> | undefined;
     if (find && typeof find === "object") {
       const clue: ScriptClue = {
@@ -971,9 +1072,22 @@ export class ReviewServer {
       // Only a layer with nothing but words in it is asked about.
       if (find.leaf === true && clue.text) {
         const verdict = retypeInScripts(files, clue.text);
+        const at = (m: { file: number; start: number }) => {
+          const f = files[m.file];
+          const lineStart = f.text.lastIndexOf("\n", m.start - 1) + 1;
+          const lineEnd = f.text.indexOf("\n", m.start);
+          const context = f.text.slice(lineStart, lineEnd < 0 ? undefined : lineEnd).trim().slice(0, 140);
+          return { ...place(f.file, f.text, m.start), context };
+        };
         answer.retype = verdict.ok
-          ? { ok: true, ...place(files[verdict.file].file, files[verdict.file].text, verdict.start) }
-          : { ok: false, why: verdict.why };
+          ? { ok: true, ...at(verdict) }
+          : {
+              ok: false,
+              why: verdict.why,
+              places: verdict.many?.map(at),
+              // Change them all at once only when they are in one file.
+              all: !!verdict.many && verdict.many.every((m) => m.file === verdict.many![0].file),
+            };
       }
     }
     const rules = Array.isArray(body.rules) ? body.rules.slice(0, 40) : [];
@@ -1111,6 +1225,20 @@ export function editRequest(body: Record<string, unknown>): EditRequest | string
     }
     if (typeof body.selector !== "string" || body.selector.length > 1000) return "Expected a selector.";
     return { op, sheet, path, selector: body.selector, props };
+  }
+  if (op === "attr") {
+    if (!isOffset(body.at)) return "Expected an element.";
+    const name = body.name;
+    const value = body.value;
+    if (typeof name !== "string" || !/^[a-zA-Z_][\w:.-]{0,63}$/.test(name)) return "Expected an attribute name.";
+    // Its look, its stamp and its script have their own routes, or none.
+    if (/^on/i.test(name) || /^(style|data-osp-src)$/i.test(name)) return `The ${name} attribute can't be changed from here.`;
+    if (value !== null && (typeof value !== "string" || value.length > 2000)) return "Expected the attribute's value.";
+    if (typeof value === "string" && /^(href|src|action|formaction|srcdoc|xlink:href)$/i.test(name) && /^\s*(javascript|vbscript|data:text\/html)/i.test(value)) {
+      return "That address runs code, so it can't be written from here.";
+    }
+    if (/^srcdoc$/i.test(name)) return "The srcdoc attribute can't be changed from here.";
+    return { op, at: body.at, name, value };
   }
   if (op === "texts") {
     if (!isOffset(body.at)) return "Expected an element.";

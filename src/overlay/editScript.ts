@@ -37,6 +37,7 @@
  */
 import { EDIT_PANEL } from "./editPanel";
 import { EDIT_TOOLS } from "./editTools";
+import { EDIT_DESCRIBE } from "./editDescribe";
 
 /**
  * Colour, as it runs in the browser: spliced into `EDIT_SCRIPT`'s closure.
@@ -1721,9 +1722,21 @@ export const EDIT_SCRIPT = `(function () {
     var where = whereOf(el, rulesFor(el));
     if (!where) return null;
     if (!where.retype) {
-      return "Its words aren't written in the page's scripts, so the script gets them from data, such as a JSON file or a server. Change them there.";
+      return "Its words aren't in the page's scripts or the JSON files they load, so the script gets them from somewhere else, such as a server, or works them out. Change them there.";
     }
-    return where.retype.ok ? "" : where.retype.why;
+    if (where.retype.ok) return "";
+    // Several places: fine once Code has been told which.
+    if (where.retype.places && retypePicks[scriptClue(el).text] !== undefined) return "";
+    return where.retype.why;
+  }
+
+  /* Which place to change, for words a script writes in several: by the words, an index or "all". */
+  var retypePicks = {};
+
+  /* The place a retype writes to, for saying so. */
+  function retypePlace(retype, pick) {
+    if (!retype.places) return retype;
+    return pick === "all" ? null : retype.places[pick];
   }
 
   function startText() {
@@ -1743,7 +1756,9 @@ export const EDIT_SCRIPT = `(function () {
         refresh();
         return;
       }
-      script = { find: scriptClue(el), where: whereOf(el, rulesFor(el)).retype };
+      var found = whereOf(el, rulesFor(el)).retype;
+      var pick = retypePicks[scriptClue(el).text];
+      script = { find: scriptClue(el), pick: found.places ? pick : undefined, where: retypePlace(found, pick), count: found.places ? found.places.length : 1 };
     } else if (!retypable(el)) {
       message = "This holds more than words. Double-click to go inside and edit each part.";
       refresh();
@@ -1769,7 +1784,8 @@ export const EDIT_SCRIPT = `(function () {
       sel.addRange(range);
     } catch (e) {}
     message = script
-      ? "Type the new words. Enter saves them into the script at " + fileName(script.where.file) + " line " + script.where.line + ", Esc cancels."
+      ? "Type the new words. Enter saves them " +
+        (script.where ? "at " + fileName(script.where.file) + " line " + script.where.line : "in all " + script.count + " places") + ", Esc cancels."
       : editing.mixed
       ? "Type the new words; links and emphasis stay as they are. Enter saves, Esc cancels."
       : "Type the new words. Enter saves, Esc cancels.";
@@ -1824,7 +1840,7 @@ export const EDIT_SCRIPT = `(function () {
       var words = text.replace(/\\s+/g, " ").trim();
       var at = now.script.where;
       act(
-        { op: "script-text", find: now.script.find, text: words },
+        { op: "script-text", find: now.script.find, text: words, pick: now.script.pick },
         "text change in " + name,
         function (data) {
           remap(data.edits);
@@ -1835,7 +1851,9 @@ export const EDIT_SCRIPT = `(function () {
           el.textContent = now.before;
         },
         function () {
-          message = "Changed the words in the script, in " + fileName(at.file) + " at line " + at.line + ".";
+          message = at
+            ? "Changed the words in " + fileName(at.file) + " at line " + at.line + "."
+            : "Changed the words in all " + now.script.count + " places.";
         },
         function () {
           restoreText(now);
@@ -1949,6 +1967,7 @@ ${EDIT_COLOUR}
 ${EDIT_LAYOUT}
 ${EDIT_TOOLS}
 ${EDIT_PANEL}
+${EDIT_DESCRIBE}
 
   /* --- catching the page's input -------------------------------------- */
 
@@ -1973,6 +1992,7 @@ ${EDIT_PANEL}
       return;
     }
     if (ours(event.target)) return;
+    if (describePointer(event)) return;
     if (placing) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -2120,7 +2140,8 @@ ${EDIT_PANEL}
     if (ours(event.target)) {
       hovered = null;
     } else {
-      hovered = candidate(event.target, event.altKey);
+      // Pointing at a layer to describe means the one under the pointer.
+      hovered = candidate(event.target, event.altKey || !!describing);
     }
     draw();
   }
@@ -2358,6 +2379,8 @@ ${EDIT_PANEL}
     layer.appendChild(guideX);
     layer.appendChild(guideY);
     layer.appendChild(measure);
+    var marks = el("div", "ed-marks");
+    layer.appendChild(marks);
 
     var bar = el("div", "ed-bar");
     ["keydown", "keyup", "keypress"].forEach(function (type) {
@@ -2365,8 +2388,12 @@ ${EDIT_PANEL}
         event.stopPropagation();
       });
     });
+    var stack = el("div", "ed-stack");
+    stack.hidden = true;
     var crumbs = el("div", "ed-crumbs");
     var status = el("div", "ed-status");
+    var describe = el("div", "ed-describe-box");
+    describe.hidden = true;
     var actions = el("div", "ed-actions");
     var textBtn = barButton("text", "Edit text", "Retype its words (Enter, or double-click)", startText);
     var copyBtn = barButton("copy", "Duplicate", "Put a copy after it (" + (MAC ? "\u2318D" : "Ctrl+D") + ", or Alt-drag)", duplicateAll);
@@ -2395,6 +2422,9 @@ ${EDIT_PANEL}
     moreBtn.setAttribute("aria-label", "More layers");
     moreBtn.insertAdjacentHTML("beforeend", icon("chev", 10));
     var historyBtn = barButton("history", "History", "History: every edit this session, with Undo to here", showHistory);
+    var describeBtn = barButton("describe", "Describe", "Describe a change here for an AI coding tool, with the code behind it (/)", openDescribe);
+    describeBtn.classList.add("ed-describe-btn");
+    describeBtn.appendChild(el("kbd", "ed-key", "/"));
     var undoBtn = barButton("undo", "Undo", "Undo the last edit (" + UNDO_KEY + ")", undo);
     var redoBtn = barButton("redo", "Redo", "Redo what was undone (" + REDO_KEY + ")", redo);
     var reloadBtn = barButton("reload", "Reload", "Reload the page from the file", function () {
@@ -2413,14 +2443,18 @@ ${EDIT_PANEL}
     });
     actions.appendChild(moreBtn);
     actions.appendChild(el("span", "ed-gap"));
+    actions.appendChild(describeBtn);
+    actions.appendChild(el("span", "ed-gap"));
     actions.appendChild(undoBtn);
     actions.appendChild(redoBtn);
     actions.appendChild(historyBtn);
     actions.appendChild(reloadBtn);
     var insertMenu = el("div", "ed-menu ed-insert");
     insertMenu.hidden = true;
+    bar.appendChild(stack);
     bar.appendChild(crumbs);
     bar.appendChild(status);
+    bar.appendChild(describe);
     bar.appendChild(actions);
     bar.appendChild(insertMenu);
     var menu = el("div", "ed-menu ed-context");
@@ -2450,6 +2484,10 @@ ${EDIT_PANEL}
       tools: tools,
       moreBtn: moreBtn,
       historyBtn: historyBtn,
+      describeBtn: describeBtn,
+      describe: describe,
+      stack: stack,
+      marks: marks,
       insertMenu: insertMenu,
       menu: menu,
       bar: bar,
@@ -2591,6 +2629,8 @@ ${EDIT_PANEL}
       return armTool(letter === "f" ? "frame" : letter === "r" ? "rect" : "text"), true;
     }
     if (mod && shift && !alt && letter === "k" && ui) return openPop("image", ui.tools.image), true;
+    if (!mod && !alt && key === "/" && selected) return openDescribe(), true;
+    if (mod && !alt && !shift && key === "Enter" && described.length) return copyRequest(), true;
     if (!mod && !alt && shift && letter === "a") return addAutoLayout(), true;
     if (!mod && !alt && !shift && letter === "i" && selected) return eyedrop(), true;
     if (mod && alt && !shift && letter === "c" && selected) return copyProperties(), true;
@@ -2625,6 +2665,8 @@ ${EDIT_PANEL}
   function release() {
     if (editing) commitText();
     stopPlacing();
+    describing = null;
+    if (ui) renderDescribe(false);
     selected = null;
     selection = [];
     clearState();
@@ -2675,6 +2717,7 @@ ${EDIT_PANEL}
       ui.selBox.toggleAttribute("data-dragging", dragging);
     }
     drawDrop();
+    drawMarks();
     placeBar();
   }
 
@@ -2836,6 +2879,11 @@ ${EDIT_PANEL}
     ui.moreBtn.disabled = !canInsert;
     ui.moreBtn.toggleAttribute("data-armed", !!placing && MORE.indexOf(placing.kind) >= 0);
     ui.historyBtn.disabled = !log.length;
+    ui.describeBtn.disabled = !selected || !!describing;
+    ui.describeBtn.toggleAttribute("data-armed", !!describing);
+    // The prompt takes the message line's place while it is open.
+    ui.status.hidden = !!describing;
+    renderStack();
     ui.undoBtn.disabled = !(log.length || serverHistory.undo) || busy || !!stale;
     ui.redoBtn.disabled = !(redone.length || serverHistory.redo) || busy || !!stale;
     ui.reloadBtn.hidden = !stale;
@@ -3022,7 +3070,7 @@ export const EDIT_CSS = `
 /* the bar: what to do to the selection */
 .osp-overlay .ed-bar {
   position: fixed; z-index: 6; box-sizing: border-box;
-  width: max-content; max-width: min(760px, calc(100vw - 16px));
+  width: max-content; max-width: min(860px, calc(100vw - 16px));
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; border: 1px solid var(--co-line); border-radius: 12px;
   background: var(--co-bg); color: var(--co-fg);
@@ -3057,6 +3105,59 @@ export const EDIT_CSS = `
 .osp-overlay .ed-danger:not(:disabled):hover { color: var(--co-danger); }
 .osp-overlay .ed-danger:not(:disabled):hover svg { color: var(--co-danger); }
 .osp-overlay .ed-btn[aria-expanded] { background: var(--co-bg-2); border-color: var(--co-fg-3); }
+
+/* Describe: the prompt in the bar, the stack of changes, the markers */
+.osp-overlay .ed-describe-btn { color: #7c4dff; border-color: rgba(124, 77, 255, 0.45); }
+.osp-overlay .ed-describe-btn svg, .osp-overlay .ed-describe-btn .ed-key { color: #7c4dff; }
+.osp-overlay .ed-describe-btn[data-armed] { background: rgba(124, 77, 255, 0.1); }
+.osp-overlay .ed-btn.ed-describe-btn .ed-key { position: static; font-size: 11px; }
+.osp-overlay .ed-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 4px; white-space: nowrap;
+  background: rgba(124, 77, 255, 0.1); color: #6a3df0; font: 600 11px/20px Inter, ui-sans-serif, system-ui, sans-serif; vertical-align: middle;
+}
+.osp-overlay .ed-chip b { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%; background: #7c4dff; color: #fff; font-size: 9.5px; line-height: 1; }
+.osp-overlay .ed-describe-box { display: flex; flex-direction: column; gap: 4px; min-width: min(560px, calc(100vw - 40px)); }
+.osp-overlay .ed-describe-box[hidden] { display: none; }
+.osp-overlay .ed-describe-note { color: #6a3df0; font-size: 12px; font-weight: 600; }
+.osp-overlay .ed-describe { display: flex; align-items: flex-start; gap: 6px; padding: 3px 8px; border: 1.5px solid #7c4dff; border-radius: 8px; }
+.osp-overlay .ed-describe-slash { color: #7c4dff; font-weight: 700; line-height: 24px; }
+.osp-overlay .ed-describe-subject { flex: none; line-height: 24px; }
+.osp-overlay .ed-describe-input { flex: 1; min-width: 0; max-height: 96px; overflow-y: auto; outline: none; line-height: 24px; font-size: 12px; overflow-wrap: anywhere; }
+.osp-overlay .ed-describe-input:empty::before { content: attr(data-placeholder); color: var(--co-fg-3); }
+.osp-overlay .ed-describe-input .ed-chip { margin: 0 1px; }
+.osp-overlay .ed-describe-keys { flex: none; font: 11px/24px Inter, ui-sans-serif, system-ui, sans-serif; color: var(--co-fg-3); white-space: nowrap; }
+.osp-overlay .ed-stack { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ed-stack[hidden] { display: none; }
+.osp-overlay .ed-stack-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.osp-overlay .ed-stack-keys { color: var(--co-fg-3); font-size: 11px; }
+.osp-overlay .ed-seg { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--co-bg-2); }
+.osp-overlay .ed-seg button { all: unset; cursor: pointer; padding: 0 10px; height: 22px; border-radius: 4px; color: var(--co-fg-2); font: 500 12px/22px Inter, ui-sans-serif, system-ui, sans-serif; }
+.osp-overlay .ed-seg button[data-on] { background: var(--co-bg); color: var(--co-fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.osp-overlay .ed-stack-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.osp-overlay .ed-stack-item { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; line-height: 20px; }
+.osp-overlay .ed-stack-item:hover { background: var(--co-bg-2); }
+.osp-overlay .ed-stack-item[data-editing] { background: rgba(124, 77, 255, 0.08); }
+.osp-overlay .ed-stack-item[data-gone] { opacity: 0.5; }
+.osp-overlay .ed-stack-num { flex: none; width: 18px; color: var(--co-fg-3); }
+.osp-overlay .ed-stack-item > .ed-chip { flex: none; }
+.osp-overlay .ed-stack-words { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.osp-overlay .ed-stack-words i { color: #6a3df0; }
+.osp-overlay .ed-stack-act { opacity: 0; flex: none; }
+.osp-overlay .ed-stack-item:hover .ed-stack-act, .osp-overlay .ed-stack-item[data-editing] .ed-stack-act, .osp-overlay .ed-stack-act:focus-visible { opacity: 1; }
+.osp-overlay .ed-stack-copied { margin: 0; max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: #0f1115; color: #d7dae0; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+.osp-overlay .ed-stack-foot { display: flex; align-items: center; gap: 4px; }
+.osp-overlay .ed-stack-hint { flex: 1; color: var(--co-fg-3); font-size: 11px; }
+.osp-overlay .ed-btn.ed-ai { background: #7c4dff; border-color: #7c4dff; color: #fff; }
+.osp-overlay .ed-btn.ed-ai svg { color: #fff; }
+.osp-overlay .ed-btn.ed-ai:hover:not(:disabled) { background: #6a3df0; border-color: #6a3df0; }
+.osp-overlay .ed-mark { position: fixed; box-sizing: border-box; pointer-events: none; outline: 1.5px dashed #7c4dff; outline-offset: -1px; background: rgba(124, 77, 255, 0.06); color: transparent; }
+.osp-overlay .ed-mark[hidden] { display: none; }
+.osp-overlay .ed-mark::before {
+  content: attr(data-n); position: absolute; left: -10px; top: -10px; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; background: #7c4dff; color: #fff; border: 2px solid #fff; box-sizing: border-box;
+  font: 700 10px/1 Inter, ui-sans-serif, system-ui, sans-serif; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.osp-overlay .ed-mark[data-subject] { background: transparent; }
 
 /* menus: insert, and the right-click one */
 .osp-overlay .ed-menu {
@@ -3244,6 +3345,34 @@ export const EDIT_CSS = `
 .osp-overlay .ep-ask-row button { all: unset; cursor: pointer; height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--co-line); background: var(--co-bg); font-size: 11px; font-weight: 500; }
 .osp-overlay .ep-ask-row button.ep-ask-main { background: #2f6fed; border-color: transparent; color: #fff; }
 .osp-overlay .ep-ask-row button:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-rule { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 6px; background: var(--co-bg-2); font: 11px/18px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--co-fg); min-width: 0; }
+.osp-overlay .ep-rule .ep-where { font-family: inherit; margin-bottom: 2px; }
+.osp-overlay .ep-rule-sel { display: flex; justify-content: space-between; gap: 8px; color: var(--co-fg-2); word-break: break-all; }
+.osp-overlay .ep-rule-media { color: var(--co-fg-3); }
+.osp-overlay .ep-rule-count { flex: none; color: var(--co-fg-3); font-family: inherit; }
+.osp-overlay .ep-decl { display: flex; align-items: baseline; gap: 4px; padding-left: 12px; min-width: 0; }
+.osp-overlay .ep-decl-prop { flex: none; color: var(--co-fg-2); }
+.osp-overlay .ep-decl-colon { flex: none; margin-left: -4px; color: var(--co-fg-3); }
+.osp-overlay .ep-decl-val { flex: 1; min-width: 0; padding: 0 3px; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--co-fg); font: inherit; word-break: break-all; }
+.osp-overlay input.ep-decl-val:hover { border-color: var(--co-line); }
+.osp-overlay input.ep-decl-val:focus { border-color: var(--co-ink); background: var(--co-bg); outline: none; }
+.osp-overlay .ep-decl[data-over] .ep-decl-prop, .osp-overlay .ep-decl[data-over] .ep-decl-val { text-decoration: line-through; opacity: 0.5; }
+.osp-overlay .ep-decl[data-part="some"] .ep-decl-prop { text-decoration: underline dotted; }
+.osp-overlay .ep-decl-add { margin: 2px 0 0 12px; padding: 0 3px; border: 1px dashed var(--co-line); border-radius: 3px; background: none; color: var(--co-fg); font: inherit; }
+.osp-overlay .ep-decl-add:focus { border-style: solid; border-color: var(--co-ink); outline: none; }
+.osp-overlay .ep-row-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.osp-overlay .ep-place { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--co-line); border-radius: 6px; }
+.osp-overlay .ep-place[data-on] { border-color: var(--co-ink); }
+.osp-overlay .ep-place-line { overflow: hidden; color: var(--co-fg-2); font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; text-overflow: ellipsis; }
+.osp-overlay .ep-attr { width: 100%; min-width: 0; padding: 3px 6px; border: 1px solid var(--co-line); border-radius: 4px; background: var(--co-bg); color: var(--co-fg); font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.osp-overlay .ep-attr:focus { border-color: var(--co-ink); outline: none; }
+.osp-overlay .ep-diff-file { display: flex; justify-content: space-between; gap: 8px; color: var(--co-fg-2); font-size: 11px; word-break: break-all; }
+.osp-overlay .ep-diff { max-height: 320px; overflow: auto; padding: 4px 0; border-radius: 6px; background: var(--co-bg-2); font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.osp-overlay .ep-diff > div { padding: 0 8px; min-width: max-content; }
+.osp-overlay .ep-diff-hunk { color: var(--co-fg-3); }
+.osp-overlay .ep-diff-ctx { color: var(--co-fg-2); }
+.osp-overlay .ep-diff-add { background: rgba(46, 160, 67, 0.16); color: var(--co-fg); }
+.osp-overlay .ep-diff-del { background: rgba(248, 81, 73, 0.16); color: var(--co-fg); }
 .osp-overlay .ep-where { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .osp-overlay .ep-where-name { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 22px; padding: 0 8px; border-radius: 11px; background: var(--co-bg-2); color: var(--co-fg-2); font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .osp-overlay .ep-where-name:hover { color: var(--co-fg); box-shadow: inset 0 0 0 1px var(--co-line); }

@@ -610,6 +610,209 @@ describe("the edit mode", () => {
     });
   });
 
+  describe("the Code section", () => {
+    function openCode(): Element {
+      click(section("Code").querySelector(".ep-sec-toggle"));
+      return section("Code");
+    }
+
+    function field(box: Element, name: string): HTMLInputElement {
+      const found = Array.from(box.querySelectorAll("input")).find((i) => i.getAttribute("aria-label")?.startsWith(name));
+      if (!found) throw new Error(`no ${name} field`);
+      return found;
+    }
+
+    it("lists the rules strongest first, strikes out what loses, and writes a changed value to its rule", async () => {
+      page(".card { color: red; padding: 4px; } .card.big { color: blue; }", '<div class="card big" data-osp-src="100">a</div>');
+      open(document.querySelector("div")!);
+      const code = openCode();
+      const rules = Array.from(code.querySelectorAll(".ep-rule"));
+      expect(rules.map((r) => r.querySelector(".ep-rule-sel")!.textContent)).toEqual([".card.big {", ".card {", "On the layer (style) {"]);
+      const color = rules[1].querySelector(".ep-decl")!;
+      expect(color.hasAttribute("data-over")).toBe(true);
+      expect(color.getAttribute("title")).toBe("Overridden by .card.big");
+      expect(rules[0].querySelector(".ep-decl")!.hasAttribute("data-over")).toBe(false);
+
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      const padding = field(rules[1], "padding");
+      padding.focus();
+      padding.value = "8px";
+      padding.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "rule-style", sheet: 10, path: [0], selector: ".card", props: [["padding", "8px"]] });
+    });
+
+    it("adds a property to a rule, or to the layer itself", async () => {
+      page(".card { color: red; }", '<div class="card" data-osp-src="100">a</div>');
+      open(document.querySelector("div")!);
+      const code = openCode();
+      const [rule, own] = Array.from(code.querySelectorAll(".ep-decl-add")) as HTMLInputElement[];
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      rule.value = "gap: 12px";
+      rule.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "rule-style", selector: ".card", props: [["gap", "12px"]] });
+      answers.push({ status: 200, body: { id: "e2", hash: "h2", edits: [] } });
+      const own2 = Array.from(section("Code").querySelectorAll(".ep-decl-add")).pop() as HTMLInputElement;
+      own2.value = "Opacity: 0.5;";
+      own2.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await settle();
+      expect(calls[1].body).toMatchObject({ op: "inline-style", at: 100, props: [["opacity", "0.5"]] });
+      expect(own).toBeTruthy();
+    });
+
+  });
+
+  describe("describing a change", () => {
+    const shadowOf = (sel: string) => shadow().querySelector(sel) as HTMLElement;
+    const typeInto = (ed: HTMLElement, text: string) => {
+      ed.appendChild(document.createTextNode(text));
+      ed.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const enter = (ed: HTMLElement, init: KeyboardEventInit = {}) =>
+      ed.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init }));
+
+    function twoCards(): [HTMLElement, HTMLElement] {
+      page("", '<main data-osp-src="100"><div class="plan" data-osp-src="110">Team</div><button class="cta" data-osp-src="140">Go</button></main>');
+      return [document.querySelector(".plan") as HTMLElement, document.querySelector(".cta") as HTMLElement];
+    }
+
+    it("turns the bar into a prompt on /, takes a clicked layer as a numbered reference, and stacks the change", async () => {
+      const [plan, cta] = twoCards();
+      open(plan);
+      key("/");
+      const ed = shadowOf(".ed-describe-input");
+      expect(ed).toBeTruthy();
+      expect(shadowOf(".ed-status").hidden).toBe(true);
+      expect(shadowOf(".ed-describe-subject").textContent).toBe("1div.plan");
+      typeInto(ed, "Give it the colour of");
+      click(cta);
+      // The click points at the layer; it does not select it.
+      expect(shadow().querySelector(".ed-tag")?.textContent ?? "").not.toContain("button.cta");
+      const after = shadowOf(".ed-describe-input");
+      expect(after.querySelector(".ed-chip")!.textContent).toBe("2button.cta");
+      typeInto(after, "please");
+      enter(after);
+      await settle();
+      const items = Array.from(shadow().querySelectorAll(".ed-stack-item"));
+      expect(items).toHaveLength(1);
+      expect(items[0].querySelector(".ed-stack-words")!.textContent!.replace(/\u00a0/g, " ")).toBe("Give it the colour of 2button.cta please");
+      expect(Array.from(shadow().querySelectorAll(".ed-mark")).map((m) => m.getAttribute("data-n"))).toEqual(["1", "2"]);
+      // Still open for the next one, and empty.
+      expect(shadowOf(".ed-describe-input").textContent).toBe("");
+    });
+
+    it("loads a change back into the bar to edit it, and saves it in place", async () => {
+      const [plan] = twoCards();
+      open(plan);
+      key("/");
+      typeInto(shadowOf(".ed-describe-input"), "Bigger");
+      enter(shadowOf(".ed-describe-input"));
+      key("Escape");
+      click(shadow().querySelector(".ed-stack-item"));
+      expect(shadowOf(".ed-describe-note").textContent).toContain("Editing change 1");
+      const ed = shadowOf(".ed-describe-input");
+      expect(ed.textContent).toBe("Bigger");
+      ed.textContent = "Much bigger";
+      ed.dispatchEvent(new Event("input", { bubbles: true }));
+      enter(ed);
+      await settle();
+      expect(shadow().querySelectorAll(".ed-stack-item")).toHaveLength(1);
+      expect(shadow().querySelector(".ed-stack-words")!.textContent).toBe("Much bigger");
+      expect(shadowOf(".ed-describe-box").hidden).toBe(true);
+    });
+
+    it("shows what would be copied, copies it with Cmd+Enter, and saves it as a note", async () => {
+      const [plan, cta] = twoCards();
+      const copied: string[] = [];
+      Object.defineProperty(window.navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (t: string) => void copied.push(t) },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          if (url === "/api/describe-note") {
+            calls.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+            return new Response(JSON.stringify({ path: "Change requests/deck 2026-11-24.md" }), { status: 200 });
+          }
+          return new Response("{}", { status: 404 });
+        }),
+      );
+      open(plan);
+      key("/");
+      typeInto(shadowOf(".ed-describe-input"), "Match");
+      click(cta);
+      enter(shadowOf(".ed-describe-input"));
+      await settle();
+      click(Array.from(shadow().querySelectorAll(".ed-seg button"))[1]);
+      const text = shadowOf(".ed-stack-copied").textContent!;
+      expect(text).toContain("1. In [1] div.plan: Match [2]");
+      expect(text).toContain("The layers, by number:");
+      expect(text).toContain('2. button.cta “Go”');
+      expect(text).toContain('<button class="cta">Go</button>');
+
+      key("Escape");
+      key("Enter", { metaKey: true });
+      await new Promise((r) => setTimeout(r, 150));
+      expect(copied[0]).toBe(text);
+
+      const save = Array.from(shadow().querySelectorAll(".ed-stack-foot button")).find((b) => b.textContent === "Save as note")!;
+      click(save);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(calls[0].body).toMatchObject({ text });
+      expect(status()).toContain("Saved to Change requests/deck 2026-11-24.md");
+    });
+  });
+
+  describe("attributes", () => {
+    it("changes a link's address, and takes an emptied attribute away", async () => {
+      page("", '<main data-osp-src="100"><a data-osp-src="110" href="#old" title="Old">Go</a></main>');
+      open(document.querySelector("a")!);
+      click(section("Attributes").querySelector(".ep-sec-toggle"));
+      const box = section("Attributes");
+      const input = (name: string) => box.querySelector(`input[aria-label="${name}"]`) as HTMLInputElement;
+      expect(input("href").value).toBe("#old");
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      input("href").focus();
+      input("href").value = "/pricing";
+      input("href").blur();
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "attr", at: 110, name: "href", value: "/pricing" });
+      expect(document.querySelector("a")!.getAttribute("href")).toBe("/pricing");
+      answers.push({ status: 200, body: { id: "e2", hash: "h2", edits: [] } });
+      const title = section("Attributes").querySelector('input[aria-label="title"]') as HTMLInputElement;
+      title.focus();
+      title.value = "";
+      title.blur();
+      await settle();
+      expect(calls[1].body).toMatchObject({ op: "attr", name: "title", value: null });
+    });
+  });
+
+  describe("changes", () => {
+    it("shows this session's changes as a diff, from the server", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
+      open(document.querySelector("p")!);
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      key("h", { metaKey: true, shiftKey: true, code: "KeyH" } as KeyboardEventInit);
+      await settle();
+      const diff = { files: [{ file: "Protos/a.html", text: "--- a\n", hunks: [{ header: "@@ -1,1 +1,1 @@", lines: [{ kind: "-", text: "<p>a</p>" }, { kind: "+", text: '<p style="display: none">a</p>' }] }] }] };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => new Response(JSON.stringify(url === "/api/changes" ? diff : {}), { status: url === "/api/changes" ? 200 : 404 })),
+      );
+      click(actionButton("History"));
+      await settle();
+      const changes = section("Changes");
+      expect(changes.querySelector(".ep-diff-file")!.textContent).toContain("Protos/a.html");
+      expect(Array.from(changes.querySelectorAll(".ep-diff-del, .ep-diff-add")).map((l) => l.textContent)).toEqual([
+        "-<p>a</p>",
+        '+<p style="display: none">a</p>',
+      ]);
+    });
+  });
+
   describe("where the page's script made it", () => {
     it("asks for a script-made layer by its text and classes, and shows where it was found", async () => {
       page(".swhy { color: red; }", '<main data-osp-src="100"></main>');
@@ -685,7 +888,7 @@ describe("the edit mode", () => {
       const edit = calls.find((c) => c.url === "/api/edit")!;
       expect(edit.body).toMatchObject({ op: "script-text", find: { text: "Why we ask" }, text: "Why we ask for it" });
       expect(made.textContent).toBe("Why we ask for it");
-      expect(status()).toContain("Changed the words in the script, in app.js at line 3");
+      expect(status()).toContain("Changed the words in app.js at line 3");
     });
 
     it("says why a script-made layer's words can't be changed, on the button and on Enter", async () => {
@@ -702,6 +905,32 @@ describe("the edit mode", () => {
       click(section("Code").querySelector(".ep-sec-toggle"));
       await settle();
       expect(section("Code").textContent).toContain(why);
+    });
+
+    it("changes words written in several places at the place picked in Code", async () => {
+      const made = scriptPage({
+        ok: false,
+        why: "These words are in the page's scripts 2 times. Pick the place in Code.",
+        all: true,
+        places: [
+          { file: "Protos/app.js", line: 3, column: 5, editor: null, editorName: null, context: "a = 'Why we ask'" },
+          { file: "Protos/app.js", line: 9, column: 5, editor: null, editorName: null, context: "b = 'Why we ask'" },
+        ],
+      });
+      open(made);
+      await settle();
+      expect((shadow().querySelectorAll(".ed-btn")[0] as HTMLButtonElement).disabled).toBe(true);
+      click(section("Code").querySelector(".ep-sec-toggle"));
+      const second = Array.from(section("Code").querySelectorAll(".ep-place"))[1];
+      click(second.querySelector("button.ep-link"));
+      expect((shadow().querySelectorAll(".ed-btn")[0] as HTMLButtonElement).disabled).toBe(false);
+      key("Enter");
+      expect(status()).toContain("app.js line 9");
+      made.textContent = "Why we ask you";
+      answers.push({ status: 200, body: { id: "e1", hash: "h0", edits: [] } });
+      made.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await settle();
+      expect(calls.find((c) => c.url === "/api/edit")!.body).toMatchObject({ op: "script-text", pick: 1, text: "Why we ask you" });
     });
   });
 

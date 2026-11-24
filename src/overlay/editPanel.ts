@@ -86,6 +86,9 @@ export const EDIT_PANEL = String.raw`
     divider: '<path d="M3 12h18"/><path d="M8 7h8" opacity=".4"/><path d="M8 17h8" opacity=".4"/>',
     list: '<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
     history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    describe: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/>',
+    pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    note: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/>',
   };
 
   function icon(name, size) {
@@ -1500,25 +1503,160 @@ export const EDIT_PANEL = String.raw`
   /* Answers from the server, by hash and stamp: { layer, rules } or "asking". */
   var whereCache = {};
 
-  /* The rules that style a layer, each with how the server can find it. */
+  /* The rules that style a layer, strongest first, each with how the server can find it. */
   function rulesFor(target) {
     var out = [];
-    walkRules(function (rule, path, owner, on) {
+    walkRules(function (rule, path, owner, on, order) {
       if (!on || (forced && owner === forced.sheet)) return;
-      if (matchSpecificity(target, rule.selectorText) < 0) return;
+      var spec = matchSpecificity(target, rule.selectorText);
+      if (spec < 0) return;
       var sheet = owner && owner.tagName === "STYLE" ? stampOf(owner) : sheetPath(owner);
       out.push({
         rule: rule,
+        path: path,
+        owner: owner,
+        spec: spec,
+        order: order,
         ask: sheet === null || sheet === "" ? null : { sheet: sheet, path: path, selector: rule.selectorText },
         // cssText keeps shorthands together, closer to how the file has it.
-        text: rule.selectorText + " {\n" + rule.style.cssText.split(/;\s*/).filter(function (d) {
-          return d.trim();
-        }).map(function (d) {
-          return "  " + d.trim() + ";";
+        text: rule.selectorText + " {\n" + declarations(rule.style).map(function (d) {
+          return "  " + d.prop + ": " + d.value + (d.important ? " !important" : "") + ";";
         }).join("\n") + "\n}",
       });
     });
+    // As the browser weighs them, so the rule that wins comes first.
+    out.sort(function (x, y) {
+      return y.spec - x.spec || y.order - x.order;
+    });
     return out;
+  }
+
+  /* A rule's declarations as written, shorthands kept, in order. */
+  function declarations(style) {
+    var out = [];
+    var text = style.cssText || "";
+    var depth = 0;
+    var quote = "";
+    var start = 0;
+    for (var i = 0; i <= text.length; i++) {
+      var c = text.charAt(i);
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = "";
+        continue;
+      }
+      if (c === '"' || c === "'") quote = c;
+      else if (c === "(") depth++;
+      else if (c === ")") depth--;
+      else if ((c === ";" || i === text.length) && depth <= 0) {
+        var d = text.slice(start, i).trim();
+        start = i + 1;
+        var colon = d.indexOf(":");
+        if (colon > 0) {
+          var value = d.slice(colon + 1).trim();
+          out.push({
+            prop: d.slice(0, colon).trim(),
+            value: value.replace(/\s*!\s*important$/i, ""),
+            important: /!\s*important$/i.test(value),
+          });
+        }
+      }
+    }
+    return out;
+  }
+
+  /*
+   * Whether a declaration loses to another for this layer: all of it, or
+   * some of a shorthand's parts, and to what.
+   */
+  function overrideOf(target, rule, d) {
+    var style = rule ? rule.style : target.style;
+    var parts = [];
+    for (var i = 0; i < style.length; i++) if (style[i].indexOf(d.prop + "-") === 0) parts.push(style[i]);
+    if (!parts.length) parts = [d.prop];
+    var lost = 0;
+    var by = "";
+    parts.forEach(function (prop) {
+      var win = winning(target, prop);
+      if (!win) return;
+      var other = win.kind === "inline" ? (rule ? "the layer's own style" : "") : win.rule === rule ? "" : win.rule.selectorText;
+      if (other) {
+        lost++;
+        by = by || other;
+      }
+    });
+    return lost ? { all: lost === parts.length, by: by } : null;
+  }
+
+  /* One declaration: its value a field when it can be written, struck through when it loses. */
+  function declRow(target, rule, d, write) {
+    var line = el("div", "ep-decl");
+    var over = overrideOf(target, rule, d);
+    if (over && over.all) line.setAttribute("data-over", "");
+    if (over) line.setAttribute("data-part", over.all ? "all" : "some");
+    var why = over ? (over.all ? "Overridden by " : "Partly overridden by ") + over.by : "";
+    line.appendChild(el("span", "ep-decl-prop", d.prop));
+    line.appendChild(el("span", "ep-decl-colon", ":"));
+    var fixed = d.important ? "it is marked !important" : /\b(url|image-set)\s*\(/i.test(d.value) ? "it names a file" : "";
+    if (!write || fixed) {
+      line.appendChild(el("span", "ep-decl-val ep-decl-fixed", d.value + (d.important ? " !important" : "")));
+      line.title = [why, write && fixed ? "Change this one in the file: " + fixed : ""].filter(Boolean).join(". ");
+      return line;
+    }
+    line.title = why;
+    var input = el("input", "ep-decl-val");
+    input.value = d.value;
+    input.spellcheck = false;
+    input.setAttribute("data-ep-keep", "");
+    input.setAttribute("aria-label", d.prop + (why ? ", " + why : ""));
+    var done = false;
+    input.addEventListener("keydown", function (event) {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        input.blur();
+      } else if (event.key === "Escape") {
+        input.value = d.value;
+        input.blur();
+      }
+    });
+    input.addEventListener("blur", function () {
+      var v = input.value.trim();
+      if (done || v === d.value) return;
+      done = true;
+      write([[d.prop, v]]);
+    });
+    line.appendChild(input);
+    return line;
+  }
+
+  /* A field for a new declaration, written as "gap: 12px". */
+  function addDeclRow(write) {
+    var input = el("input", "ep-decl-add");
+    input.placeholder = "+ Add, like gap: 12px";
+    input.spellcheck = false;
+    input.setAttribute("data-ep-keep", "");
+    input.setAttribute("aria-label", "Add a property, written as name: value");
+    input.addEventListener("keydown", function (event) {
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        input.value = "";
+        input.blur();
+        return;
+      }
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      var m = /^\s*(-{0,2}[a-zA-Z][\w-]*)\s*:\s*(.+?)\s*;?\s*$/.exec(input.value);
+      if (!m) {
+        message = "Write it as a property and a value, like gap: 12px.";
+        refresh();
+        return;
+      }
+      input.value = "";
+      input.blur();
+      write([[m[1].toLowerCase().indexOf("--") === 0 ? m[1] : m[1].toLowerCase(), m[2]]]);
+    });
+    return input;
   }
 
   /*
@@ -1575,7 +1713,7 @@ export const EDIT_PANEL = String.raw`
       })
       .then(function (data) {
         whereCache[key] = data || { layer: null, rules: [] };
-        if (selected === target) refresh();
+        if (selected === target || describeUses(target)) refresh();
       })
       .catch(function () {
         delete whereCache[key];
@@ -1619,66 +1757,346 @@ export const EDIT_PANEL = String.raw`
     return box;
   }
 
-  /* The CSS that applies to the layer, from the file, with where each rule is. */
+  /* The layer's markup without what Edit mode adds to it, for a brief. */
+  function cleanMarkup(target) {
+    var copy = target.cloneNode(true);
+    var all = [copy].concat(Array.prototype.slice.call(copy.querySelectorAll("*")));
+    all.forEach(function (n) {
+      // Edit mode's stamps and the comment layer's anchors, none of which the file has.
+      Array.prototype.slice.call(n.attributes).forEach(function (a) {
+        if (a.name.indexOf("data-osp-") === 0) n.removeAttribute(a.name);
+      });
+      n.removeAttribute("contenteditable");
+    });
+    return copy.outerHTML;
+  }
+
+  var FENCE = "\u0060\u0060\u0060";
+
+  function copyText(text, said) {
+    try {
+      hostWin.navigator.clipboard.writeText(text).then(function () {
+        message = said;
+        refresh();
+      });
+    } catch (e) {}
+  }
+
+  /* Where a script-made layer comes from, and whether its words can be changed. */
+  function scriptBlock(b, one, where) {
+    b.appendChild(el("p", "ep-hint", "Made by the page's script, so it is not in the file."));
+    var spots = where && where.script;
+    var retype = where && where.retype;
+    if (retype && retype.places && retype.places.length) {
+      // The words are written in several places: say which to change.
+      var key = scriptClue(one).text;
+      b.appendChild(el("div", "ep-palette-label", "Its words are in " + retype.places.length + " places. Which one makes this layer?"));
+      retype.places.forEach(function (place, i) {
+        var item = el("div", "ep-place");
+        if (retypePicks[key] === i) item.setAttribute("data-on", "");
+        item.appendChild(placeChip(place, "its words"));
+        item.appendChild(el("code", "ep-place-line", place.context));
+        var pick = el("button", "ep-link", retypePicks[key] === i ? "Chosen" : "Change this one");
+        pick.type = "button";
+        pick.addEventListener("click", function (event) {
+          event.stopPropagation();
+          retypePicks[key] = i;
+          message = "Enter or double-click now changes the words at " + fileName(place.file) + " line " + place.line + ".";
+          refresh();
+        });
+        item.appendChild(pick);
+        b.appendChild(item);
+      });
+      if (retype.all) {
+        b.appendChild(actionButton("list", retypePicks[key] === "all" ? "Changing all " + retype.places.length : "Change all " + retype.places.length,
+          "Change the words in every place at once", function () {
+            retypePicks[key] = "all";
+            message = "Enter or double-click now changes the words in all " + retype.places.length + " places.";
+            refresh();
+          }));
+      }
+      return;
+    }
+    if (spots && spots.length) {
+      var byText = spots[0].by === "text";
+      b.appendChild(el("div", "ep-palette-label", spots.length > 1 ? "Probably made in one of these" : "Probably made here"));
+      spots.forEach(function (spot) {
+        b.appendChild(placeChip(spot, byText ? "its text" : "." + spot.what));
+      });
+      var quoted = spots[0].what.length > 40 ? spots[0].what.slice(0, 40) + "…" : spots[0].what;
+      b.appendChild(el("p", "ep-hint", byText ? "Found by its text, “" + quoted + "”." : "Found by its class, ." + spots[0].what + "."));
+    } else if (spots) {
+      b.appendChild(el("p", "ep-hint", "Its words and classes aren't in the page's scripts or the JSON files they load."));
+    }
+    var why = where ? retypeWhy(one) : null;
+    if (why === "") b.appendChild(el("p", "ep-hint", "You can change its words here: Enter or double-click. They're written into the file at that line."));
+    else if (why) b.appendChild(el("p", "ep-hint ep-why", why));
+  }
+
+  /* The CSS that applies to the layer, strongest first, editable where the file can be written. */
   function codeSection() {
     var one = targets().length === 1 ? selected : null;
     if (!one) return null;
     if (folded.code === undefined) folded.code = true;
+    var rules = rulesFor(one);
     return section("code", "Code", "Where this layer is in the files, and the CSS that applies to it", function () {
       var b = stack();
-      var rules = rulesFor(one);
       var where = whereOf(one, rules);
       if (where && where.layer) {
         b.appendChild(el("div", "ep-palette-label", "The layer"));
         b.appendChild(placeChip(where.layer, label(one)));
-      } else if (stampOf(one) === null) {
-        b.appendChild(el("p", "ep-hint", "Made by the page's script, so it is not in the file."));
-        var spots = where && where.script;
-        if (spots && spots.length) {
-          var byText = spots[0].by === "text";
-          b.appendChild(el("div", "ep-palette-label", spots.length > 1 ? "Probably made in one of these" : "Probably made here"));
-          spots.forEach(function (spot) {
-            b.appendChild(placeChip(spot, byText ? "its text" : "." + spot.what));
-          });
-          var quoted = spots[0].what.length > 40 ? spots[0].what.slice(0, 40) + "\u2026" : spots[0].what;
-          b.appendChild(el("p", "ep-hint", byText
-            ? "Found by its text, \u201c" + quoted + "\u201d."
-            : "Found by its class, ." + spots[0].what + "."));
-        } else if (spots) {
-          b.appendChild(el("p", "ep-hint", "Its words and classes aren't in the page's scripts. The script may load them from somewhere else."));
-        }
-        // Whether its words can be changed from here, and why not if not.
-        var why = where ? retypeWhy(one) : null;
-        if (why === "") b.appendChild(el("p", "ep-hint", "You can change its words here: Enter or double-click. They're written into the script at that line."));
-        else if (why && spots && spots.length) b.appendChild(el("p", "ep-hint ep-why", why));
-      }
+      } else if (stampOf(one) === null) scriptBlock(b, one, where);
+
       var all = [];
+      var writable = !whyNot(one);
       rules.forEach(function (r, i) {
-        var block = stack();
+        var block = el("div", "ep-rule");
         var spot = where && where.rules ? where.rules[i] : null;
         if (spot) block.appendChild(placeChip(spot, r.rule.selectorText));
-        else if (!r.ask) block.appendChild(el("div", "ep-palette-label", sheetName(r.rule.parentStyleSheet && r.rule.parentStyleSheet.ownerNode)));
-        block.appendChild(el("pre", "ep-code", r.text));
+        else if (!r.ask) block.appendChild(el("div", "ep-palette-label", sheetName(r.owner)));
+        var can = !!r.ask && editableSheet(r.owner);
+        var n = countMatching(r.rule.selectorText);
+        var media = r.rule.parentRule && r.rule.parentRule.media ? "@media " + r.rule.parentRule.media.mediaText : "";
+        if (media) block.appendChild(el("div", "ep-rule-media", media));
+        var head = el("div", "ep-rule-sel", r.rule.selectorText + " {");
+        if (n > 1) head.appendChild(el("span", "ep-rule-count", n + " layers"));
+        head.title = n > 1 ? "A change here applies to all " + n + " layers this rule styles." : "";
+        block.appendChild(head);
+        var write = can ? function (props) {
+          currentSec = "code";
+          applyRuleProps({ rule: r.rule, path: r.path, owner: r.owner }, props, r.rule.selectorText);
+        } : null;
+        declarations(r.rule.style).forEach(function (d) {
+          block.appendChild(declRow(one, r.rule, d, write));
+        });
+        if (write) block.appendChild(addDeclRow(write));
+        block.appendChild(el("div", "ep-rule-sel", "}"));
         b.appendChild(block);
         all.push(r.text);
       });
-      var inline = one.getAttribute("style");
-      if (inline) {
-        var own = "/* on the layer */\n" + inline.split(";").filter(function (x) { return x.trim(); }).map(function (x) { return x.trim() + ";"; }).join("\n");
-        b.appendChild(el("pre", "ep-code", own));
-        all.push(own);
+
+      var own = declarations(one.style);
+      if (own.length || writable) {
+        var block = el("div", "ep-rule");
+        block.appendChild(el("div", "ep-rule-sel", "On the layer (style) {"));
+        var write = writable ? function (props) {
+          currentSec = "code";
+          applyInlineProps(one, props, props[0][0]);
+        } : null;
+        own.forEach(function (d) {
+          block.appendChild(declRow(one, null, d, write));
+        });
+        if (write) block.appendChild(addDeclRow(write));
+        block.appendChild(el("div", "ep-rule-sel", "}"));
+        b.appendChild(block);
+        if (own.length) all.push("/* on the layer */\n" + own.map(function (d) { return d.prop + ": " + d.value + ";"; }).join("\n"));
       }
-      if (!all.length) b.appendChild(el("p", "ep-hint", "No CSS of its own."));
-      else {
-        b.appendChild(actionButton("copy", "Copy CSS", "Copy all of this CSS", function () {
-          try {
-            hostWin.navigator.clipboard.writeText(all.join("\n\n")).then(function () {
-              message = "Copied the CSS.";
-              refresh();
-            });
-          } catch (e) {}
-        }));
+      if (rules.length) {
+        b.appendChild(el("p", "ep-hint", "Strongest first. A struck-out value loses to another rule: hover it to see which."));
       }
+      var buttons = el("div", "ep-row-btns");
+      if (all.length) buttons.appendChild(actionButton("copy", "Copy CSS", "Copy all of this CSS", function () {
+        copyText(all.join("\n\n"), "Copied the CSS.");
+      }));
+      buttons.appendChild(actionButton("describe", "Describe a change", "Say what should change here, for an AI coding tool, with this layer's code (/)", function () {
+        if (selected !== one) select(one);
+        openDescribe();
+      }));
+      b.appendChild(buttons);
+      return b;
+    });
+  }
+
+  /* --- attributes -------------------------------------------------------- */
+
+  /* The attributes worth a field for each kind of layer, then any it has. */
+  var ATTRS = {
+    A: ["href", "target", "rel"],
+    IMG: ["src", "alt", "width", "height", "loading"],
+    INPUT: ["type", "name", "placeholder", "value", "required", "disabled", "checked"],
+    BUTTON: ["type", "disabled"],
+    TEXTAREA: ["name", "placeholder", "rows", "required"],
+    SELECT: ["name", "required"],
+    OPTION: ["value", "selected"],
+    LABEL: ["for"],
+    FORM: ["action", "method"],
+    IFRAME: ["src", "title"],
+    VIDEO: ["src", "poster", "controls", "autoplay", "muted", "loop"],
+    AUDIO: ["src", "controls"],
+    SOURCE: ["src", "type"],
+  };
+  var COMMON_ATTRS = ["id", "class", "title", "aria-label", "role"];
+  var FLAG_ATTRS = { required: 1, disabled: 1, checked: 1, selected: 1, controls: 1, autoplay: 1, muted: 1, loop: 1, hidden: 1 };
+
+  function attributesSection() {
+    var one = targets().length === 1 ? selected : null;
+    if (!one || whyNot(one)) return null;
+    if (folded.attrs === undefined) folded.attrs = true;
+    return section("attrs", "Attributes", "The layer's HTML attributes: links, image text, field hints", function () {
+      var b = stack();
+      var names = (ATTRS[one.tagName] || []).concat(COMMON_ATTRS);
+      Array.prototype.forEach.call(one.attributes, function (a) {
+        var n = a.name;
+        if (names.indexOf(n) === -1 && n !== "style" && n !== ATTR && n !== "contenteditable" && n.indexOf("on") !== 0) names.push(n);
+      });
+      names.forEach(function (name) {
+        var has = one.hasAttribute(name);
+        if (FLAG_ATTRS[name]) {
+          var box = el("input", "ep-flag");
+          box.type = "checkbox";
+          box.checked = has;
+          box.setAttribute("aria-label", name);
+          box.addEventListener("change", function () {
+            currentSec = "attrs";
+            setAttribute(one, name, box.checked ? "" : null);
+          });
+          b.appendChild(row(name, box, name + (has ? ": on" : ": off")));
+          return;
+        }
+        var input = el("input", "ep-attr");
+        var before = has ? one.getAttribute(name) : "";
+        input.value = before;
+        input.placeholder = "Not set";
+        input.spellcheck = false;
+        input.setAttribute("data-ep-keep", "");
+        input.setAttribute("aria-label", name);
+        var done = false;
+        input.addEventListener("keydown", function (event) {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            input.blur();
+          } else if (event.key === "Escape") {
+            input.value = before;
+            input.blur();
+          }
+        });
+        input.addEventListener("blur", function () {
+          if (done || input.value === before) return;
+          done = true;
+          currentSec = "attrs";
+          // Emptied takes it away, except for an alt, where empty means "decorative".
+          setAttribute(one, name, input.value === "" && name !== "alt" ? null : input.value);
+        });
+        b.appendChild(row(name, input, name));
+      });
+      var add = el("input", "ep-attr");
+      add.placeholder = "+ Add, like data-plan=pro";
+      add.spellcheck = false;
+      add.setAttribute("data-ep-keep", "");
+      add.setAttribute("aria-label", "Add an attribute, written as name=value");
+      add.addEventListener("keydown", function (event) {
+        event.stopPropagation();
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        var m = /^\s*([a-zA-Z_][\w:.-]*)\s*(?:=\s*"?([^"]*)"?)?\s*$/.exec(add.value);
+        if (!m) {
+          message = "Write it as a name and a value, like data-plan=pro.";
+          refresh();
+          return;
+        }
+        add.value = "";
+        add.blur();
+        currentSec = "attrs";
+        setAttribute(one, m[1], m[2] === undefined ? "" : m[2]);
+      });
+      b.appendChild(add);
+      return b;
+    });
+  }
+
+  function setAttribute(target, name, value) {
+    var before = target.getAttribute(name);
+    var who = label(target);
+    act(
+      { op: "attr", at: stampOf(target), name: name, value: value },
+      name + " change on " + who,
+      function (data) {
+        remap(data.edits);
+        quiet(function () {
+          if (value === null) target.removeAttribute(name);
+          else target.setAttribute(name, value);
+        });
+      },
+      function (back) {
+        remap(back.edits);
+        quiet(function () {
+          if (before === null) target.removeAttribute(name);
+          else target.setAttribute(name, before);
+        });
+      },
+      function () {
+        message = value === null ? "Took " + name + " off " + who + "." : "Set " + name + " on " + who + ".";
+      },
+    );
+  }
+
+  /* --- this session's changes, as a diff ------------------------------- */
+
+  var changes = { key: "", data: null };
+
+  function changesSection() {
+    return section("changes", "Changes", "What this session changed in each file, as a diff", function () {
+      var b = stack();
+      if (!log.length && !redone.length) {
+        b.appendChild(el("p", "ep-hint", "Nothing changed yet. Each file's changes this session show here, line by line."));
+        return b;
+      }
+      var key = hash + "|" + log.length + "|" + redone.length;
+      if (changes.key !== key) {
+        changes = { key: key, data: null };
+        fetch("/api/changes", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ page: PAGE }),
+        })
+          .then(function (r) {
+            return r.ok ? r.json() : { files: [] };
+          })
+          .then(function (data) {
+            if (changes.key !== key) return;
+            changes.data = data;
+            refresh();
+          })
+          .catch(function () {
+            changes.key = "";
+          });
+      }
+      var data = changes.data;
+      if (!data) {
+        b.appendChild(el("p", "ep-hint", "Reading the files…"));
+        return b;
+      }
+      if (!data.files.length) {
+        b.appendChild(el("p", "ep-hint", "The files are as they were: everything this session did has been undone."));
+        return b;
+      }
+      data.files.forEach(function (f) {
+        var head = el("div", "ep-diff-file");
+        head.appendChild(el("span", null, f.file));
+        var copy = el("button", "ep-link", "Copy");
+        copy.type = "button";
+        copy.addEventListener("click", function (event) {
+          event.stopPropagation();
+          copyText(f.text, "Copied the changes to " + fileName(f.file) + ".");
+        });
+        head.appendChild(copy);
+        b.appendChild(head);
+        var pre = el("div", "ep-diff");
+        var shown = 0;
+        f.hunks.forEach(function (h) {
+          pre.appendChild(el("div", "ep-diff-hunk", h.header));
+          h.lines.forEach(function (l) {
+            if (shown++ > 400) return;
+            pre.appendChild(el("div", l.kind === "+" ? "ep-diff-add" : l.kind === "-" ? "ep-diff-del" : "ep-diff-ctx", l.kind + l.text));
+          });
+        });
+        b.appendChild(pre);
+      });
+      b.appendChild(actionButton("copy", "Copy all", "Copy every file's changes as one diff", function () {
+        copyText(data.files.map(function (f) { return f.text; }).join(""), "Copied the changes as a diff.");
+      }));
       return b;
     });
   }
@@ -1776,8 +2194,16 @@ export const EDIT_PANEL = String.raw`
         list.appendChild(item);
       });
       b.appendChild(list);
+      var see = el("button", "ep-link", "See the changes, line by line");
+      see.type = "button";
+      see.addEventListener("click", function (event) {
+        event.stopPropagation();
+        showSection("changes");
+      });
+      b.appendChild(see);
       return b;
     }));
+    out.push(changesSection());
     if (folded.shortcuts === undefined) folded.shortcuts = true;
     out.push(section("shortcuts", "Shortcuts", "Keys in Edit mode", function () {
       var k = MAC ? { cmd: "⌘", alt: "⌥", shift: "⇧" } : { cmd: "Ctrl+", alt: "Alt+", shift: "Shift+" };
@@ -1797,6 +2223,8 @@ export const EDIT_PANEL = String.raw`
         ["Hide / show", k.shift + k.cmd + "H"],
         ["Move in its layout", "Arrows, " + k.cmd + "] / " + k.cmd + "["],
         ["Eyedropper", "I"],
+        ["Describe a change, for an AI tool", "/"],
+        ["Copy the changes described", k.cmd + "Enter"],
         ["Use the page", "Hold Space"],
       ];
       var table = el("dl", "ep-keys");
@@ -2034,6 +2462,9 @@ export const EDIT_PANEL = String.raw`
     if (!p) return;
     p.root.hidden = !owns();
     if (!owns()) return;
+    // A field being typed in is not torn down under the typing.
+    var focused = p.root.getRootNode && p.root.getRootNode().activeElement;
+    if (focused && focused.hasAttribute && focused.hasAttribute("data-ep-keep") && p.body.contains(focused)) return;
     var scroll = p.body.scrollTop;
     p.tabs.setAttribute("data-at", tab === "layers" ? "1" : "0");
     for (var name in p.tabButtons) {
@@ -2087,7 +2518,7 @@ export const EDIT_PANEL = String.raw`
       p.body.scrollTop = scroll;
       return;
     }
-    [positionSection, autoLayoutSection, sizingSection, appearanceSection, textSection, fillSection, strokeSection, effectsSection, stateSection, codeSection].forEach(function (make) {
+    [positionSection, autoLayoutSection, sizingSection, appearanceSection, textSection, fillSection, strokeSection, effectsSection, stateSection, attributesSection, codeSection].forEach(function (make) {
       var s = make();
       if (s) p.body.appendChild(s);
     });

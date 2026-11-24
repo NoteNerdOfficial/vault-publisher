@@ -1,4 +1,5 @@
 import { DEFAULT_EDITOR, editorChoice, editorLink } from "./overlay/editorLinks";
+import { DEFAULT_CHANGE_REQUESTS_FOLDER, noteName, noteText } from "./overlay/changeRequest";
 import { App, Notice, Plugin, TFile, apiVersion, normalizePath } from "obsidian";
 import { diagnoseRender } from "./render/diagnose";
 import { createRenderHost, renderFile, RenderedNote } from "./render/renderNote";
@@ -238,6 +239,8 @@ interface Settings {
     codeEditor: string;
     /** A link template of the owner's own, for "custom". See `editorLinks.ts`. */
     codeEditorTemplate: string;
+    /** Vault folder Edit mode's Describe stack saves change requests in. */
+    changeRequestsFolder: string;
   };
   /**
    * A link from the published site to the repository it came from.
@@ -383,6 +386,7 @@ const DEFAULT_SETTINGS: Settings = {
     reviewFolder: `${OUTPUT_FOLDER}/review`,
     codeEditor: DEFAULT_EDITOR,
     codeEditorTemplate: "",
+    changeRequestsFolder: DEFAULT_CHANGE_REQUESTS_FOLDER,
   },
   // Blank, so a build after an upgrade publishes in the clear exactly as the
   // build before it did. A site is only encrypted once somebody has typed a
@@ -1341,6 +1345,15 @@ export default class VaultPublisherPlugin extends Plugin {
       },
       readImage: async (vaultPath) =>
         (await adapter.exists(vaultPath)) ? adapter.readBinary(vaultPath) : null,
+      saveChangeRequest: async (pageVaultPath, request) => {
+        const folder = normalizePath(this.settings.commentOverlay.changeRequestsFolder?.trim() || DEFAULT_CHANGE_REQUESTS_FOLDER);
+        if (!(await adapter.exists(folder))) await this.app.vault.createFolder(folder);
+        const now = new Date();
+        const taken = new Set((await adapter.list(folder)).files.map((f) => f.split("/").pop() ?? ""));
+        const path = normalizePath(`${folder}/${noteName(pageVaultPath, now, (n) => taken.has(n))}`);
+        await this.app.vault.create(path, noteText(pageVaultPath, request, now));
+        return path;
+      },
     };
   }
 

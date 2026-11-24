@@ -676,6 +676,10 @@ describe("history and linked sheets through the route", () => {
           preview[path] = text;
         },
         backup: async () => {},
+        saveChangeRequest: async (pagePath, text) => {
+          vault[`Change requests/${pagePath.split("/").pop()}.md`] = text;
+          return `Change requests/${pagePath.split("/").pop()}.md`;
+        },
       },
     });
     base = `http://127.0.0.1:${(await server.start()).port}`;
@@ -706,7 +710,7 @@ describe("history and linked sheets through the route", () => {
       }),
     });
     expect(await response.json()).toEqual({
-      layer: { file: "P/index.html", line: 3, column: 3, editor: null, editorName: null },
+      layer: { file: "P/index.html", line: 3, column: 3, editor: null, editorName: null, html: "<p>Body</p>" },
       rules: [{ file: "P/style.css", line: 1, column: 1, editor: null, editorName: null }, null],
     });
     const stale = await fetch(`${base}/api/where`, {
@@ -785,7 +789,7 @@ describe("history and linked sheets through the route", () => {
     expect(await retype("Free returns")).toMatchObject({ ok: true, file: "P/app.js", line: 2 });
     expect(await retype("3 items left")).toMatchObject({ ok: false, why: expect.stringContaining("from pieces") });
     expect(await retype("Twice")).toMatchObject({ ok: false, why: expect.stringContaining("2 times") });
-    expect(await retype("Gift wrap")).toMatchObject({ ok: false, why: expect.stringContaining("from data") });
+    expect(await retype("Gift wrap")).toMatchObject({ ok: false, why: expect.stringContaining("from somewhere else") });
 
     // In a template literal in a linked file: a backtick and ${ are escaped.
     const first = await post("/api/edit", { op: "script-text", find: { text: "Free returns" }, text: "Free `returns` ${x}" });
@@ -808,6 +812,83 @@ describe("history and linked sheets through the route", () => {
     expect(refused.data.error).toContain("2 times");
     const tags = await post("/api/edit", { op: "script-text", find: { text: "Free returns" }, text: "<b>Free</b>" });
     expect(tags.data.error).toContain("Angle brackets");
+  });
+
+  const postTo = async (path: string, body: Record<string, unknown>) => {
+    const response = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { cookie: `osp-review=${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ page: "p/index.html", hash: hashText(vault["P/index.html"]), ...body }),
+    });
+    return { status: response.status, data: (await response.json()) as Record<string, unknown> };
+  };
+
+  it("sets, changes and takes away an attribute, and refuses one that runs code", async () => {
+    const at = HTML.indexOf("<p>");
+    const set = await postTo("/api/edit", { op: "attr", at, name: "title", value: 'Say "hi" & go' });
+    expect(set.status).toBe(200);
+    expect(vault["P/index.html"]).toContain('<p title="Say &quot;hi&quot; &amp; go">Body</p>');
+    const changed = await postTo("/api/edit", { op: "attr", at, name: "title", value: "Two" });
+    expect(changed.status).toBe(200);
+    expect(vault["P/index.html"]).toContain('<p title="Two">Body</p>');
+    await postTo("/api/edit", { op: "attr", at, name: "title", value: null });
+    expect(vault["P/index.html"]).toBe(HTML);
+    expect((await postTo("/api/edit", { op: "attr", at, name: "onclick", value: "x()" })).status).toBe(400);
+    expect((await postTo("/api/edit", { op: "attr", at, name: "href", value: " javascript:alert(1)" })).status).toBe(400);
+    expect((await postTo("/api/edit", { op: "attr", at, name: "style", value: "color: red" })).status).toBe(400);
+  });
+
+  it("finds a script-made layer's words in a JSON file the script fetches, and changes them there", async () => {
+    const page = '<!doctype html><html><head></head><body><main></main>\n<script>\n  fetch("data/plans.json").then((r) => r.json());\n  fetch("../.obsidian/app.json");\n</script>\n</body></html>';
+    const json = '{\n  "plans": [{ "name": "Team", "blurb": "For small teams" }]\n}\n';
+    vault["P/index.html"] = page;
+    preview["p/index.html"] = page;
+    vault["P/data/plans.json"] = json;
+    vault[".obsidian/app.json"] = '{ "x": "For small teams" }';
+    const where = await postTo("/api/where", { find: { text: "For small teams", classes: [], leaf: true }, rules: [] });
+    expect(where.data.retype).toMatchObject({ ok: true, file: "P/data/plans.json", line: 2 });
+    const edit = await postTo("/api/edit", { op: "script-text", find: { text: "For small teams" }, text: 'For "small" teams' });
+    expect(edit.status).toBe(200);
+    expect(vault["P/data/plans.json"]).toContain('"blurb": "For \\"small\\" teams"');
+    expect(preview["p/data/plans.json"]).toBe(vault["P/data/plans.json"]);
+    expect(vault[".obsidian/app.json"]).toBe('{ "x": "For small teams" }');
+  });
+
+  it("changes words written in several places at the one picked, or at all of them", async () => {
+    const page = "<!doctype html><html><head></head><body><main></main>\n<script>\n  const a = 'Twice';\n  const b = 'Twice';\n</script>\n</body></html>";
+    vault["P/index.html"] = page;
+    preview["p/index.html"] = page;
+    const where = await postTo("/api/where", { find: { text: "Twice", classes: [], leaf: true }, rules: [] });
+    expect(where.data.retype).toMatchObject({
+      ok: false,
+      all: true,
+      places: [{ line: 3, context: "const a = 'Twice';" }, { line: 4, context: "const b = 'Twice';" }],
+    });
+    expect((await postTo("/api/edit", { op: "script-text", find: { text: "Twice" }, text: "Once" })).status).toBe(422);
+    await postTo("/api/edit", { op: "script-text", find: { text: "Twice" }, text: "Once", pick: 1 });
+    expect(vault["P/index.html"]).toContain("const a = 'Twice';\n  const b = 'Once';");
+    await postTo("/api/edit", { op: "undo" });
+    await postTo("/api/edit", { op: "script-text", find: { text: "Twice" }, text: "Both", pick: "all" });
+    expect(vault["P/index.html"]).toContain("const a = 'Both';\n  const b = 'Both';");
+  });
+
+  it("lists what this session changed in each file, as a diff, and nothing once it is undone", async () => {
+    const del = await postTo("/api/edit", { op: "delete", at: HTML.indexOf("<h1>") });
+    const changes = await postTo("/api/changes", {});
+    const files = changes.data.files as Array<{ file: string; text: string }>;
+    expect(files.map((f) => f.file)).toEqual(["P/index.html"]);
+    expect(files[0].text).toContain("-  <h1>Title</h1>");
+    await postTo("/api/edit", { op: "undo", id: del.data.id });
+    expect((await postTo("/api/changes", {})).data.files).toEqual([]);
+  });
+
+  it("saves a described change request as a note, and only for a page that can be edited", async () => {
+    const saved = await postTo("/api/describe-note", { text: "Change this prototype: P/index.html\n\n1. In [1] h1: shorter" });
+    expect(saved.status).toBe(200);
+    expect(saved.data.path).toBe("Change requests/index.html.md");
+    expect(vault["Change requests/index.html.md"]).toContain("1. In [1] h1: shorter");
+    expect((await postTo("/api/describe-note", { text: "" })).status).toBe(400);
+    expect((await postTo("/api/describe-note", { page: "elsewhere.html", text: "x" })).status).toBe(404);
   });
 
   it("redoes what was undone, and forgets it once something new is done", async () => {

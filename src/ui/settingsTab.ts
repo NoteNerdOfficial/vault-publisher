@@ -1,4 +1,5 @@
 import { DEFAULT_EDITOR, EDITORS } from "../overlay/editorLinks";
+import { DEFAULT_CHANGE_REQUESTS_FOLDER } from "../overlay/changeRequest";
 import { normalizeSigninUrl } from "../overlay/shared";
 import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
@@ -232,6 +233,7 @@ export interface SettingsHost {
       reviewFolder: string;
       codeEditor?: string;
       codeEditorTemplate?: string;
+      changeRequestsFolder?: string;
     };
     sourceLink: SourceLinkSettings;
     relay: {
@@ -2453,6 +2455,26 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             }),
         );
     }
+
+    /*
+     * Where Describe's change requests are saved: a note an AI coding tool
+     * can be pointed at, and a record of what was asked.
+     */
+    new Setting(root)
+      .setName("Change requests folder")
+      .setDesc(
+        "Where Edit mode's Describe saves a change request as a note, to hand " +
+          "to an AI coding tool or keep as a record.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_CHANGE_REQUESTS_FOLDER)
+          .setValue(overlay.changeRequestsFolder ?? DEFAULT_CHANGE_REQUESTS_FOLDER)
+          .onChange(async (value) => {
+            overlay.changeRequestsFolder = value.trim() || DEFAULT_CHANGE_REQUESTS_FOLDER;
+            await this.host.saveSettings();
+          }),
+      );
 
     this.renderPublishedReview(root);
   }

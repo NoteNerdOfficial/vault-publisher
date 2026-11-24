@@ -70,6 +70,7 @@ export type EditRequest =
   | { op: "copy"; at: number; target: number; place: Place }
   | { op: "wrap"; at: number; last: number; props: StyleProps }
   | { op: "unwrap"; at: number }
+  | { op: "attr"; at: number; name: string; value: string | null }
   | { op: "insert"; at: number | null; place: Place; kind: InsertKind; src?: string; like?: InsertLike; props?: StyleProps };
 
 export type Place = "before" | "after" | "inside";
@@ -252,6 +253,59 @@ export function prepareForEditing(
 }
 
 /** The element whose start tag begins at `offset`, if it is editable. */
+/** An attribute value as it goes between double quotes. */
+function attributeValue(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+/**
+ * Sets, changes or takes away one attribute, touching nothing else in the
+ * tag: an attribute already there is rewritten where it is, a new one goes
+ * at the end of the opening tag.
+ */
+function attributeEdit(element: Element, source: string, name: string, value: string | null): TextEdit {
+  const lower = name.toLowerCase();
+  const at = element.sourceCodeLocation!.attrs?.[lower];
+  const written = value === null ? "" : `${name}="${attributeValue(value)}"`;
+  if (at) {
+    if (value !== null) return { start: at.startOffset, end: at.endOffset, text: written };
+    let start = at.startOffset;
+    while (start > 0 && /[ \t]/.test(source[start - 1])) start--;
+    return { start, end: at.endOffset, text: "" };
+  }
+  if (value === null) return { start: 0, end: 0, text: "" };
+  let end = element.sourceCodeLocation!.startTag!.endOffset - 1;
+  if (source[end - 1] === "/") end--;
+  while (end > 0 && /\s/.test(source[end - 1])) end--;
+  return { start: end, end, text: " " + written };
+}
+
+/** The markup of the element a stamp names, as the file has it, or null. */
+export function elementSource(source: string, at: number): string | null {
+  const element = elementAt(parseSource(source), at);
+  if (!element) return null;
+  const [start, end] = rangeOf(element, source);
+  return source.slice(start, end);
+}
+
+/**
+ * JSON files a page's scripts name in a string (`fetch("plans.json")`), as
+ * written: resolved by the caller, against the page, as fetch does.
+ */
+export function jsonNamed(text: string, ranges: Array<[number, number]>): string[] {
+  const out: string[] = [];
+  for (const [start, end] of ranges) {
+    const pattern = /["'`]([^"'`\s<>]{1,200}\.json)(?:\?[^"'`\s]*)?["'`]/g;
+    for (const m of text.slice(start, end).matchAll(pattern)) if (!out.includes(m[1])) out.push(m[1]);
+  }
+  return out.slice(0, 10);
+}
+
+/** A path named in a page, resolved against another file's path. */
+export function resolveBeside(href: string, path: string): string | null {
+  return resolveLinked(href, path);
+}
+
 export function elementAt(doc: Document, offset: number): Element | null {
   for (const element of editableElements(doc)) {
     if (element.sourceCodeLocation!.startTag!.startOffset === offset) return element;
@@ -640,6 +694,9 @@ export function planOp(source: string, request: EditRequest): OpResult {
 
     case "hide":
       return { ok: true, edits: [inlineStyleEdit(element, source, [["display", "none"]])] };
+
+    case "attr":
+      return { ok: true, edits: [attributeEdit(element, source, request.name, request.value)] };
 
     case "inline-style":
       return { ok: true, edits: [inlineStyleEdit(element, source, request.props)] };
@@ -1203,21 +1260,28 @@ export function findInScripts(files: ScriptFile[], clue: ScriptClue): ScriptSpot
 /** Why the words of a layer the page's script made can't be changed from the page. */
 export const RETYPE_WHY = {
   data:
-    "Its words aren't written in the page's scripts, so the script gets them from data, such as a JSON file or a server. " +
-    "Change them there.",
+    "Its words aren't in the page's scripts or the JSON files they load, so the script gets them from somewhere else, " +
+    "such as a server, or works them out. Change them there.",
   pieces:
     "The script puts these words together from pieces, such as a number and the words around it, so there's no one place " +
     "to change them. Code shows where the pieces are.",
   many: (n: number) =>
-    `These words are in the page's scripts ${n} times, so which one makes this layer can't be told. Code shows each place.`,
+    `These words are in the page's scripts ${n} times, so which one makes this layer can't be told. Pick the place in Code.`,
   nested: "This layer has other layers inside it. Double-click to select the words inside it.",
   tags: "Angle brackets can't go into a script's words from here. Change them in the script itself.",
 };
 
 /** Whether a script-made layer's words can be changed, and where they are if so. */
+export interface ScriptMatch {
+  file: number;
+  start: number;
+  end: number;
+  quote: string;
+}
+
 export type ScriptRetype =
-  | { ok: true; file: number; start: number; end: number; quote: string }
-  | { ok: false; why: string };
+  | ({ ok: true } & ScriptMatch)
+  | { ok: false; why: string; many?: ScriptMatch[] };
 
 /**
  * Where a script-made layer's words can be changed: exactly one string in
@@ -1232,7 +1296,7 @@ export function retypeInScripts(files: ScriptFile[], text: string): ScriptRetype
     for (const m of matchesInStrings(file, textPattern(whole), caches[index])) found.push({ file: index, ...m });
   });
   if (found.length === 1) return { ok: true, ...found[0] };
-  if (found.length > 1) return { ok: false, why: RETYPE_WHY.many(found.length) };
+  if (found.length > 1) return { ok: false, why: RETYPE_WHY.many(found.length), many: found.slice(0, 10) };
   const pieces = findInScripts(files, { text: whole }).length > 0;
   return { ok: false, why: pieces ? RETYPE_WHY.pieces : RETYPE_WHY.data };
 }

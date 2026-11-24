@@ -417,7 +417,8 @@ prototype from its preview** below). The settings are in two sections.
 - **Comments in your preview:** the name your comments are signed with, the
   vault folder the review is kept in, and **Import review comments**. The
   name is never written into the published site.
-- **Edit mode:** **Open code in**, the app the Code section opens a file in.
+- **Edit mode:** **Open code in**, the app the Code section opens a file in,
+  and **Change requests folder**, where Describe saves a request as a note.
 - **Comments on the published site:** **Include in the published site**,
   then **Let readers write comments**, then **How readers' comments reach
   you**:
@@ -612,20 +613,48 @@ colour can be picked from the page's variables and colours, or made into a
 new variable. **State** shows a layer as hovered, pressed or focused, so
 those styles can be edited too.
 
-**Code** shows where the layer starts in its file, and where each rule that
-styles it is, as a file and line. Click a location to copy it, or use the
-**Open in** link to open the file at that line, in the app chosen under
-**Comments and editing → Open code in**: VS Code by default, or Cursor,
-Windsurf, Zed, VS Code Insiders, Obsidian, or any app with a link format of
-its own. Obsidian opens the file but not the line.
+**Code** shows where the layer starts in its file, and the CSS rules that
+style it, strongest first, each with its file and line. A value that loses to
+another rule is struck out, and hovering it names the rule that wins. Values
+are fields: change one and press Enter to write it into that rule, or type
+`gap: 12px` into a rule's last line to add one; the layer's own `style` takes
+new values the same way. Click a location to copy it, or use the **Open in**
+link to open the file at that line, in the app chosen under **Comments and
+editing → Open code in**: VS Code by default, or Cursor, Windsurf, Zed, VS
+Code Insiders, Obsidian, or any app with a link format of its own. Obsidian
+opens the file but not the line.
+
+**Describing a change for an AI tool.** Select a layer and press `/` (or
+**Describe** on the bar): the bar's message line becomes a prompt about it.
+While you type, click other layers on the page to point at them; each goes
+into the line as a numbered reference, and is outlined and numbered on the
+page. Enter adds the change to a stack above the bar and leaves the prompt
+open for the next. Click a change in the stack to load it back into the bar
+and edit it; Enter saves it in place. The stack flips to **What's copied**,
+the exact text: the changes in order, then each layer by number with its
+file and line, its HTML as the file has it, and the CSS that wins for it.
+**Copy for AI** (Cmd+Enter) puts that on the clipboard for Claude Code,
+Cursor or the like, and **Save as note** writes it to a note in the vault,
+in **Change requests** by default, to point an AI tool at or keep as a
+record. Nothing about it reaches the page's files or its comments.
+
+**Attributes** edits the layer's HTML attributes: a link's `href`, an image's
+`alt`, a field's `placeholder` and `type`, `id`, `class`, `aria-label`, and
+any it already has. Event handlers (`on...`) and `javascript:` addresses are
+refused.
 
 A layer the page's own script made is not in the file. **Code** looks for
-its text, then its class, in the page's `<script>` blocks and the script
-files it loads, and shows where it probably comes from. When its words are
-written out once in a string there, Edit text changes them in that string,
-quotes escaped, and Undo takes it back. When they are not (built from data,
-put together from pieces such as a number and the words around it, or
-written in several places), Edit text is greyed out and says which.
+its text, then its class, in the page's `<script>` blocks, the script files
+it loads and the JSON files those scripts fetch, and shows where it probably
+comes from. When its words are written out once in a string there, Edit text
+changes them in that string, quotes escaped, and Undo takes it back. When
+they are in several places, Code lists each one with its line, and you pick
+which to change, or all of them. When they can't be found whole (fetched
+from a server, or put together from pieces such as a number and the words
+around it), Edit text is greyed out and says why.
+
+**Changes**, under History, shows what this session did to each file as a
+diff, line by line, to read before committing the prototype or to copy.
 
 **Measuring and nudging.** Hold Alt over another layer to see the distances
 between it and the selected one. The arrow keys nudge the selection by 1px,
@@ -723,6 +752,9 @@ src/overlay/    reviewing a built site, getting the comments back, and
   editPanel.ts      the Design and Layers panel
   editTools.ts      multi-select, framing, inserting, states, measuring
   editorLinks.ts    links that open a file at a line in your own editor
+  editDescribe.ts   Describe: changes for an AI tool, with each layer's code
+  changeRequest.ts  a described change request as a note in the vault
+  lineDiff.ts       the line diff behind Edit mode's Changes view
 src/tracker/    the trackers a comment can be filed with
   jira.ts, asana.ts   per-provider request and response shapes
   request.ts          the one HTTP call they make, and what to say when it fails
