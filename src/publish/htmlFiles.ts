@@ -507,6 +507,8 @@ export interface HtmlFileStats {
   sources: Array<{ url: string; sourcePath: string }>;
   /** Stylesheets carried beside those pages: published URL and vault file. */
   stylesheets: Array<{ url: string; sourcePath: string }>;
+  /** Scripts carried beside those pages, the same way. Never written to. */
+  scripts: Array<{ url: string; sourcePath: string }>;
   /**
    * Files beside a published page that nothing referenced, so nothing
    * published. See `findUnreferencedFiles`.
@@ -526,6 +528,7 @@ export function emptyHtmlFileStats(): HtmlFileStats {
     publishedPages: [],
     sources: [],
     stylesheets: [],
+    scripts: [],
     unreferenced: [],
   };
 }

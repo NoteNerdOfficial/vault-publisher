@@ -619,6 +619,14 @@ styles it is, as a file and line. Click a location to copy it, or use the
 Windsurf, Zed, VS Code Insiders, Obsidian, or any app with a link format of
 its own. Obsidian opens the file but not the line.
 
+A layer the page's own script made is not in the file. **Code** looks for
+its text, then its class, in the page's `<script>` blocks and the script
+files it loads, and shows where it probably comes from. When its words are
+written out once in a string there, Edit text changes them in that string,
+quotes escaped, and Undo takes it back. When they are not (built from data,
+put together from pieces such as a number and the words around it, or
+written in several places), Edit text is greyed out and says which.
+
 **Measuring and nudging.** Hold Alt over another layer to see the distances
 between it and the selected one. The arrow keys nudge the selection by 1px,
 and by 10px with Shift. I picks a colour from the screen (Chromium browsers

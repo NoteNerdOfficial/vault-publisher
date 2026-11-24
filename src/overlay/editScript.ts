@@ -482,7 +482,8 @@ const EDIT_COLOUR = String.raw`
     var selector = stableSelector(target);
     var n = countMatching(selector);
     return "Made by the page's script, so it isn't in the file. Colour, size and layout go into a rule for " +
-      selector + (n > 1 ? ", which styles all " + n + " elements like it." : ".");
+      selector + (n > 1 ? ", which styles all " + n + " elements like it." : ".") +
+      (retypeWhy(target) === "" ? " Enter or double-click changes its words in the script." : " Code shows where its words are in the script.");
   }
 
   function generatedStyle(target, props, what) {
@@ -1706,16 +1707,51 @@ export const EDIT_SCRIPT = `(function () {
     return out;
   }
 
+  /* A layer the page's script made, rather than one whose stamp went missing. */
+  function scriptMade(el) {
+    return !!el && stampOf(el) === null && !unavailable && !stale;
+  }
+
+  /*
+   * For a layer the page's script made: "" when its words can be changed in
+   * the script, why not when they can't, and null while the server looks.
+   */
+  function retypeWhy(el) {
+    if (el.children.length) return "This layer has other layers inside it. Double-click to select the words inside it.";
+    var where = whereOf(el, rulesFor(el));
+    if (!where) return null;
+    if (!where.retype) {
+      return "Its words aren't written in the page's scripts, so the script gets them from data, such as a JSON file or a server. Change them there.";
+    }
+    return where.retype.ok ? "" : where.retype.why;
+  }
+
   function startText() {
     var el = selected;
-    if (!el || busy || editing || whyNot(el)) return;
-    if (!retypable(el)) {
+    if (!el || busy || editing) return;
+    var script = null;
+    if (whyNot(el)) {
+      if (!scriptMade(el)) return;
+      var why = retypeWhy(el);
+      if (why === null) {
+        message = "Looking for its words in the page's scripts. Try again in a moment.";
+        refresh();
+        return;
+      }
+      if (why) {
+        message = why;
+        refresh();
+        return;
+      }
+      script = { find: scriptClue(el), where: whereOf(el, rulesFor(el)).retype };
+    } else if (!retypable(el)) {
       message = "This holds more than words. Double-click to go inside and edit each part.";
       refresh();
       return;
     }
     editing = {
       el: el,
+      script: script,
       before: el.textContent,
       beforeHTML: el.innerHTML,
       mixed: el.children.length > 0,
@@ -1732,7 +1768,9 @@ export const EDIT_SCRIPT = `(function () {
       sel.removeAllRanges();
       sel.addRange(range);
     } catch (e) {}
-    message = editing.mixed
+    message = script
+      ? "Type the new words. Enter saves them into the script at " + fileName(script.where.file) + " line " + script.where.line + ", Esc cancels."
+      : editing.mixed
       ? "Type the new words; links and emphasis stay as they are. Enter saves, Esc cancels."
       : "Type the new words. Enter saves, Esc cancels.";
     refresh();
@@ -1782,6 +1820,29 @@ export const EDIT_SCRIPT = `(function () {
     var done = function () {
       message = "Changed the words in " + name + ".";
     };
+    if (now.script) {
+      var words = text.replace(/\\s+/g, " ").trim();
+      var at = now.script.where;
+      act(
+        { op: "script-text", find: now.script.find, text: words },
+        "text change in " + name,
+        function (data) {
+          remap(data.edits);
+          el.textContent = words;
+        },
+        function (back) {
+          remap(back.edits);
+          el.textContent = now.before;
+        },
+        function () {
+          message = "Changed the words in the script, in " + fileName(at.file) + " at line " + at.line + ".";
+        },
+        function () {
+          restoreText(now);
+        },
+      );
+      return;
+    }
     // A refusal puts the words back, so the page never shows text the
     // file does not have.
     var refused = function () {
@@ -2481,7 +2542,7 @@ ${EDIT_PANEL}
     }, !!one && can);
     sep();
     menuItem(box, "Hide or show", k.shift + k.cmd + "H", hideOrShow, list.length > 0);
-    menuItem(box, "Edit text", "\u21b5", startText, !!one && can && retypable(one));
+    menuItem(box, "Edit text", "\u21b5", startText, !!one && ((can && retypable(one)) || (scriptMade(one) && retypeWhy(one) === "")));
     box.hidden = false;
     var at = toHost({ left: x, top: y, width: 0, height: 0 });
     var w = box.offsetWidth || 220;
@@ -2747,7 +2808,17 @@ ${EDIT_PANEL}
     var all = list.length > 0 && !busy && !editing && list.every(function (n) {
       return !whyNot(n);
     });
-    ui.textBtn.disabled = !can || list.length > 1 || !retypable(selected);
+    // A layer the page's script made can have its words changed in the
+    // script, when they are there once; otherwise the button says why not.
+    var scriptWhy = list.length === 1 && blocked && scriptMade(selected) ? retypeWhy(selected) : undefined;
+    ui.textBtn.disabled = scriptWhy !== undefined
+      ? scriptWhy !== "" || busy || !!editing
+      : !can || list.length > 1 || !retypable(selected);
+    ui.textBtn.title = scriptWhy === undefined || scriptWhy === ""
+      ? "Retype its words (Enter, or double-click)"
+      : scriptWhy === null
+      ? "Looking for its words in the page's scripts"
+      : scriptWhy;
     ui.copyBtn.disabled = !all;
     var canStyle = !!selected && !styleBlocked && !busy && !editing;
     ui.hideBtn.disabled = !(all || (canStyle && (narrow || !!blocked)));

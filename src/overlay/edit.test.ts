@@ -652,11 +652,12 @@ describe("history and linked sheets through the route", () => {
   let base: string;
   let vault: Record<string, string>;
   let preview: Record<string, string>;
+  let sources: Record<string, string>;
 
   beforeEach(async () => {
     vault = { "P/index.html": HTML, "P/style.css": CSS };
     preview = { "p/index.html": HTML, "p/style.css": CSS };
-    const sources: Record<string, string> = { "p/index.html": "P/index.html", "p/style.css": "P/style.css" };
+    sources = { "p/index.html": "P/index.html", "p/style.css": "P/style.css" };
     server = new ReviewServer({
       token: TOKEN,
       store: {
@@ -714,6 +715,99 @@ describe("history and linked sheets through the route", () => {
       body: JSON.stringify({ page: "p/index.html", hash: "old", at: 0 }),
     });
     expect(stale.status).toBe(409);
+  });
+
+  it("finds a layer the page's script made in the script that made it", async () => {
+    const page = [
+      '<!doctype html><html><head><script src="app.js"></script></head><body>',
+      "<main></main>",
+      "<script>",
+      "  const why = 'Don\\'t lose your basket';",
+      "</script>",
+      "</body></html>",
+    ].join("\n");
+    const js = "const items = [];\nfunction row(n) {\n  return `<li class=\"swhy\">${n} items left</li>`;\n}\n";
+    vault["P/index.html"] = page;
+    vault["P/app.js"] = js;
+    sources["p/app.js"] = "P/app.js";
+    const where = async (find: Record<string, unknown>) => {
+      const response = await fetch(`${base}/api/where`, {
+        method: "POST",
+        headers: { cookie: `osp-review=${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ page: "p/index.html", hash: hashText(page), find, rules: [] }),
+      });
+      return ((await response.json()) as { script: Array<Record<string, unknown>> }).script;
+    };
+    expect(await where({ text: "Don't lose your basket" })).toEqual([
+      { file: "P/index.html", line: 4, column: 16, editor: null, editorName: null, by: "text", what: "Don't lose your basket" },
+    ]);
+    expect(await where({ text: "3 items left" })).toMatchObject([{ file: "P/app.js", line: 3, by: "text", what: "items left" }]);
+    expect(await where({ text: "Nothing like it", classes: ["swhy"] })).toMatchObject([
+      { file: "P/app.js", line: 3, column: 22, by: "class", what: "swhy" },
+    ]);
+    expect(await where({ text: "Nothing like it", classes: ["row"] })).toEqual([]);
+  });
+
+  it("changes the words of a script-made layer in the one string that holds them, and undoes it", async () => {
+    const page = [
+      '<!doctype html><html><head><script src="app.js"></script></head><body>',
+      "<main></main>",
+      "<script>",
+      "  const why = 'We\\'ll hold it';",
+      "</script>",
+      "</body></html>",
+    ].join("\n");
+    const js = [
+      "list.innerHTML = `",
+      '  <li class="tally">Free returns</li>',
+      "  <li>${n} items left</li>",
+      "  <li>Twice</li><li>Twice</li>",
+      "`;",
+      "// Gift wrap",
+      "",
+    ].join("\n");
+    vault["P/index.html"] = page;
+    preview["p/index.html"] = page;
+    vault["P/app.js"] = js;
+    preview["p/app.js"] = js;
+    sources["p/app.js"] = "P/app.js";
+    const post = async (path: string, body: Record<string, unknown>) => {
+      const response = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { cookie: `osp-review=${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ page: "p/index.html", hash: hashText(vault["P/index.html"]), ...body }),
+      });
+      return { status: response.status, data: (await response.json()) as Record<string, unknown> };
+    };
+    const retype = async (text: string) =>
+      (await post("/api/where", { find: { text, classes: [], leaf: true }, rules: [] })).data.retype as Record<string, unknown>;
+
+    expect(await retype("Free returns")).toMatchObject({ ok: true, file: "P/app.js", line: 2 });
+    expect(await retype("3 items left")).toMatchObject({ ok: false, why: expect.stringContaining("from pieces") });
+    expect(await retype("Twice")).toMatchObject({ ok: false, why: expect.stringContaining("2 times") });
+    expect(await retype("Gift wrap")).toMatchObject({ ok: false, why: expect.stringContaining("from data") });
+
+    // In a template literal in a linked file: a backtick and ${ are escaped.
+    const first = await post("/api/edit", { op: "script-text", find: { text: "Free returns" }, text: "Free `returns` ${x}" });
+    expect(first.status).toBe(200);
+    expect(vault["P/app.js"]).toContain('<li class="tally">Free \\`returns\\` \\${x}</li>');
+    expect(preview["p/app.js"]).toBe(vault["P/app.js"]);
+    expect(vault["P/index.html"]).toBe(page);
+    await post("/api/edit", { op: "undo", id: first.data.id });
+    expect(vault["P/app.js"]).toBe(js);
+
+    // In a quoted string in the page itself: the quote is escaped, and the
+    // page's stamps move with it.
+    const second = await post("/api/edit", { op: "script-text", find: { text: "We'll hold it" }, text: "We'll keep it for 'you'" });
+    expect(second.status).toBe(200);
+    expect(vault["P/index.html"]).toContain("const why = 'We\\'ll keep it for \\'you\\'';");
+    expect(second.data.hash).toBe(hashText(vault["P/index.html"]));
+
+    const refused = await post("/api/edit", { op: "script-text", find: { text: "Twice" }, text: "Once" });
+    expect(refused.status).toBe(422);
+    expect(refused.data.error).toContain("2 times");
+    const tags = await post("/api/edit", { op: "script-text", find: { text: "Free returns" }, text: "<b>Free</b>" });
+    expect(tags.data.error).toContain("Angle brackets");
   });
 
   it("redoes what was undone, and forgets it once something new is done", async () => {

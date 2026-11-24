@@ -610,6 +610,101 @@ describe("the edit mode", () => {
     });
   });
 
+  describe("where the page's script made it", () => {
+    it("asks for a script-made layer by its text and classes, and shows where it was found", async () => {
+      page(".swhy { color: red; }", '<main data-osp-src="100"></main>');
+      const made = document.createElement("p");
+      made.className = "swhy is-open";
+      made.textContent = "Why we ask";
+      document.querySelector("main")!.appendChild(made);
+      const where = {
+        layer: null,
+        rules: [null],
+        script: [{ file: "Protos/app.js", line: 12, column: 5, editor: null, editorName: null, by: "text", what: "Why we ask" }],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          if (url === "/api/where") {
+            calls.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+            return new Response(JSON.stringify(where), { status: 200 });
+          }
+          return new Response("{}", { status: 404 });
+        }),
+      );
+      open(made);
+      await settle();
+      click(section("Code").querySelector(".ep-sec-toggle"));
+      await settle();
+      expect(calls[0].body.at).toBeUndefined();
+      expect(calls[0].body.find).toEqual({ text: "Why we ask", classes: ["swhy"], leaf: true });
+      const chips = Array.from(section("Code").querySelectorAll(".ep-where-name")).map((c) => c.textContent);
+      expect(chips).toEqual(["app.js \u00b7 line 12"]);
+      expect(section("Code").textContent).toContain("Found by its text");
+    });
+
+    /* A script-made <p> and a server that answers where, then edits. */
+    function scriptPage(retype: Record<string, unknown>): HTMLElement {
+      page("", '<main data-osp-src="100"></main>');
+      const made = document.createElement("p");
+      made.className = "swhy";
+      made.textContent = "Why we ask";
+      document.querySelector("main")!.appendChild(made);
+      const where = {
+        layer: null,
+        rules: [],
+        script: [{ file: "Protos/app.js", line: 3, column: 5, editor: null, editorName: null, by: "text", what: "Why we ask" }],
+        retype,
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          calls.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+          if (url === "/api/where") return new Response(JSON.stringify(where), { status: 200 });
+          const answer = answers.shift() ?? { status: 500, body: { error: "no answer queued" } };
+          return new Response(JSON.stringify(answer.body), { status: answer.status });
+        }),
+      );
+      return made;
+    }
+
+    it("changes a script-made layer's words in the script, when they are there once", async () => {
+      const made = scriptPage({ ok: true, file: "Protos/app.js", line: 3, column: 5, editor: null, editorName: null });
+      open(made);
+      await settle();
+      const textBtn = shadow().querySelectorAll(".ed-btn")[0] as HTMLButtonElement;
+      expect(textBtn.disabled).toBe(false);
+      expect(status()).toContain("Enter or double-click changes its words in the script");
+      key("Enter");
+      expect(made.getAttribute("contenteditable")).toBeTruthy();
+      expect(status()).toContain("app.js line 3");
+      made.textContent = "Why we  ask for it";
+      answers.push({ status: 200, body: { id: "e1", hash: "h0", edits: [] } });
+      made.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await settle();
+      const edit = calls.find((c) => c.url === "/api/edit")!;
+      expect(edit.body).toMatchObject({ op: "script-text", find: { text: "Why we ask" }, text: "Why we ask for it" });
+      expect(made.textContent).toBe("Why we ask for it");
+      expect(status()).toContain("Changed the words in the script, in app.js at line 3");
+    });
+
+    it("says why a script-made layer's words can't be changed, on the button and on Enter", async () => {
+      const why = "These words are in the page's scripts 2 times, so which one makes this layer can't be told. Code shows each place.";
+      const made = scriptPage({ ok: false, why });
+      open(made);
+      await settle();
+      const textBtn = shadow().querySelectorAll(".ed-btn")[0] as HTMLButtonElement;
+      expect(textBtn.disabled).toBe(true);
+      expect(textBtn.title).toBe(why);
+      key("Enter");
+      expect(made.hasAttribute("contenteditable")).toBe(false);
+      expect(status()).toBe(why);
+      click(section("Code").querySelector(".ep-sec-toggle"));
+      await settle();
+      expect(section("Code").textContent).toContain(why);
+    });
+  });
+
   describe("colour", () => {
     it("asks before changing a rule other layers share, then changes the rule", async () => {
       page(

@@ -922,47 +922,334 @@ export function planCssRule(
 }
 
 /**
+ * A link in a page resolved to a path beside the page, or null for a remote
+ * file or one that climbs out of the site.
+ */
+function resolveLinked(href: string, pagePath: string): string | null {
+  if (!href || /^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) return null;
+  const base = pagePath.includes("/") ? pagePath.slice(0, pagePath.lastIndexOf("/") + 1) : "";
+  const clean = href.split(/[?#]/)[0];
+  const joined = clean.startsWith("/") ? clean.slice(1) : base + clean;
+  const parts: string[] = [];
+  for (const part of joined.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (!parts.length) return null;
+      parts.pop();
+    } else parts.push(part);
+  }
+  if (!parts.length) return null;
+  try {
+    return decodeURIComponent(parts.join("/"));
+  } catch {
+    // A broken escape names nothing we can find.
+    return null;
+  }
+}
+
+/** Every element of the page with this tag, in document order. */
+function elementsNamed(source: string, tag: string): Element[] {
+  const out: Element[] = [];
+  const walk = (node: Node): void => {
+    const children = "childNodes" in node ? node.childNodes : [];
+    for (const child of children) {
+      if (!isElement(child)) continue;
+      if (child.tagName === tag) out.push(child);
+      walk(child);
+    }
+  };
+  walk(parseSource(source));
+  return out;
+}
+
+/**
  * The stylesheets a page links, as paths beside the page: `href`s of
  * `<link rel="stylesheet">` resolved against the page's own path. Remote
  * sheets and anything that climbs out are left out.
  */
 export function linkedStylesheets(source: string, pagePath: string): string[] {
-  const doc = parseSource(source);
   const out: string[] = [];
-  const base = pagePath.includes("/") ? pagePath.slice(0, pagePath.lastIndexOf("/") + 1) : "";
-  const walk = (node: Node): void => {
-    const children = "childNodes" in node ? node.childNodes : [];
-    for (const child of children) {
-      if (!isElement(child)) continue;
-      if (child.tagName === "link") {
-        const rel = child.attrs.find((a) => a.name === "rel")?.value.toLowerCase().split(/\s+/) ?? [];
-        const href = child.attrs.find((a) => a.name === "href")?.value ?? "";
-        if (rel.includes("stylesheet") && href && !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(href)) {
-          const clean = href.split(/[?#]/)[0];
-          const joined = clean.startsWith("/") ? clean.slice(1) : base + clean;
-          const parts: string[] = [];
-          let bad = false;
-          for (const part of joined.split("/")) {
-            if (part === "" || part === ".") continue;
-            if (part === "..") {
-              if (!parts.length) bad = true;
-              parts.pop();
-            } else parts.push(part);
-          }
-          if (!bad && parts.length) {
-            try {
-              out.push(decodeURIComponent(parts.join("/")));
-            } catch {
-              // A broken escape names nothing we can find.
-            }
-          }
-        }
-      }
-      walk(child);
-    }
-  };
-  walk(doc);
+  for (const link of elementsNamed(source, "link")) {
+    const rel = link.attrs.find((a) => a.name === "rel")?.value.toLowerCase().split(/\s+/) ?? [];
+    const path = rel.includes("stylesheet") ? resolveLinked(link.attrs.find((a) => a.name === "href")?.value ?? "", pagePath) : null;
+    if (path) out.push(path);
+  }
   return out;
+}
+
+/** The scripts a page loads from files beside it, by `<script src>`, as paths. */
+export function linkedScripts(source: string, pagePath: string): string[] {
+  const out: string[] = [];
+  for (const script of elementsNamed(source, "script")) {
+    const path = resolveLinked(script.attrs.find((a) => a.name === "src")?.value ?? "", pagePath);
+    if (path && !out.includes(path)) out.push(path);
+  }
+  return out;
+}
+
+/** The bodies of a page's own `<script>` blocks, as [start, end) offsets. */
+export function inlineScripts(source: string): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const script of elementsNamed(source, "script")) {
+    if (script.attrs.some((a) => a.name === "src")) continue;
+    const loc = script.sourceCodeLocation;
+    if (!loc?.startTag || !loc.endTag) continue;
+    out.push([loc.startTag.endOffset, loc.endTag.startOffset]);
+  }
+  return out;
+}
+
+/** What is known of a layer the page's script made: its words and its classes. */
+export interface ScriptClue {
+  text?: string;
+  classes?: string[];
+}
+
+/** A place in a script that probably makes the layer, and what matched there. */
+export interface ScriptSpot {
+  /** Index into the files searched. */
+  file: number;
+  offset: number;
+  by: "text" | "class";
+  what: string;
+}
+
+const MAX_SPOTS = 5;
+
+/**
+ * The words to look for, longest first: the whole text, then the runs
+ * between its numbers, since a script usually fills those in
+ * (`${n} items left`) and the rest is written out.
+ */
+function textNeedles(text: string): string[] {
+  const whole = text.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (whole.length < 3) return [];
+  const out = [whole];
+  const runs = whole
+    .split(/[\s$\u20ac\u00a3%+\-.,:/]*\d[\d\s$\u20ac\u00a3%+\-.,:/]*/)
+    .map((run) => run.trim())
+    .filter((run) => run.length >= 6)
+    .sort((a, b) => b.length - a.length);
+  for (const run of runs) if (!out.includes(run)) out.push(run);
+  return out.slice(0, 4);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The words as a script may spell them: any run of white space, a quote
+ * escaped or not, an ampersand or apostrophe as an HTML entity.
+ */
+function textPattern(needle: string): RegExp {
+  let out = "";
+  for (const ch of needle) {
+    if (/\s/.test(ch)) out += "\\s+";
+    else if (ch === "'" || ch === '"') out += "\\\\?" + ch;
+    else if (ch === "&") out += "(?:&|&amp;)";
+    else if (ch === "\u2019") out += "(?:\u2019|\\\\u2019|&rsquo;|&#8217;)";
+    else out += escapeRegExp(ch);
+  }
+  return new RegExp(out, "g");
+}
+
+/** A string literal in a script: where its contents are, and its quote. */
+interface StringSpan {
+  start: number;
+  end: number;
+  quote: string;
+}
+
+/**
+ * The string literals between start and end, by a small scan that knows
+ * quotes, template literals with `${}` in them, and comments. Regular
+ * expression literals are not told apart, which a quote inside one can
+ * throw off until the end of its line at worst.
+ */
+function stringSpans(text: string, start: number, end: number): StringSpan[] {
+  const out: StringSpan[] = [];
+  // Brace depths of the `${` we are inside, innermost last.
+  const holes: number[] = [];
+  let depth = 0;
+  let i = start;
+  const readString = (quote: string): void => {
+    const from = i;
+    while (i < end) {
+      const ch = text[i];
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        out.push({ start: from, end: i, quote });
+        i++;
+        return;
+      }
+      if (quote === "`" && ch === "$" && text[i + 1] === "{") {
+        out.push({ start: from, end: i, quote });
+        holes.push(depth);
+        i += 2;
+        return;
+      }
+      if (quote !== "`" && ch === "\n") {
+        i++;
+        return;
+      }
+      i++;
+    }
+    out.push({ start: from, end: Math.min(i, end), quote });
+  };
+  while (i < end) {
+    const ch = text[i];
+    if (ch === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl < 0 || nl > end ? end : nl + 1;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close < 0 || close > end ? end : close + 2;
+    } else if (ch === "'" || ch === '"' || ch === "`") {
+      i++;
+      readString(ch);
+    } else if (ch === "{") {
+      depth++;
+      i++;
+    } else if (ch === "}") {
+      i++;
+      if (holes.length && holes[holes.length - 1] === depth) {
+        holes.pop();
+        readString("`");
+      } else depth--;
+    } else i++;
+  }
+  return out;
+}
+
+/** The string a span of a script sits wholly inside, or null. */
+function stringAround(spans: StringSpan[], start: number, end: number): StringSpan | null {
+  let lo = 0;
+  let hi = spans.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const s = spans[mid];
+    if (s.end < start) lo = mid + 1;
+    else if (s.start > start) hi = mid - 1;
+    else return end <= s.end ? s : null;
+  }
+  return null;
+}
+
+type ScriptFile = { text: string; ranges: Array<[number, number]> };
+
+/** Every match of a pattern in a file's script ranges that sits inside one string. */
+function matchesInStrings(
+  file: ScriptFile,
+  pattern: RegExp,
+  spansOf: (range: [number, number]) => StringSpan[],
+): Array<{ start: number; end: number; quote: string }> {
+  const out: Array<{ start: number; end: number; quote: string }> = [];
+  for (const range of file.ranges) {
+    pattern.lastIndex = range[0];
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(file.text)) && match.index < range[1] && out.length < 50) {
+      const stop = match.index + match[0].length;
+      if (!match[0].length) pattern.lastIndex++;
+      if (stop > range[1]) break;
+      const around = stringAround(spansOf(range), match.index, stop);
+      if (around) out.push({ start: match.index, end: stop, quote: around.quote });
+    }
+  }
+  return out;
+}
+
+/** The string spans of each range, worked out once and only when asked. */
+function spanCache(file: ScriptFile): (range: [number, number]) => StringSpan[] {
+  const known = new Map<[number, number], StringSpan[]>();
+  return (range) => {
+    let spans = known.get(range);
+    if (!spans) known.set(range, (spans = stringSpans(file.text, range[0], range[1])));
+    return spans;
+  };
+}
+
+/**
+ * Where in a page's scripts a layer they made probably comes from: its
+ * words, written out in the script, or failing that its class, set in a
+ * string. A guess to go and look at, not something to write to.
+ */
+export function findInScripts(files: ScriptFile[], clue: ScriptClue): ScriptSpot[] {
+  const caches = files.map(spanCache);
+  const search = (pattern: RegExp, by: ScriptSpot["by"], what: string) => {
+    const found: ScriptSpot[] = [];
+    files.forEach((file, index) => {
+      for (const m of matchesInStrings(file, pattern, caches[index])) {
+        if (found.length < MAX_SPOTS) found.push({ file: index, offset: m.start, by, what });
+      }
+    });
+    return found;
+  };
+  for (const needle of textNeedles(clue.text ?? "")) {
+    const found = search(textPattern(needle), "text", needle);
+    if (found.length) return found;
+  }
+  for (const name of clue.classes ?? []) {
+    if (!/^-?[A-Za-z_][\w-]*$/.test(name)) continue;
+    const found = search(new RegExp("(?<![\\w-])" + escapeRegExp(name) + "(?![\\w-])", "g"), "class", name);
+    if (found.length) return found;
+  }
+  return [];
+}
+
+/** Why the words of a layer the page's script made can't be changed from the page. */
+export const RETYPE_WHY = {
+  data:
+    "Its words aren't written in the page's scripts, so the script gets them from data, such as a JSON file or a server. " +
+    "Change them there.",
+  pieces:
+    "The script puts these words together from pieces, such as a number and the words around it, so there's no one place " +
+    "to change them. Code shows where the pieces are.",
+  many: (n: number) =>
+    `These words are in the page's scripts ${n} times, so which one makes this layer can't be told. Code shows each place.`,
+  nested: "This layer has other layers inside it. Double-click to select the words inside it.",
+  tags: "Angle brackets can't go into a script's words from here. Change them in the script itself.",
+};
+
+/** Whether a script-made layer's words can be changed, and where they are if so. */
+export type ScriptRetype =
+  | { ok: true; file: number; start: number; end: number; quote: string }
+  | { ok: false; why: string };
+
+/**
+ * Where a script-made layer's words can be changed: exactly one string in
+ * the page's scripts that holds all of them. Anything else says why not.
+ */
+export function retypeInScripts(files: ScriptFile[], text: string): ScriptRetype {
+  const whole = text.replace(/\s+/g, " ").trim();
+  if (!whole || whole.length > 2000) return { ok: false, why: RETYPE_WHY.data };
+  const caches = files.map(spanCache);
+  const found: Array<{ file: number; start: number; end: number; quote: string }> = [];
+  files.forEach((file, index) => {
+    for (const m of matchesInStrings(file, textPattern(whole), caches[index])) found.push({ file: index, ...m });
+  });
+  if (found.length === 1) return { ok: true, ...found[0] };
+  if (found.length > 1) return { ok: false, why: RETYPE_WHY.many(found.length) };
+  const pieces = findInScripts(files, { text: whole }).length > 0;
+  return { ok: false, why: pieces ? RETYPE_WHY.pieces : RETYPE_WHY.data };
+}
+
+/**
+ * New words, written the way the string they replace is: its quote and
+ * backslashes escaped, entities kept if it used them. A string, or the
+ * reason they can't go in.
+ */
+export function scriptWords(old: string, next: string, quote: string): { ok: true; text: string } | { ok: false; why: string } {
+  let out = next.replace(/\s*\n\s*/g, " ");
+  if (/[<>]/.test(out)) return { ok: false, why: RETYPE_WHY.tags };
+  if (/&(?:amp|rsquo|#8217);/.test(old)) out = out.replace(/&/g, "&amp;");
+  out = out.replace(/\\/g, "\\\\");
+  if (quote === "`") out = out.replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+  else out = out.split(quote).join("\\" + quote);
+  return { ok: true, text: out };
 }
 
 /** The 1-based line and column of an offset in a file. */

@@ -925,7 +925,7 @@ export default class VaultPublisherPlugin extends Plugin {
       console.warn(`vault-publisher: could not remove ${failure.path}: ${failure.reason}`);
     }
 
-    await this.savePreviewSources([...result.htmlFiles.sources, ...result.htmlFiles.stylesheets]);
+    await this.savePreviewSources([...result.htmlFiles.sources, ...result.htmlFiles.stylesheets, ...result.htmlFiles.scripts]);
 
     const removed = pruned.removed.length
       ? `, removed ${pruned.removed.length} stale ${pruned.removed.length === 1 ? "file" : "files"}`

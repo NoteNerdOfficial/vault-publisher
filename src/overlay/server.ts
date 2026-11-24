@@ -45,7 +45,13 @@ import {
   lineAt,
   ruleStart,
   invertEdits,
+  findInScripts,
+  inlineScripts,
+  retypeInScripts,
+  scriptWords,
+  linkedScripts,
   linkedStylesheets,
+  type ScriptClue,
   planCssRule,
   planOp,
   prepareForEditing,
@@ -804,15 +810,31 @@ export class ReviewServer {
         ];
       }
 
-      const request = editRequest(body);
-      if (typeof request === "string") return [400, { error: request }];
-
-      // A rule in a linked stylesheet: the edit lands in that file instead.
       let file = vaultPath;
       let preview = page;
       let text = source;
       let planned;
-      if (request.op === "rule-style" && typeof request.sheet === "string") {
+      const request = body.op === "script-text" ? null : editRequest(body);
+      if (typeof request === "string") return [400, { error: request }];
+
+      if (request === null) {
+        // The words of a layer the page's script made, changed in the one
+        // string of the script that holds them.
+        const find = body.find as Record<string, unknown> | undefined;
+        const before = typeof find?.text === "string" ? find.text : "";
+        const after = typeof body.text === "string" ? body.text : null;
+        if (!before || after === null || after.length > 2000) return [400, { error: "Expected the old words and the new." }];
+        const files = await this.scriptFiles(edit, source, vaultPath, page);
+        const verdict = retypeInScripts(files, before);
+        if (!verdict.ok) return [422, { error: verdict.why }];
+        const target = files[verdict.file];
+        const words = scriptWords(target.text.slice(verdict.start, verdict.end), after, verdict.quote);
+        if (!words.ok) return [422, { error: words.why }];
+        file = target.file;
+        preview = target.preview;
+        text = target.text;
+        planned = { ok: true as const, edits: [{ start: verdict.start, end: verdict.end, text: words.text }] };
+      } else if (request.op === "rule-style" && typeof request.sheet === "string") {
         const sheetPath = request.sheet;
         const sheetFile = sheetPath.endsWith(".css") ? edit.sourceFor(sheetPath) : null;
         if (!sheetFile || !linkedStylesheets(source, page).includes(sheetPath)) {
@@ -887,6 +909,28 @@ export class ReviewServer {
    * Where a layer and its rules are in the files: path, line and column,
    * for the panel's Code section and its "open in editor" link. Read-only.
    */
+  /**
+   * The page's own <script> blocks, then the script files it loads that this
+   * build carried, so every path is one the vault has. Each keeps the
+   * preview path it is served at, for a write to reach the preview too.
+   */
+  private async scriptFiles(
+    edit: EditStore,
+    source: string,
+    vaultPath: string,
+    page: string,
+  ): Promise<Array<{ file: string; preview: string; text: string; ranges: Array<[number, number]> }>> {
+    const files = [{ file: vaultPath, preview: page, text: source, ranges: inlineScripts(source) }];
+    for (const src of linkedScripts(source, page).slice(0, 10)) {
+      const file = /\.m?js$/i.test(src) ? edit.sourceFor(src) : null;
+      const text = file ? await edit.readSource(file) : null;
+      if (file && text !== null && text.length <= 2_000_000) {
+        files.push({ file, preview: src, text, ranges: [[0, text.length]] });
+      }
+    }
+    return files;
+  }
+
   private async postWhere(request: IncomingMessage, response: ServerResponse, edit: EditStore): Promise<void> {
     const raw = await readBody(request);
     let body: Record<string, unknown>;
@@ -908,8 +952,30 @@ export class ReviewServer {
       return { file, line: at.line, column: at.column, editor: link?.url ?? null, editorName: link?.name ?? null };
     };
 
-    const answer: { layer: unknown; rules: unknown[] } = { layer: null, rules: [] };
+    const answer: { layer: unknown; rules: unknown[]; script?: unknown[]; retype?: unknown } = { layer: null, rules: [] };
     if (isOffset(body.at) && body.at < source.length) answer.layer = place(vaultPath, source, body.at);
+    const find = body.find as Record<string, unknown> | undefined;
+    if (find && typeof find === "object") {
+      const clue: ScriptClue = {
+        text: typeof find.text === "string" ? find.text.slice(0, 200) : undefined,
+        classes: Array.isArray(find.classes)
+          ? find.classes.filter((c): c is string => typeof c === "string" && c.length <= 100).slice(0, 8)
+          : undefined,
+      };
+      const files = await this.scriptFiles(edit, source, vaultPath, page);
+      answer.script = findInScripts(files, clue).map((spot) => ({
+        ...place(files[spot.file].file, files[spot.file].text, spot.offset),
+        by: spot.by,
+        what: spot.what,
+      }));
+      // Only a layer with nothing but words in it is asked about.
+      if (find.leaf === true && clue.text) {
+        const verdict = retypeInScripts(files, clue.text);
+        answer.retype = verdict.ok
+          ? { ok: true, ...place(files[verdict.file].file, files[verdict.file].text, verdict.start) }
+          : { ok: false, why: verdict.why };
+      }
+    }
     const rules = Array.isArray(body.rules) ? body.rules.slice(0, 40) : [];
     const sheets = new Map<string, string | null>();
     for (const item of rules as Array<Record<string, unknown>>) {

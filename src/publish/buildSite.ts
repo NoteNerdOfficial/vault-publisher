@@ -1606,6 +1606,9 @@ export async function buildSite(
       // A copy byte for byte, so the edit notch can write to the vault file
       // and the preview copy alike.
       if (/\.css$/i.test(path)) htmlStats.stylesheets.push({ url: companion.url, sourcePath: path });
+      // Scripts too, read-only: the Code section looks in them for what a
+      // page's script made.
+      if (/\.m?js$/i.test(path)) htmlStats.scripts.push({ url: companion.url, sourcePath: path });
     } catch (error) {
       skipped.push({
         path,

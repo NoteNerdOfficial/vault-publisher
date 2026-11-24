@@ -1525,10 +1525,33 @@ export const EDIT_PANEL = String.raw`
    * Where the layer and its rules are: asked once per version of the file,
    * and drawn when the answer comes. Null until then.
    */
+  /*
+   * What a layer the page's script made can be found by in the script: its
+   * own words, else all of them when it has little inside, and its classes.
+   */
+  function scriptClue(target) {
+    var own = "";
+    Array.prototype.forEach.call(target.childNodes, function (n) {
+      var t = n.nodeType === 3 ? n.nodeValue.replace(/\s+/g, " ").trim() : "";
+      if (t.length > own.length) own = t;
+    });
+    var text = own || (target.children.length <= 3 ? (target.textContent || "").replace(/\s+/g, " ").trim() : "");
+    var classes = Array.prototype.filter.call(target.classList, function (name) {
+      return ident(name) && !STATE_CLASS.test(name) && name.indexOf("osp-") !== 0;
+    });
+    // The rarest class on the page is the likeliest to be the script's own.
+    classes.sort(function (a, b) {
+      return countMatching("." + a) - countMatching("." + b);
+    });
+    return { text: text.slice(0, 200), classes: classes.slice(0, 8), leaf: target.children.length === 0 };
+  }
+
   function whereOf(target, rules) {
     var at = stampOf(target);
-    if (at === null || unavailable || stale) return null;
-    var key = hash + "|" + at;
+    if (unavailable || stale) return null;
+    var find = at === null ? scriptClue(target) : null;
+    if (find && !find.text && !find.classes.length) return { layer: null, rules: [], script: [] };
+    var key = hash + "|" + (find ? "s|" + JSON.stringify(find) : at);
     var known = whereCache[key];
     if (known === "asking") return null;
     if (known) return known;
@@ -1540,7 +1563,8 @@ export const EDIT_PANEL = String.raw`
       body: JSON.stringify({
         page: PAGE,
         hash: hash,
-        at: at,
+        at: at === null ? undefined : at,
+        find: find || undefined,
         rules: rules.map(function (r) {
           return r.ask || { sheet: null, path: [], selector: "" };
         }),
@@ -1609,6 +1633,24 @@ export const EDIT_PANEL = String.raw`
         b.appendChild(placeChip(where.layer, label(one)));
       } else if (stampOf(one) === null) {
         b.appendChild(el("p", "ep-hint", "Made by the page's script, so it is not in the file."));
+        var spots = where && where.script;
+        if (spots && spots.length) {
+          var byText = spots[0].by === "text";
+          b.appendChild(el("div", "ep-palette-label", spots.length > 1 ? "Probably made in one of these" : "Probably made here"));
+          spots.forEach(function (spot) {
+            b.appendChild(placeChip(spot, byText ? "its text" : "." + spot.what));
+          });
+          var quoted = spots[0].what.length > 40 ? spots[0].what.slice(0, 40) + "\u2026" : spots[0].what;
+          b.appendChild(el("p", "ep-hint", byText
+            ? "Found by its text, \u201c" + quoted + "\u201d."
+            : "Found by its class, ." + spots[0].what + "."));
+        } else if (spots) {
+          b.appendChild(el("p", "ep-hint", "Its words and classes aren't in the page's scripts. The script may load them from somewhere else."));
+        }
+        // Whether its words can be changed from here, and why not if not.
+        var why = where ? retypeWhy(one) : null;
+        if (why === "") b.appendChild(el("p", "ep-hint", "You can change its words here: Enter or double-click. They're written into the script at that line."));
+        else if (why && spots && spots.length) b.appendChild(el("p", "ep-hint ep-why", why));
       }
       var all = [];
       rules.forEach(function (r, i) {
