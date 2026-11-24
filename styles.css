@@ -182,3 +182,70 @@
 .osp-section > .osp-section-body > .setting-item:first-child {
   border-top: none;
 }
+
+/* --- what's new ---------------------------------------------------------
+   Shown once after an update with notes. Wider than a default modal so the
+   screenshot can be read, and the screenshot gets a hairline so a light
+   picture does not dissolve into a light modal. */
+
+.osp-whats-new {
+  width: min(680px, calc(100vw - 48px));
+}
+
+.osp-whats-new-kicker {
+  color: var(--text-accent);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.02em;
+}
+
+.osp-whats-new-title {
+  margin: 4px 0 8px;
+}
+
+.osp-whats-new-lede {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+}
+
+.osp-whats-new-shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.osp-whats-new-points {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 20px;
+}
+
+.osp-whats-new-points li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.osp-whats-new-points strong {
+  color: var(--text-normal);
+}
+
+.osp-whats-new-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+@media (max-width: 560px) {
+  .osp-whats-new-points {
+    grid-template-columns: 1fr;
+  }
+}

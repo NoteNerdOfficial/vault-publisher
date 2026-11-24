@@ -119,6 +119,7 @@ import {
 } from "./platform/backgroundThrottling";
 import { GITHUB_COM_API, GitHubClient, GitHubError } from "./github/client";
 import { registerCaptureView } from "./render/basesCaptureView";
+import { WhatsNewModal, latestRelease, releaseToShow } from "./ui/whatsNew";
 
 /**
  * Renders a vault through Obsidian, builds a static site from the result,
@@ -156,6 +157,8 @@ const EDIT_BACKUPS = "edit-backups";
 
 interface Settings {
   autoRun: AutoRunMode;
+  /** The plugin version the what's new popup last ran for. */
+  lastSeenVersion?: string;
   /** Note the diagnose run samples, as a vault path. */
   diagnosePath?: string;
   site: SiteConfig;
@@ -468,6 +471,15 @@ export default class VaultPublisherPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
 
+    this.addCommand({
+      id: "show-whats-new",
+      name: "Show what's new",
+      callback: () => this.showWhatsNew(true),
+    });
+    // Once the workspace is up, so the popup is not the first thing to
+    // fight a vault still opening.
+    this.app.workspace.onLayoutReady(() => this.showWhatsNew(false));
+
     // Reads every row of a Bases table from its data rather than from the
     // grid, which only holds what fits in the window. Needs Obsidian 1.10;
     // without it the build reads the grid as before.
@@ -585,6 +597,33 @@ export default class VaultPublisherPlugin extends Plugin {
     }
   }
 
+  /** True when this run found no settings of its own or the old plugin's. */
+  private freshInstall = false;
+
+  /*
+   * The what's new popup: once after an update with notes, or whenever the
+   * command asks. Either way, the version is marked seen.
+   */
+  private showWhatsNew(asked: boolean): void {
+    const current = this.manifest.version;
+    const release = asked
+      ? latestRelease(current)
+      : releaseToShow(current, this.settings.lastSeenVersion, this.freshInstall);
+    if (this.settings.lastSeenVersion !== current) {
+      this.settings.lastSeenVersion = current;
+      void this.saveSettings();
+    }
+    if (!release) {
+      if (asked) new Notice("Vault Publisher: nothing new to show for this version.");
+      return;
+    }
+    new WhatsNewModal(this.app, release, () => {
+      const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
+      setting?.open();
+      setting?.openTabById(this.manifest.id);
+    }).open();
+  }
+
   private async loadSettings(): Promise<void> {
     let stored = (await this.loadData()) as Partial<Settings> | null;
 
@@ -602,6 +641,9 @@ export default class VaultPublisherPlugin extends Plugin {
         );
       }
     }
+    // Nothing stored and nothing brought over: a first run, which has
+    // nothing new to be told about.
+    this.freshInstall = !hasStoredSettings(stored);
 
     this.settings = {
       ...DEFAULT_SETTINGS,

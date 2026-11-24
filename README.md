@@ -729,6 +729,7 @@ src/platform/   things only a desktop Electron host can do
   backgroundThrottling.ts
 src/ui/
   settingsTab.ts  the settings screen
+  whatsNew.ts     the popup after an update, and the notes it shows
 examples/       folders to copy into a vault to try a feature out
 media/          the screenshots and the recording in this README
 scripts/        deploying a build into a vault, and generating a vault to

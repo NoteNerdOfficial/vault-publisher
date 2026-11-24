@@ -20,6 +20,9 @@ const context = await esbuild.context({
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
+  // The what's new screenshot travels inside main.js: a release ships
+  // main.js, manifest.json and styles.css, and nothing else.
+  loader: { ".jpg": "dataurl" },
   outfile: "main.js",
 });
 
