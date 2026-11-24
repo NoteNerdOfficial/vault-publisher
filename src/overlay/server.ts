@@ -33,6 +33,7 @@ import { OVERLAY_SCHEMA_VERSION, OverlayExternalIssue } from "./types";
 import { scalarText } from "../text";
 import {
   EditRequest,
+  Place,
   StyleProps,
   TextEdit,
   applyEdits,
@@ -45,7 +46,7 @@ import {
   shiftsOf,
 } from "./edit";
 import { editInjection } from "./editScript";
-import { isPropertyName, isSafeSelector, isSafeValue, isWidthQuery } from "./editCss";
+import { isPropertyName, isSafeSelector, isSafeValueOrRemoval, isWidthQuery } from "./editCss";
 
 /** Everything the server is allowed to touch, so it can touch nothing else. */
 export interface ReviewStore {
@@ -92,6 +93,24 @@ export interface EditStore {
   writePreview(previewPath: string, text: string): Promise<void>;
   /** Keeps the file as it was before this session's first edit to it. */
   backup(vaultPath: string, text: string): Promise<void>;
+  /**
+   * The images Insert may put on this page: vault paths of the image files
+   * in the page's own folder and below it.
+   */
+  images?(vaultPath: string): Promise<string[]>;
+  /** Copies a vault file into the preview, so a new image shows without a build. */
+  copyToPreview?(vaultPath: string, previewPath: string): Promise<void>;
+}
+
+/** The images Insert can use: the page's folder and below, by path from the page. */
+async function imagesFor(edit: EditStore, vaultPath: string): Promise<Array<{ src: string; vault: string }>> {
+  if (!edit.images) return [];
+  const dir = vaultPath.includes("/") ? vaultPath.slice(0, vaultPath.lastIndexOf("/") + 1) : "";
+  const found = await edit.images(vaultPath);
+  return found
+    .filter((path) => path.startsWith(dir) && /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(path))
+    .slice(0, 500)
+    .map((path) => ({ src: path.slice(dir.length), vault: path }));
 }
 
 /**
@@ -110,6 +129,8 @@ interface EditRecord {
   forward: TextEdit[];
   inverse: TextEdit[];
   relocated?: Array<[number, number]>;
+  /** Edits made as one gesture -- one change to many layers -- undo together. */
+  group?: string;
   /** The file's hash before and after: each way is refused if it moved. */
   beforeHash: string;
   afterHash: string;
@@ -498,6 +519,19 @@ export class ReviewServer {
         return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
       }
 
+      if (path === "/api/images" && this.options.edit) {
+        if (request.method !== "GET") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        const page = new URLSearchParams((request.url ?? "").split("?")[1] ?? "").get("page") ?? "";
+        const vaultPath = /\.html?$/i.test(page) ? this.options.edit.sourceFor(page) : null;
+        if (!vaultPath) return send(response, 404, MIME.json, `{"images":[]}`);
+        const images = await imagesFor(this.options.edit, vaultPath);
+        return send(response, 200, MIME.json, JSON.stringify({ images: images.map((i) => i.src) }), {
+          "Cache-Control": "no-store",
+        });
+      }
+
       if (path === "/api/edit" && this.options.edit) {
         if (request.method !== "POST") {
           return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
@@ -695,21 +729,32 @@ export class ReviewServer {
         if (!last || (!blind && last.id !== body.id)) {
           return [409, { conflict: true, error: `${undoing ? "Undo" : "Redo"} is out of step with the file. Reload to keep editing.` }];
         }
-        const text = last.html ? source : await edit.readSource(last.file);
-        if (text === null || hashText(text) !== (undoing ? last.afterHash : last.beforeHash)) {
-          return [409, { conflict: true, error: `The file changed since that edit, so it can't be ${undoing ? "undone" : "redone"} from here.` }];
+        // Blind, a gesture that changed many layers comes back as a whole.
+        let steps = 1;
+        if (blind && last.group) {
+          while (steps < from.length && from[from.length - 1 - steps].group === last.group) steps++;
         }
-        from.pop();
-        const edits = undoing ? last.inverse : last.forward;
-        const next = applyEdits(text, edits);
-        await this.writeEdited(edit, last.preview, last.file, text, next);
-        (undoing ? history.redo : history.undo).push(last);
+        let edits: TextEdit[] = [];
+        let pageHash = body.hash;
+        for (let i = 0; i < steps; i++) {
+          const record = from[from.length - 1];
+          const text = await edit.readSource(record.file);
+          if (text === null || hashText(text) !== (undoing ? record.afterHash : record.beforeHash)) {
+            return [409, { conflict: true, error: `The file changed since that edit, so it can't be ${undoing ? "undone" : "redone"} from here.` }];
+          }
+          from.pop();
+          edits = undoing ? record.inverse : record.forward;
+          const next = applyEdits(text, edits);
+          await this.writeEdited(edit, record.preview, record.file, text, next);
+          (undoing ? history.redo : history.undo).push(record);
+          if (record.html) pageHash = hashText(next);
+        }
         return [
           200,
           {
             id: last.id,
-            hash: last.html ? hashText(next) : body.hash,
-            edits: last.html ? shiftsOf(edits) : [],
+            hash: pageHash,
+            edits: last.html && steps === 1 ? shiftsOf(edits) : [],
             relocated: last.relocated,
             reload: blind,
             ...this.counts(history),
@@ -738,9 +783,19 @@ export class ReviewServer {
         text = css;
         planned = planCssRule(css, request.path, request.selector, request.props);
       } else {
+        if (request.op === "insert" && request.kind === "image") {
+          const image = (await imagesFor(edit, vaultPath)).find((i) => i.src === request.src);
+          if (!image) return [404, { error: "That image isn't in this page's folder." }];
+          if (edit.copyToPreview) {
+            const dir = page.includes("/") ? page.slice(0, page.lastIndexOf("/") + 1) : "";
+            await edit.copyToPreview(image.vault, dir + image.src);
+          }
+        }
         planned = planOp(source, request);
       }
       if (!planned.ok) return [422, { error: planned.error }];
+      // A removal of something that was never there changes nothing.
+      planned.edits = planned.edits.filter((e) => e.start !== e.end || e.text);
       if (!planned.edits.length) return [200, { id: null, hash: body.hash, edits: [], ...this.counts(history) }];
 
       const next = applyEdits(text, planned.edits);
@@ -759,6 +814,7 @@ export class ReviewServer {
         forward: planned.edits,
         inverse: invertEdits(text, planned.edits),
         relocated: planned.relocated,
+        group: typeof body.group === "string" && /^[\w-]{1,40}$/.test(body.group) ? body.group : undefined,
         beforeHash: hashText(text),
         afterHash: hashText(next),
       };
@@ -773,6 +829,7 @@ export class ReviewServer {
           hash: html ? record.afterHash : body.hash,
           edits: html ? shiftsOf(planned.edits) : [],
           relocated: planned.relocated,
+          created: planned.created,
           ...this.counts(history),
         },
       ];
@@ -843,13 +900,13 @@ function isOffset(value: unknown): value is number {
 
 /** Declarations from a body, each checked, or why they cannot be written. */
 function styleProps(raw: unknown): StyleProps | string {
-  if (!Array.isArray(raw) || !raw.length || raw.length > 8) return "Expected declarations to set.";
+  if (!Array.isArray(raw) || !raw.length || raw.length > 32) return "Expected declarations to set.";
   const out: StyleProps = [];
   for (const pair of raw) {
     if (!Array.isArray(pair) || pair.length !== 2) return "Expected declarations to set.";
     const [prop, value] = pair as unknown[];
     if (typeof prop !== "string" || !isPropertyName(prop)) return "Expected a CSS property.";
-    if (typeof value !== "string" || !isSafeValue(value)) return "That value can't be written.";
+    if (typeof value !== "string" || !isSafeValueOrRemoval(value)) return "That value can't be written.";
     out.push([prop, value]);
   }
   return out;
@@ -904,6 +961,36 @@ export function editRequest(body: Record<string, unknown>): EditRequest | string
       return "Expected the new text.";
     }
     return { op, at: body.at, texts };
+  }
+  const isPlace = (value: unknown): value is Place => value === "before" || value === "after" || value === "inside";
+  if (op === "insert") {
+    if (body.at !== null && !isOffset(body.at)) return "Expected where to put it.";
+    if (!isPlace(body.place)) return "Expected before, after or inside.";
+    const kind = body.kind;
+    if (kind !== "frame" && kind !== "rect" && kind !== "text" && kind !== "image") return "Unknown thing to insert.";
+    if (kind === "image") {
+      // Checked against the page's own images later; here only its shape.
+      if (typeof body.src !== "string" || !/^[\w\-./ ]{1,300}$/.test(body.src) || body.src.includes("..")) {
+        return "Expected an image.";
+      }
+      return { op, at: body.at, place: body.place, kind, src: body.src };
+    }
+    return { op, at: body.at, place: body.place, kind };
+  }
+  if (op === "wrap") {
+    if (!isOffset(body.at) || !isOffset(body.last)) return "Expected the layers to frame.";
+    const props = body.props === undefined ? [] : styleProps(body.props);
+    if (typeof props === "string") return props;
+    return { op, at: body.at, last: body.last, props };
+  }
+  if (op === "unwrap") {
+    if (!isOffset(body.at)) return "Expected an element.";
+    return { op, at: body.at };
+  }
+  if (op === "copy") {
+    if (!isOffset(body.at) || !isOffset(body.target)) return "Expected what to paste and where.";
+    if (!isPlace(body.place)) return "Expected before, after or inside.";
+    return { op, at: body.at, target: body.target, place: body.place };
   }
   if (op !== "delete" && op !== "hide" && op !== "duplicate" && op !== "move" && op !== "text") {
     return "Unknown edit.";

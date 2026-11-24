@@ -3052,6 +3052,15 @@ export const OVERLAY_SCRIPT = `(function () {
   var list = el("div", "co-list");
   panel.appendChild(list);
 
+  /*
+   * The same panel holds Edit mode's inspector. The two never show at once,
+   * so they share one shell: one side, one width, one resize handle, and
+   * the notch keeps clear of it the same way. Edit mode draws into this
+   * slot; the review list's parts are hidden while it does.
+   */
+  var editSlot = el("div", "co-edit-slot");
+  panel.appendChild(editSlot);
+
   /* --- the notch ---------------------------------------------------- */
 
   var notch = el("div", "co-notch");
@@ -6009,7 +6018,8 @@ export const OVERLAY_SCRIPT = `(function () {
     if (mode === "edit" && next !== "edit") EDIT.exit();
     mode = next;
     capture.hidden = next !== "comment";
-    panel.hidden = next !== "review";
+    panel.hidden = next !== "review" && next !== "edit";
+    panel.setAttribute("data-content", next === "edit" ? "edit" : "review");
     if (next !== "comment") {
       closeDraft();
       setAim(null);
@@ -6023,7 +6033,21 @@ export const OVERLAY_SCRIPT = `(function () {
     clearPanelOfNotch();
     placeNotch();
     render();
-    if (next === "edit") EDIT.enter({ shadow: shadow, wrap: wrap, notch: notch });
+    if (next === "edit") {
+      EDIT.enter({
+        shadow: shadow,
+        wrap: wrap,
+        notch: notch,
+        panel: {
+          slot: editSlot,
+          box: panel,
+          side: function () {
+            return side;
+          },
+          toggleSide: moveSide,
+        },
+      });
+    }
   }
 
   function indexOfMode(name) {
@@ -6058,7 +6082,9 @@ export const OVERLAY_SCRIPT = `(function () {
     renderPanel();
   });
 
-  sideBtn.addEventListener("click", function () {
+  sideBtn.addEventListener("click", moveSide);
+
+  function moveSide() {
     side = side === "right" ? "left" : "right";
     panel.setAttribute("data-side", side);
     // Asked for on purpose, so the panel stays where it was sent and the
@@ -6067,7 +6093,7 @@ export const OVERLAY_SCRIPT = `(function () {
     else placeNotch();
     writePrefs();
     renderPanel();
-  });
+  }
 
   /* --- resizing the panel -------------------------------------------- */
 

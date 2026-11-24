@@ -2263,7 +2263,7 @@ describe("sorting the panel", () => {
     expect(controls?.querySelector(".co-sort")).not.toBeNull();
     expect(
       Array.from(shadow.querySelectorAll(".co-panel > *")).map((node) => node.className),
-    ).toEqual(["co-resizer", "co-panel-head", "co-controls", "co-list"]);
+    ).toEqual(["co-resizer", "co-panel-head", "co-controls", "co-list", "co-edit-slot"]);
   });
 
   // The number on a pin is its place in the order the comments were made.

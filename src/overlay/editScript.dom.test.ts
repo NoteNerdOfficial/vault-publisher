@@ -461,42 +461,132 @@ describe("the edit mode", () => {
     expect(shadow().querySelector(".ed-crumb[data-current]")?.textContent).toBe("h1");
   });
 
-  describe("colour", () => {
-    function page(css: string, body: string): void {
-      document.head.innerHTML = meta() + `<style data-osp-src="10">${css}</style>`;
-      document.body.innerHTML = body;
-      window.matchMedia = ((q: string) => ({ matches: true, media: q })) as unknown as typeof window.matchMedia;
-    }
+  /* --- the panel ------------------------------------------------------ */
 
-    function openColour(target: Element): void {
+  function page(css: string, body: string): void {
+    document.head.innerHTML = meta() + `<style data-osp-src="10">${css}</style>`;
+    document.body.innerHTML = body;
+    window.matchMedia = ((q: string) => ({ matches: true, media: q })) as unknown as typeof window.matchMedia;
+  }
+
+  /** A section of the Design tab, by its title. */
+  function section(title: string): Element {
+    const found = Array.from(shadow().querySelectorAll(".ep-sec")).find(
+      (s) => s.querySelector(".ep-sec-toggle span")?.textContent === title,
+    );
+    if (!found) throw new Error(`no ${title} section`);
+    return found;
+  }
+
+  /** Opens a section's colour palette and picks any colour from it. */
+  function pickIn(title: string, value: string): void {
+    click(section(title).querySelector(".ep-swatch"));
+    const input = section(title).querySelector(".ep-custom") as HTMLInputElement;
+    input.value = value;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function answer(label: string): void {
+    const b = Array.from(shadow().querySelectorAll(".ep-ask button")).find((x) => x.textContent === label);
+    if (!b) throw new Error(`no ${label}: ${shadow().querySelector(".ep-ask")?.textContent}`);
+    click(b);
+  }
+
+  function choose(label: string, value: string): void {
+    const select = shadow().querySelector(`.ep-select[aria-label="${label}"]`) as HTMLSelectElement;
+    if (!select) throw new Error(`no ${label}`);
+    select.value = value;
+    select.dispatchEvent(new Event("change"));
+  }
+
+  function typeInto(label: string, value: string): void {
+    const input = shadow().querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
+    if (!input) throw new Error(`no ${label}`);
+    input.value = value;
+    input.dispatchEvent(new Event("change"));
+  }
+
+  function panelButton(text: string): HTMLElement {
+    const b = Array.from(shadow().querySelectorAll(".ep-root button")).find(
+      (x) => x.textContent === text || x.getAttribute("aria-label") === text,
+    );
+    if (!b) throw new Error(`no ${text} in the panel`);
+    return b as HTMLElement;
+  }
+
+  function actionButton(text: string): HTMLButtonElement {
+    return Array.from(shadow().querySelectorAll(".ed-actions .ed-btn")).find(
+      (b) => b.textContent === text,
+    ) as HTMLButtonElement;
+  }
+
+  function open(target: Element): void {
+    boot();
+    enter();
+    click(target, { altKey: true });
+  }
+
+  describe("the panel", () => {
+    it("sits in the comment panel's shell, with Design and Layers tabs", () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
       boot();
       enter();
-      click(target, { altKey: true });
-      const colour = Array.from(shadow().querySelectorAll(".ed-btn")).find((b) => b.textContent === "Colour")!;
-      click(colour);
-    }
+      const shell = shadow().querySelector(".co-panel") as HTMLElement;
+      expect(shell.hidden).toBe(false);
+      expect(shell.getAttribute("data-content")).toBe("edit");
+      expect(shell.querySelector(".co-edit-slot .ep-root")).not.toBeNull();
+      // Nothing selected: the page itself.
+      expect(section("Page")).toBeTruthy();
+      expect(section("History").textContent).toContain("Nothing changed yet");
+      click(panelButton("Layers"));
+      const names = Array.from(shadow().querySelectorAll(".ep-layer-name")).map((n) => n.textContent);
+      expect(names).toEqual(["main", "a"]);
+    });
 
-    function pick(value: string): void {
-      const input = shadow().querySelector(".ed-custom") as HTMLInputElement;
-      input.value = value;
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+    it("selects from the Layers tab, and adds to the selection with shift", () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p><p data-osp-src="130">b</p></main>');
+      boot();
+      enter();
+      click(panelButton("Layers"));
+      const rows = () => Array.from(shadow().querySelectorAll(".ep-layer"));
+      click(rows()[1]);
+      click(rows()[2], { shiftKey: true });
+      expect(rows().filter((r) => r.hasAttribute("data-selected"))).toHaveLength(2);
+      expect(status()).toContain("2 layers selected");
+    });
 
-    function answer(label: string): void {
-      const b = Array.from(shadow().querySelectorAll(".ed-ask .ed-btn")).find((x) => x.textContent === label);
-      if (!b) throw new Error(`no ${label}: ${shadow().querySelector(".ed-ask")?.textContent}`);
-      click(b);
-    }
+    it("shows a button to detach from the layout, and writes the position", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
+      open(document.querySelector("p")!);
+      const detach = panelButton("Detach from the flow");
+      expect(detach.classList.contains("ep-action")).toBe(true);
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      click(detach);
+      await settle();
+      const props = (calls[0].body.props as string[][]).map((pair) => pair[0]);
+      expect(props).toEqual(["position", "left", "top", "width"]);
+    });
 
-    it("asks before changing a rule other elements share, then changes the rule", async () => {
+    it("puts a positioned layer back by taking its position off", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110" style="position: absolute; left: 4px; top: 4px">a</p></main>');
+      open(document.querySelector("p")!);
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      click(panelButton("Put back in the layout"));
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "inline-style", props: [["position", ""], ["left", ""], ["top", ""]] });
+    });
+  });
+
+  describe("colour", () => {
+    it("asks before changing a rule other layers share, then changes the rule", async () => {
       page(
         "button { background-color: #3a5bd9; }",
         '<button data-osp-src="100">Pay</button><button data-osp-src="140">Back</button>',
       );
-      openColour(document.querySelector("button")!);
-      pick("#00aa77");
+      open(document.querySelector("button")!);
+      pickIn("Fill", "#00aa77");
       expect(calls).toHaveLength(0);
-      expect(shadow().querySelector(".ed-ask")?.textContent).toContain("of 2 elements");
+      expect(section("Fill").querySelector(".ep-ask")?.textContent).toContain("of 2 layers");
 
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 40, end: 47, length: 7 }] } });
       answer("All 2");
@@ -517,11 +607,11 @@ describe("the edit mode", () => {
       expect(rule.getPropertyValue("background-color")).toMatch(/#3a5bd9|rgb\(58, 91, 217\)/);
     });
 
-    it("sets it on the one element when asked to", async () => {
+    it("sets it on the one layer when asked to", async () => {
       page("button { background-color: #3a5bd9; }", '<button data-osp-src="100">Pay</button><button data-osp-src="140">Back</button>');
       const first = document.querySelector("button")!;
-      openColour(first);
-      pick("#00aa77");
+      open(first);
+      pickIn("Fill", "#00aa77");
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 107, end: 107, length: 30 }] } });
       answer("This one");
       await settle();
@@ -529,35 +619,34 @@ describe("the edit mode", () => {
       expect(first.style.getPropertyValue("background-color")).toMatch(/#00aa77|rgb\(0, 170, 119\)/);
     });
 
-    it("offers to change the token a colour comes from", async () => {
+    it("offers to change the variable a colour comes from", async () => {
       page(
         ":root { --accent: #3a5bd9; } .cta { background-color: var(--accent); }",
         '<a class="cta" data-osp-src="100">Go</a>',
       );
-      openColour(document.querySelector(".cta")!);
-      pick("#e44400");
-      expect(shadow().querySelector(".ed-ask")?.textContent).toContain("--accent");
+      open(document.querySelector(".cta")!);
+      pickIn("Fill", "#e44400");
+      expect(shadow().querySelector(".ep-ask")?.textContent).toContain("--accent");
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 28, end: 35, length: 7 }] } });
       answer("Change --accent");
       await settle();
       expect(calls[0].body).toMatchObject({ op: "rule-style", path: [0], selector: ":root", props: [["--accent", "#e44400"]] });
     });
 
-    it("changes a rule that styles only this element without asking", async () => {
+    it("changes a rule that styles only this layer without asking", async () => {
       page(".only { color: #111111; }", '<p class="only" data-osp-src="100">Words</p>');
-      openColour(document.querySelector(".only")!);
-      const text = Array.from(shadow().querySelectorAll(".ed-tab")).find((t) => t.textContent === "Text")!;
-      click(text);
+      open(document.querySelector(".only")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 30, end: 37, length: 7 }] } });
-      pick("#222222");
+      pickIn("Text", "#222222");
       await settle();
       expect(calls[0].body).toMatchObject({ op: "rule-style", selector: ".only", props: [["color", "#222222"]] });
     });
 
-    it("offers the page's tokens as swatches that write var()", () => {
-      page(":root { --accent: #3a5bd9; --gap: 12px; }", '<p data-osp-src="100">Words</p>');
-      openColour(document.querySelector("p")!);
-      const titles = Array.from(shadow().querySelectorAll(".ed-swatch")).map((b) => b.getAttribute("title"));
+    it("offers the page's variables as swatches that write var()", () => {
+      page(":root { --accent: #3a5bd9; --gap: 12px; } p { background: #fff; }", '<p data-osp-src="100">Words</p>');
+      open(document.querySelector("p")!);
+      click(section("Fill").querySelector(".ep-swatch"));
+      const titles = Array.from(shadow().querySelectorAll(".ep-swatch-pick")).map((b) => b.getAttribute("title"));
       expect(titles.some((t) => t?.startsWith("--accent"))).toBe(true);
       // A length is not a colour.
       expect(titles.some((t) => t?.startsWith("--gap"))).toBe(false);
@@ -565,92 +654,59 @@ describe("the edit mode", () => {
   });
 
   describe("size and layout", () => {
-    function page(css: string, body: string): void {
-      document.head.innerHTML = meta() + `<style data-osp-src="10">${css}</style>`;
-      document.body.innerHTML = body;
-      window.matchMedia = ((q: string) => ({ matches: true, media: q })) as unknown as typeof window.matchMedia;
-    }
-
-    function open(target: Element, panel: "Size" | "Layout"): void {
-      boot();
-      enter();
-      click(target, { altKey: true });
-      click(Array.from(shadow().querySelectorAll(".ed-actions .ed-btn")).find((b) => b.textContent === panel)!);
-    }
-
-    function press(rowLabel: string, text: string): void {
-      const row = Array.from(shadow().querySelectorAll(".ed-panel:not([hidden]) .ed-row")).find(
-        (r) => r.querySelector(".ed-row-label")?.textContent === rowLabel,
-      );
-      const b = Array.from(row?.querySelectorAll(".ed-btn") ?? []).find((x) => x.textContent === text);
-      if (!b) throw new Error(`no ${text} in ${rowLabel}`);
-      click(b);
-    }
-
     it("makes an item Fill its flex row with flex, not a width", async () => {
       page(".row { display: flex; }", '<div class="row" data-osp-src="100"><span data-osp-src="120">a</span></div>');
-      open(document.querySelector("span")!, "Size");
-      expect(shadow().querySelector(".ed-note")?.textContent).toContain("flex row");
+      open(document.querySelector("span")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      press("Width", "Fill");
+      choose("Width behaviour", "fill");
       await settle();
       expect(calls[0].body).toMatchObject({ op: "inline-style", at: 120, props: [["width", "auto"], ["flex", "1 1 0%"]] });
     });
 
     it("makes a grid item Hug with justify-self", async () => {
       page(".g { display: grid; }", '<div class="g" data-osp-src="100"><p data-osp-src="120">a</p></div>');
-      open(document.querySelector("p")!, "Size");
+      open(document.querySelector("p")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      press("Width", "Hug");
+      choose("Width behaviour", "hug");
       await settle();
       expect(calls[0].body).toMatchObject({ props: [["width", "auto"], ["justify-self", "start"]] });
     });
 
     it("fixes a size typed in pixels, taking the item out of flex growth", async () => {
       page(".row { display: flex; }", '<div class="row" data-osp-src="100"><span data-osp-src="120">a</span></div>');
-      open(document.querySelector("span")!, "Size");
-      const input = shadow().querySelector('.ed-num[aria-label="Width in pixels"]') as HTMLInputElement;
-      input.value = "240";
+      open(document.querySelector("span")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      input.dispatchEvent(new Event("change"));
+      typeInto("Width", "240");
       await settle();
       expect(calls[0].body).toMatchObject({ props: [["width", "240px"], ["flex", "0 0 auto"]] });
     });
 
-    it("writes a size to the rule when that rule styles only this element", async () => {
+    it("writes a size to the rule when that rule styles only this layer", async () => {
       page(".hero { width: 300px; }", '<section class="hero" data-osp-src="100"><p data-osp-src="130">x</p></section>');
-      open(document.querySelector(".hero")!, "Size");
+      open(document.querySelector(".hero")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      press("Width", "Fill");
+      choose("Width behaviour", "fill");
       await settle();
       expect(calls[0].body).toMatchObject({ op: "rule-style", selector: ".hero", props: [["width", "auto"]] });
     });
 
-    it("turns a container into a row, then sets its gap", async () => {
+    it("adds auto layout to a frame, turns it horizontal, then sets its gap", async () => {
       page("", '<div data-osp-src="100"><p data-osp-src="110">a</p><p data-osp-src="130">b</p></div>');
-      open(document.querySelector("div")!, "Layout");
+      open(document.querySelector("div")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      press("Arrange", "Row");
+      click(panelButton("Add auto layout"));
       await settle();
-      expect(calls[0].body).toMatchObject({ op: "inline-style", at: 100, props: [["display", "flex"], ["flex-direction", "row"]] });
+      expect(calls[0].body).toMatchObject({ op: "inline-style", at: 100, props: [["display", "flex"], ["flex-direction", "column"], ["gap", "8px"]] });
 
-      const gap = shadow().querySelector('.ed-num[aria-label="Gap in pixels"]') as HTMLInputElement;
-      gap.value = "16";
       answers.push({ status: 200, body: { id: "e2", hash: "h2", edits: [] } });
-      gap.dispatchEvent(new Event("change"));
+      click(shadow().querySelector('.ep-seg button[aria-label^="Horizontal"]'));
       await settle();
-      expect(calls[1].body).toMatchObject({ props: [["gap", "16px"]] });
-    });
+      expect(calls[1].body).toMatchObject({ props: [["display", "flex"], ["flex-direction", "row"], ["flex-wrap", "nowrap"]] });
 
-    it("detaches an element into absolute position only when asked", async () => {
-      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
-      const p = document.querySelector("p")!;
-      open(p, "Size");
-      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      click(Array.from(shadow().querySelectorAll(".ed-panel .ed-btn")).find((b) => b.textContent === "Detach from layout")!);
+      answers.push({ status: 200, body: { id: "e3", hash: "h3", edits: [] } });
+      typeInto("Gap between items (gap)", "16");
       await settle();
-      const props = (calls[0].body.props as string[][]).map((pair) => pair[0]);
-      expect(props).toEqual(["position", "left", "top", "width"]);
+      expect(calls[2].body).toMatchObject({ props: [["gap", "16px"]] });
     });
 
     it("resizes by the handle and writes the size it was left at", async () => {
@@ -661,9 +717,7 @@ describe("the edit mode", () => {
         const w = parseFloat(p.style.width) || 100;
         return { left: 0, top: 0, width: w, height: 40, right: w, bottom: 40, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
       };
-      boot();
-      enter();
-      click(p, { altKey: true });
+      open(p);
       const grip = shadow().querySelector(".ed-handle-e")!;
       grip.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 100, clientY: 20 }));
       window.dispatchEvent(new MouseEvent("pointermove", { clientX: 160, clientY: 20 }));
@@ -676,42 +730,127 @@ describe("the edit mode", () => {
     });
   });
 
-  describe("script-built elements and widths", () => {
-    function page(css: string, body: string): void {
-      document.head.innerHTML = meta() + `<style data-osp-src="10">${css}</style>`;
-      document.body.innerHTML = body;
-      window.matchMedia = ((q: string) => ({ matches: true, media: q })) as unknown as typeof window.matchMedia;
-    }
+  describe("many layers", () => {
+    it("sets one change on every selected layer as one undo step", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p><p data-osp-src="130">b</p></main>');
+      const [a, b] = Array.from(document.querySelectorAll("p"));
+      open(a);
+      click(b, { altKey: true, shiftKey: true });
+      expect(section("Fill")).toBeTruthy();
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      answers.push({ status: 200, body: { id: "e2", hash: "h2", edits: [] } });
+      click(panelButton("Add a fill"));
+      await settle();
+      await settle();
+      expect(calls.map((c) => c.body.at)).toEqual([110, 130]);
+      expect(calls[0].body.group).toBeTruthy();
+      expect(calls[1].body.group).toBe(calls[0].body.group);
 
-    function actionButton(text: string): HTMLButtonElement {
-      return Array.from(shadow().querySelectorAll(".ed-actions .ed-btn")).find((b) => b.textContent === text) as HTMLButtonElement;
-    }
+      answers.push({ status: 200, body: { hash: "h1", edits: [] } });
+      answers.push({ status: 200, body: { hash: "h0", edits: [] } });
+      key("z", { metaKey: true });
+      await settle();
+      await settle();
+      expect(calls.slice(2).map((c) => [c.body.op, c.body.id])).toEqual([["undo", "e2"], ["undo", "e1"]]);
+    });
 
-    function pickColour(value: string): void {
-      click(actionButton("Colour"));
-      const input = shadow().querySelector(".ed-custom") as HTMLInputElement;
-      input.value = value;
-      input.dispatchEvent(new Event("change"));
-    }
+    it("frames side-by-side layers in auto layout", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p><p data-osp-src="130">b</p></main>');
+      const [a, b] = Array.from(document.querySelectorAll("p"));
+      open(a);
+      click(b, { altKey: true, shiftKey: true });
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 110, end: 150, length: 80 }], relocated: [[110, 140], [130, 160]], created: 110 } });
+      key("g", { metaKey: true, altKey: true, code: "KeyG" } as KeyboardEventInit);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "wrap", at: 110, last: 130 });
+      const wrapper = document.querySelector("main > div")!;
+      expect(wrapper.getAttribute("data-osp-src")).toBe("110");
+      expect(Array.from(wrapper.children).map((c) => c.getAttribute("data-osp-src"))).toEqual(["140", "160"]);
+    });
 
-    it("styles an element the script made through a rule that names every one like it", async () => {
+    it("copies a layer and pastes it after the selection", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p><h2 data-osp-src="130">b</h2></main>');
+      const [p, h2] = [document.querySelector("p")!, document.querySelector("h2")!];
+      open(p);
+      key("c", { metaKey: true, code: "KeyC" } as KeyboardEventInit);
+      click(h2, { altKey: true });
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 145, end: 145, length: 10 }], relocated: [[110, 145]] } });
+      key("v", { metaKey: true, code: "KeyV" } as KeyboardEventInit);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "copy", at: 110, target: 130, place: "after" });
+      expect(document.querySelectorAll("p")).toHaveLength(2);
+      expect(document.querySelector("h2 + p")!.getAttribute("data-osp-src")).toBe("145");
+    });
+
+    it("inserts a rectangle after the selection and selects it", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
+      open(document.querySelector("p")!);
+      click(actionButton("Insert"));
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 118, end: 118, length: 70 }], created: 118 } });
+      click(Array.from(shadow().querySelectorAll(".ed-menu-item")).find((b) => b.textContent === "Rectangle")!);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "insert", at: 110, place: "after", kind: "rect" });
+      const made = document.querySelector("p + div") as HTMLElement;
+      expect(made.getAttribute("data-osp-src")).toBe("118");
+      expect(made.style.width).toBe("100px");
+    });
+
+    it("copies a layer's look and pastes only what differs", async () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110" style="color: rgb(255, 0, 0)">a</p><p data-osp-src="140">b</p></main>');
+      const [a, b] = Array.from(document.querySelectorAll("p"));
+      open(a);
+      key("c", { metaKey: true, altKey: true, code: "KeyC" } as KeyboardEventInit);
+      click(b, { altKey: true });
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      key("v", { metaKey: true, altKey: true, code: "KeyV" } as KeyboardEventInit);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "inline-style", at: 140, props: [["color", "rgb(255, 0, 0)"]] });
+    });
+
+    it("opens a right-click menu of what can be done", () => {
+      page("", '<main data-osp-src="100"><p data-osp-src="110">a</p></main>');
+      boot();
+      enter();
+      const p = document.querySelector("p")!;
+      p.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+      const menu = shadow().querySelector(".ed-context") as HTMLElement;
+      expect(menu.hidden).toBe(false);
+      const items = Array.from(menu.querySelectorAll(".ed-menu-item span")).map((n) => n.textContent);
+      expect(items).toContain("Frame selection");
+      expect(items).toContain("Copy properties");
+      expect(status()).toContain("p");
+    });
+
+    it("shows and edits a hover state through the layer's own :hover rule", async () => {
+      page("a:hover { color: #ff0000; }", '<a class="go" data-osp-src="100" href="#">Go</a>');
+      open(document.querySelector("a")!);
+      click(Array.from(section("State").querySelectorAll("button")).find((b) => b.textContent === "Hover")!);
+      expect(document.querySelector("a")!.getAttribute("data-osp-force")).toBe("hover");
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      pickIn("Text", "#00ff00");
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "rule-style", selector: "a:hover", props: [["color", "#00ff00"]] });
+      key("Escape");
+      expect(document.querySelector("a")!.hasAttribute("data-osp-force")).toBe(false);
+    });
+  });
+
+  describe("script-built layers and widths", () => {
+    it("styles a layer the script made through a rule that names every one like it", async () => {
       page(".x { color: red; }", '<ul id="todos" data-osp-src="100"></ul>');
       const list = document.querySelector("ul")!;
       list.innerHTML = '<li class="todo is-done">a</li><li class="todo">b</li>';
-      boot();
-      enter();
-      click(list.querySelector("li")!, { altKey: true });
+      open(list.querySelector("li")!);
 
       expect(status()).toContain("rule for li.todo");
       expect(status()).toContain("all 2 elements");
       expect(actionButton("Delete").disabled).toBe(true);
-      expect(actionButton("Colour").disabled).toBe(false);
 
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 40, end: 40, length: 20 }] } });
-      pickColour("#00aa77");
+      pickIn("Text", "#00aa77");
       await settle();
       // The state class is left out: the rule is for the kind of thing.
-      expect(calls[0].body).toMatchObject({ op: "add-rule", sheet: 10, selector: "li.todo", props: [["background-color", "#00aa77"]] });
+      expect(calls[0].body).toMatchObject({ op: "add-rule", sheet: 10, selector: "li.todo", props: [["color", "#00aa77"]] });
       const rules = document.querySelector("style")!.sheet!.cssRules;
       expect((rules[rules.length - 1] as CSSStyleRule).selectorText).toBe("li.todo");
 
@@ -721,20 +860,18 @@ describe("the edit mode", () => {
       expect(document.querySelector("style")!.sheet!.cssRules).toHaveLength(1);
     });
 
-    it("changes the file's own rule for script-made elements when it has one", async () => {
+    it("changes the file's own rule for script-made layers when it has one", async () => {
       page(".todo { background-color: #fff; }", '<ul id="todos" data-osp-src="100"></ul>');
       const list = document.querySelector("ul")!;
       list.innerHTML = '<li class="todo">a</li><li class="todo">b</li>';
-      boot();
-      enter();
-      click(list.querySelector("li")!, { altKey: true });
+      open(list.querySelector("li")!);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      pickColour("#eeeeee");
+      pickIn("Fill", "#eeeeee");
       await settle();
       expect(calls[0].body).toMatchObject({ op: "rule-style", selector: ".todo", props: [["background-color", "#eeeeee"]] });
     });
 
-    it("warns when the page's script restyles an element, and not for the notch's own changes", async () => {
+    it("warns when the page's script restyles a layer, and not for the notch's own changes", async () => {
       page("", '<main data-osp-src="100"><p data-osp-src="110">a</p><p data-osp-src="130">b</p></main>');
       boot();
       const [first, second] = Array.from(document.querySelectorAll("p"));
@@ -747,7 +884,7 @@ describe("the edit mode", () => {
 
       click(second, { altKey: true });
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      pickColour("#123456");
+      pickIn("Text", "#123456");
       await settle();
       click(first, { altKey: true });
       click(second, { altKey: true });
@@ -756,21 +893,19 @@ describe("the edit mode", () => {
 
     it("offers a width scope on a page that has width queries, and writes into @media", async () => {
       page("@media (max-width: 600px) { .x { color: red; } }", '<p class="lede" data-osp-src="100">a</p>');
-      boot();
-      enter();
-      click(document.querySelector("p")!, { altKey: true });
-      const scope = shadow().querySelector(".ed-scope") as HTMLElement;
-      expect(scope.hidden).toBe(false);
-      click(Array.from(scope.querySelectorAll(".ed-btn")).find((b) => b.textContent?.startsWith("Up to"))!);
+      open(document.querySelector("p")!);
+      const scope = Array.from(shadow().querySelectorAll(".ep-top .ep-seg button")).find((b) => b.textContent?.startsWith("Up to"));
+      expect(scope).toBeTruthy();
+      click(scope!);
 
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
-      pickColour("#ff0000");
+      pickIn("Text", "#ff0000");
       await settle();
       expect(calls[0].body).toMatchObject({
         op: "add-rule",
         selector: "p.lede",
         media: `(max-width: ${window.innerWidth}px)`,
-        props: [["background-color", "#ff0000"]],
+        props: [["color", "#ff0000"]],
       });
 
       answers.push({ status: 200, body: { id: "e2", hash: "h2", edits: [] } });
@@ -781,10 +916,8 @@ describe("the edit mode", () => {
 
     it("keeps the width scope out of a page that has none", () => {
       page(".x { color: red; }", '<p class="lede" data-osp-src="100">a</p>');
-      boot();
-      enter();
-      click(document.querySelector("p")!, { altKey: true });
-      expect((shadow().querySelector(".ed-scope") as HTMLElement).hidden).toBe(true);
+      open(document.querySelector("p")!);
+      expect(shadow().querySelector(".ep-top .ep-seg")).toBeNull();
     });
   });
 

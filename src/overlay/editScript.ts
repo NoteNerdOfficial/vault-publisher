@@ -35,6 +35,9 @@
  * no stamp was made by a script: it is selectable, so the page can be
  * explored, but it cannot be changed from here, and the bar says why.
  */
+import { EDIT_PANEL } from "./editPanel";
+import { EDIT_TOOLS } from "./editTools";
+
 /**
  * Colour, as it runs in the browser: spliced into `EDIT_SCRIPT`'s closure.
  *
@@ -51,21 +54,8 @@
 const EDIT_COLOUR = String.raw`
   /* --- colour ---------------------------------------------------------- */
 
-  /* Which panel is open under the bar: "colour", "size", "layout", or null. */
-  var panel = null;
-  var colourSlot = null;
-  /* A question waiting on an answer: { text, choices: [{ label, run }] }. */
+  /* A question waiting on an answer: { sec, text, choices: [{ label, run }] }. */
   var ask = null;
-
-  function togglePanel(name) {
-    panel = panel === name ? null : name;
-    ask = null;
-    refresh();
-  }
-
-  function toggleColour() {
-    togglePanel("colour");
-  }
 
   function toHex(value) {
     var m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:\s*[,\/]\s*([\d.]+%?))?\s*\)$/.exec(value || "");
@@ -334,42 +324,6 @@ const EDIT_COLOUR = String.raw`
 
   /* --- choosing and writing -------------------------------------------- */
 
-  function currentSlot() {
-    if (!selected) return null;
-    var slots = slotsFor(selected);
-    for (var i = 0; i < slots.length; i++) if (slots[i].prop === colourSlot) return slots[i];
-    return slots[0] || null;
-  }
-
-  function choose(value) {
-    var target = selected;
-    var slot = currentSlot();
-    if (!target || !slot || busy || styleWhyNot(target)) return;
-    var what = slot.label.toLowerCase();
-    var props = [[slot.prop, value]];
-    var win = winning(target, slot.prop);
-
-    // A size-bound change never rewrites the token every size shares.
-    var token = !narrow && win && win.kind === "rule" ? /var\(\s*(--[\w-]+)/.exec(win.value) : null;
-    if (token) {
-      var def = tokenRule(target, token[1]);
-      if (def && editableSheet(def.owner)) {
-        ask = {
-          text: "This " + what + " comes from the token " + token[1] + ", used " + uses(token[1]) + ".",
-          choices: [
-            { label: "Change " + token[1], run: function () { applyRuleProps(def, [[token[1], value]], "the token " + token[1]); } },
-            whyNot(target)
-              ? { label: "Just elements like this", run: function () { addRuleFor(target, props, what, null); } }
-              : { label: "Just this one", run: function () { applyInlineProps(target, props, what); } },
-          ],
-        };
-        refresh();
-        return;
-      }
-    }
-    styleChange(target, props, what);
-  }
-
   /*
    * Sets declarations on an element where they belong: in the rule that
    * already sets the first of them, if that rule styles only this element;
@@ -386,6 +340,7 @@ const EDIT_COLOUR = String.raw`
 
     if (!editableSheet(win.owner)) {
       ask = {
+        sec: currentSec,
         text: "The " + what + " is set in " + sheetName(win.owner) + ", which can't be edited from here yet.",
         choices: [{ label: "Set it on this one", run: function () { applyInlineProps(target, props, what); } }],
       };
@@ -396,7 +351,8 @@ const EDIT_COLOUR = String.raw`
     var n = countMatching(win.rule.selectorText);
     if (n > 1) {
       ask = {
-        text: "The rule " + win.rule.selectorText + " sets the " + what + " of " + n + " elements.",
+        sec: currentSec,
+        text: "The rule " + win.rule.selectorText + " sets the " + what + " of " + n + " layers.",
         choices: [
           { label: "This one", run: function () { applyInlineProps(target, props, what); } },
           { label: "All " + n, run: function () { applyRuleProps(win, props, win.rule.selectorText); } },
@@ -408,7 +364,7 @@ const EDIT_COLOUR = String.raw`
     applyRuleProps(win, props, win.rule.selectorText);
   }
 
-  function applyInlineProps(target, props, what) {
+  function applyInlineProps(target, props, what, then, fail) {
     ask = null;
     var name = label(target);
     var before = null;
@@ -418,7 +374,10 @@ const EDIT_COLOUR = String.raw`
       function (data) {
         before = target.getAttribute("style");
         quiet(function () {
-          for (var i = 0; i < props.length; i++) target.style.setProperty(props[i][0], props[i][1]);
+          for (var i = 0; i < props.length; i++) {
+            if (props[i][1] === "") target.style.removeProperty(props[i][0]);
+            else target.style.setProperty(props[i][0], props[i][1]);
+          }
         });
         remap(data.edits);
       },
@@ -430,12 +389,14 @@ const EDIT_COLOUR = String.raw`
         });
       },
       function () {
-        message = "Set the " + what + " of " + name + " on the element itself.";
+        message = "Set the " + what + " of " + name + " on the layer itself.";
+        if (then) then();
       },
+      fail,
     );
   }
 
-  function applyRuleProps(win, props, what) {
+  function applyRuleProps(win, props, what, then, fail) {
     ask = null;
     var rule = win.rule;
     var old = null;
@@ -447,7 +408,10 @@ const EDIT_COLOUR = String.raw`
         old = props.map(function (pair) {
           return [pair[0], rule.style.getPropertyValue(pair[0]), rule.style.getPropertyPriority(pair[0])];
         });
-        for (var i = 0; i < props.length; i++) rule.style.setProperty(props[i][0], props[i][1], old[i][2]);
+        for (var i = 0; i < props.length; i++) {
+          if (props[i][1] === "") rule.style.removeProperty(props[i][0]);
+          else rule.style.setProperty(props[i][0], props[i][1], old[i][2]);
+        }
         remap(data.edits);
       },
       function (back) {
@@ -461,7 +425,9 @@ const EDIT_COLOUR = String.raw`
         message =
           "Changed " + props.map(function (pair) { return pair[0]; }).join(", ") + " in " + what +
           (typeof sheet === "string" ? " (" + sheet.split("/").pop() + ")" : "") + ".";
+        if (then) then();
       },
+      fail,
     );
   }
 
@@ -539,7 +505,8 @@ const EDIT_COLOUR = String.raw`
       var n = countMatching(win.rule.selectorText);
       if (n > 1) {
         ask = {
-          text: "The rule " + win.rule.selectorText + " sets the " + what + " of " + n + " elements, and a new rule would not win against it.",
+          sec: currentSec,
+          text: "The rule " + win.rule.selectorText + " sets the " + what + " of " + n + " layers, and a new rule would not win against it.",
           choices: [{ label: "All " + n, run: function () { applyRuleProps(win, props, win.rule.selectorText); } }],
         };
         refresh();
@@ -591,19 +558,26 @@ const EDIT_COLOUR = String.raw`
    * max-width block when media is given -- in the file's last <style>, and
    * mirrors it into the page so the change shows without a reload.
    */
-  function addRuleFor(target, props, what, media) {
-    ask = null;
+  function addRuleFor(target, props, what, media, then, fail) {
     var selector = stableSelector(target);
     if (!selector) {
+      ask = null;
       message = "Nothing names this element well enough to write a rule for it.";
       refresh();
+      if (fail) fail();
       return;
     }
+    addRuleSel(selector, props, what, media, then, fail);
+  }
+
+  /* Writes props into a rule for selector, as addRuleFor does for a layer. */
+  function addRuleSel(selector, props, what, media, then, fail) {
+    ask = null;
     var sheet = lastSheet();
     var n = countMatching(selector);
     var body = { op: "add-rule", sheet: sheet ? stampOf(sheet) : null, selector: selector, props: props };
     if (media) body.media = media;
-    var css = selector + "{" + props.map(function (pair) { return pair[0] + ":" + pair[1]; }).join(";") + "}";
+    var css = selector + "{" + props.filter(function (pair) { return pair[1] !== ""; }).map(function (pair) { return pair[0] + ":" + pair[1]; }).join(";") + "}";
     if (media) css = "@media " + media + "{" + css + "}";
     var live = null;
     var index = -1;
@@ -638,116 +612,14 @@ const EDIT_COLOUR = String.raw`
       function () {
         message =
           (media ? "At this width and narrower: " : "") +
-          "added a rule for " + selector + (n > 1 ? ", which styles " + n + " elements like it." : ".") +
+          "added a rule for " + selector + (n > 1 ? ", which styles " + n + " layers like it." : ".") +
           (sheet ? "" : " The file had no style block, so one went into its head.");
+        if (then) then();
       },
+      fail,
     );
   }
 
-  function renderScope() {
-    var box = ui.scope;
-    box.textContent = "";
-    var show = !!selected && !styleWhyNot(selected) && !editing && (narrow || respondsToWidth());
-    box.hidden = !show;
-    if (!show) return;
-    box.appendChild(el("span", "ed-row-label", "Applies at"));
-    var all = button("All sizes", "Change it at every window width", function () {
-      narrow = false;
-      refresh();
-    });
-    var below = button("Up to " + window.innerWidth + "px", "Change it at this window width and narrower only", function () {
-      narrow = true;
-      refresh();
-    });
-    all.classList.add("ed-seg");
-    below.classList.add("ed-seg");
-    (narrow ? below : all).setAttribute("aria-pressed", "true");
-    box.appendChild(all);
-    box.appendChild(below);
-  }
-
-  /* --- the panel ------------------------------------------------------- */
-
-  function swatch(display, write, title) {
-    var b = el("button", "ed-swatch");
-    b.type = "button";
-    b.title = title;
-    b.setAttribute("aria-label", title);
-    b.style.background = display;
-    b.addEventListener("click", function (event) {
-      event.stopPropagation();
-      choose(write);
-    });
-    return b;
-  }
-
-  function renderColour() {
-    var box = ui.colourPanel;
-    box.textContent = "";
-    var show = panel === "colour" && !!selected && !styleWhyNot(selected) && !editing;
-    box.hidden = !show;
-    ui.colourBtn.setAttribute("aria-pressed", panel === "colour" ? "true" : "false");
-    if (!show) return;
-
-    var slots = slotsFor(selected);
-    var slot = currentSlot();
-    colourSlot = slot ? slot.prop : null;
-    var tabs = el("div", "ed-tabs");
-    slots.forEach(function (each) {
-      var tab = el("button", "ed-tab");
-      tab.type = "button";
-      if (each.prop === colourSlot) tab.setAttribute("data-current", "");
-      var chip = el("span", "ed-chip");
-      chip.style.background = each.value;
-      if (transparent(each.value)) chip.setAttribute("data-none", "");
-      tab.appendChild(chip);
-      tab.appendChild(document.createTextNode(each.label));
-      tab.title = each.prop + ": " + (transparent(each.value) ? "none" : toHex(each.value));
-      tab.addEventListener("click", function (event) {
-        event.stopPropagation();
-        colourSlot = each.prop;
-        ask = null;
-        refresh();
-      });
-      tabs.appendChild(tab);
-    });
-    box.appendChild(tabs);
-
-    var grid = el("div", "ed-swatches");
-    tokens().forEach(function (token) {
-      grid.appendChild(swatch(token.value, "var(" + token.name + ")", token.name + " (" + token.value + ")"));
-    });
-    pageColours().forEach(function (hex) {
-      grid.appendChild(swatch(hex, hex, hex));
-    });
-    var custom = el("input", "ed-custom");
-    custom.type = "color";
-    var hex = slot ? toHex(slot.value) : "";
-    custom.value = /^#[0-9a-f]{6}$/i.test(hex) ? hex : "#000000";
-    custom.title = "Any colour";
-    custom.setAttribute("aria-label", "Any colour");
-    custom.addEventListener("change", function () {
-      choose(custom.value);
-    });
-    grid.appendChild(custom);
-    box.appendChild(grid);
-  }
-
-  /* The question a change is waiting on, shown above whichever panel is open. */
-  function renderAsk() {
-    var box = ui.ask;
-    box.textContent = "";
-    box.hidden = !ask;
-    if (!ask) return;
-    box.appendChild(el("span", "ed-ask-text", ask.text));
-    ask.choices.forEach(function (choice) {
-      box.appendChild(button(choice.label, choice.label, choice.run));
-    });
-    box.appendChild(button("Cancel", "Change nothing", function () {
-      ask = null;
-      refresh();
-    }));
-  }
 `;
 
 /**
@@ -1085,46 +957,6 @@ const EDIT_LAYOUT = String.raw`
     styleChange(target, [["left", spot.left + "px"], ["top", spot.top + "px"]], "position");
   }
 
-  /* --- the size panel -------------------------------------------------- */
-
-  function renderSize() {
-    var box = ui.sizePanel;
-    box.textContent = "";
-    var show = panel === "size" && !!selected && !styleWhyNot(selected) && !editing;
-    box.hidden = !show;
-    ui.sizeBtn.setAttribute("aria-pressed", panel === "size" ? "true" : "false");
-    if (!show) return;
-    box.appendChild(el("div", "ed-note", layoutNote(selected)));
-    ["width", "height"].forEach(function (dim) {
-      var row = el("div", "ed-row");
-      row.appendChild(el("span", "ed-row-label", dim === "width" ? "Width" : "Height"));
-      var mode = sizeMode(selected, dim);
-      [["hug", "Hug", "Shrink to its content"], ["fill", "Fill", "Take the space available"], ["fixed", "Fixed", "Keep its current size, in pixels"]].forEach(function (m) {
-        var b = button(m[1], m[2], function () {
-          setSize(dim, m[0]);
-        });
-        b.classList.add("ed-seg");
-        if (mode === m[0]) b.setAttribute("aria-pressed", "true");
-        row.appendChild(b);
-      });
-      var input = el("input", "ed-num");
-      input.type = "number";
-      input.min = "0";
-      input.value = String(Math.round(cssLength(selected, dim, selected.getBoundingClientRect()[dim])));
-      input.setAttribute("aria-label", (dim === "width" ? "Width" : "Height") + " in pixels");
-      input.addEventListener("change", function () {
-        var v = parseFloat(input.value);
-        if (v >= 0) setSize(dim, "fixed", v);
-      });
-      row.appendChild(input);
-      row.appendChild(el("span", "ed-unit", "px"));
-      box.appendChild(row);
-    });
-    if (!positioned(selected)) {
-      box.appendChild(button("Detach from layout", "Take it out of the layout and position it freely", detach));
-    }
-  }
-
   /* --- the layout panel ------------------------------------------------ */
 
   function layoutKind(target) {
@@ -1143,66 +975,6 @@ const EDIT_LAYOUT = String.raw`
     styleChange(target, [["display", "flex"], ["flex-direction", kind]], "layout");
   }
 
-  function segmented(labelText, options, current, run) {
-    var row = el("div", "ed-row");
-    row.appendChild(el("span", "ed-row-label", labelText));
-    options.forEach(function (option) {
-      var b = button(option[1], option[2] || option[1], function () {
-        run(option[0]);
-      });
-      b.classList.add("ed-seg");
-      if (current === option[0]) b.setAttribute("aria-pressed", "true");
-      row.appendChild(b);
-    });
-    return row;
-  }
-
-  function renderLayout() {
-    var box = ui.layoutPanel;
-    box.textContent = "";
-    var show = panel === "layout" && !!selected && !styleWhyNot(selected) && !editing && selected.children.length > 0;
-    box.hidden = !show;
-    ui.layoutBtn.setAttribute("aria-pressed", panel === "layout" ? "true" : "false");
-    if (!show) return;
-    var target = selected;
-    var kind = layoutKind(target);
-    var cs = window.getComputedStyle(target);
-    var grid = kind === "grid";
-
-    var options = [["flow", "Flow", "Children one after another, as written"], ["row", "Row", "Children side by side"], ["column", "Column", "Children stacked"]];
-    if (grid) options.push(["grid", "Grid", "A grid, set by its own rules"]);
-    box.appendChild(segmented("Arrange", options, kind, arrange));
-    if (kind === "flow") return;
-
-    var gapRow = el("div", "ed-row");
-    gapRow.appendChild(el("span", "ed-row-label", "Gap"));
-    var gap = el("input", "ed-num");
-    gap.type = "number";
-    gap.min = "0";
-    gap.value = String(Math.round(parseFloat(cs.columnGap) || parseFloat(cs.rowGap) || 0));
-    gap.setAttribute("aria-label", "Gap in pixels");
-    gap.addEventListener("change", function () {
-      var v = parseFloat(gap.value);
-      if (v >= 0) styleChange(target, [["gap", Math.round(v) + "px"]], "gap");
-    });
-    gapRow.appendChild(gap);
-    gapRow.appendChild(el("span", "ed-unit", "px"));
-    box.appendChild(gapRow);
-
-    var start = grid ? "start" : "flex-start";
-    var end = grid ? "end" : "flex-end";
-    var across = kind === "row" ? "Vertical" : kind === "column" ? "Horizontal" : "Align";
-    var along = kind === "row" ? "Horizontal" : kind === "column" ? "Vertical" : "Justify";
-    function norm(v) {
-      return v === "normal" ? (grid ? "stretch" : "stretch") : v === "start" && !grid ? "flex-start" : v === "end" && !grid ? "flex-end" : v;
-    }
-    box.appendChild(segmented(across, [[start, "Start"], ["center", "Centre"], [end, "End"], ["stretch", "Stretch"]], norm(cs.alignItems), function (v) {
-      styleChange(target, [["align-items", v]], "alignment");
-    }));
-    box.appendChild(segmented(along, [[start, "Start"], ["center", "Centre"], [end, "End"], ["space-between", "Spread"]], cs.justifyContent === "normal" ? start : norm(cs.justifyContent), function (v) {
-      styleChange(target, [["justify-content", v]], "alignment");
-    }));
-  }
 `;
 
 export const EDIT_SCRIPT = `(function () {
@@ -1286,6 +1058,10 @@ export const EDIT_SCRIPT = `(function () {
   var active = false;
   var hovered = null;
   var selected = null;
+  /* Every selected layer when there are several; selected is the last of them. */
+  var selection = [];
+  /* The many-edit gesture in progress: { id, parts, what }, or null. */
+  var group = null;
   var context = null;
   var armed = null;
   var busy = false;
@@ -1413,6 +1189,8 @@ export const EDIT_SCRIPT = `(function () {
   function select(el) {
     if (el) claim();
     selected = el;
+    selection = el ? [el] : [];
+    clearState();
     armed = null;
     ask = null;
     context = el ? el.parentElement : context;
@@ -1426,6 +1204,8 @@ export const EDIT_SCRIPT = `(function () {
     var parent = selected.parentElement;
     if (isRoot(parent)) {
       selected = null;
+      selection = [];
+      clearState();
       context = null;
       armed = null;
       refresh();
@@ -1589,28 +1369,36 @@ export const EDIT_SCRIPT = `(function () {
   }
 
   function act(body, what, apply, revert, after, failed) {
+    if (group) body.group = group.id;
     send(
       body,
       function (data) {
         counted(data);
         if (!data.id) {
           message = "Nothing changed.";
+          // A step of a gesture that changed nothing still lets the next one go.
+          if (group && after) after(data);
           return;
         }
         apply(data);
-        log.push({ id: data.id, what: what, apply: apply, revert: revert });
-        redone = [];
+        var part = { id: data.id, apply: apply, revert: revert };
+        if (group) group.parts.push(part);
+        else {
+          log.push({ what: what, parts: [part] });
+          redone = [];
+        }
+        if (child && frameEl && frameEl.hasAttribute("data-osp-device")) self.shared.deviceEdited = true;
         if (after) after(data);
       },
       failed,
     );
   }
 
-  function remove() {
+  function remove(then, fail) {
     var el = selected;
-    if (!el || busy || whyNot(el)) return;
+    if (!el || busy || whyNot(el)) return fail ? fail() : undefined;
     var refs = scriptRefs(el);
-    if (refs && armed !== el) {
+    if (refs && armed !== el && !then) {
       armed = el;
       message = "The page's script uses " + refs + ". Deleting it may break the page. Press Delete again to delete it anyway.";
       refresh();
@@ -1638,19 +1426,21 @@ export const EDIT_SCRIPT = `(function () {
       },
       function () {
         message = "Deleted " + name + ". Undo with " + UNDO_KEY + ".";
+        if (then) then();
       },
+      fail,
     );
   }
 
-  function hide() {
+  function hide(then, fail) {
     var el = selected;
-    if (!el || busy) return;
+    if (!el || busy) return fail ? fail() : undefined;
     // Hidden at this width and narrower, or a script-made element: a rule.
     if (narrow || (whyNot(el) && !styleWhyNot(el))) {
       if (!styleWhyNot(el)) styleChange(el, [["display", "none"]], "visibility");
-      return;
+      return then ? then() : undefined;
     }
-    if (whyNot(el)) return;
+    if (whyNot(el)) return fail ? fail() : undefined;
     var name = label(el);
     var before = null;
     act(
@@ -1673,7 +1463,9 @@ export const EDIT_SCRIPT = `(function () {
       },
       function () {
         message = "Hid " + name + ". Undo with " + UNDO_KEY + ".";
+        if (then) then();
       },
+      fail,
     );
   }
 
@@ -1681,9 +1473,9 @@ export const EDIT_SCRIPT = `(function () {
     return !!(el.id || el.querySelector("[id]"));
   }
 
-  function duplicate() {
+  function duplicate(then, fail) {
     var el = selected;
-    if (!el || busy || whyNot(el)) return;
+    if (!el || busy || whyNot(el)) return fail ? fail() : undefined;
     var name = label(el);
     var copy = null;
     act(
@@ -1706,11 +1498,17 @@ export const EDIT_SCRIPT = `(function () {
         if (selected === copy) selected = null;
       },
       function () {
+        if (then) {
+          pasted.push(copy);
+          then();
+          return;
+        }
         select(copy);
         message =
           "Duplicated " + name + "." +
           (hasIds(el) ? " The copy repeats the original's id, which the page's script may trip over." : "");
       },
+      fail,
     );
   }
 
@@ -1777,7 +1575,22 @@ export const EDIT_SCRIPT = `(function () {
    * the server's after a reload, when the page no longer knows what was
    * done to it -- the server steps the file back and the page reloads.
    */
-  function undo() {
+  /* Sends one undo or redo per part, in order, and runs each part's half. */
+  function stepParts(parts, op, done) {
+    var i = 0;
+    function next() {
+      if (i >= parts.length) return done();
+      var part = parts[i++];
+      send({ op: op, id: part.id }, function (data) {
+        counted(data);
+        (op === "undo" ? part.revert : part.apply)(data);
+        next();
+      });
+    }
+    next();
+  }
+
+  function undo(then) {
     if (busy || stale) return;
     var entry = log[log.length - 1];
     if (!entry) {
@@ -1789,12 +1602,13 @@ export const EDIT_SCRIPT = `(function () {
       });
       return;
     }
-    send({ op: "undo", id: entry.id }, function (data) {
-      counted(data);
+    clearState();
+    stepParts(entry.parts.slice().reverse(), "undo", function () {
       log.pop();
-      entry.revert(data);
       redone.push(entry);
       message = "Undid the " + entry.what + ".";
+      refresh();
+      if (typeof then === "function") then();
     });
   }
 
@@ -1810,12 +1624,12 @@ export const EDIT_SCRIPT = `(function () {
       });
       return;
     }
-    send({ op: "redo", id: entry.id }, function (data) {
-      counted(data);
+    clearState();
+    stepParts(entry.parts, "redo", function () {
       redone.pop();
-      entry.apply(data);
       log.push(entry);
       message = "Redid the " + entry.what + ".";
+      refresh();
     });
   }
 
@@ -2072,6 +1886,8 @@ export const EDIT_SCRIPT = `(function () {
 
 ${EDIT_COLOUR}
 ${EDIT_LAYOUT}
+${EDIT_TOOLS}
+${EDIT_PANEL}
 
   /* --- catching the page's input -------------------------------------- */
 
@@ -2111,16 +1927,62 @@ ${EDIT_LAYOUT}
     }
     event.preventDefault();
     event.stopImmediatePropagation();
+    // A new press closes a menu; the release of the right-click that opened one does not.
+    if ((event.type === "pointerdown" || event.type === "mousedown") && event.button !== 2) closeMenus();
 
+    if (event.type === "contextmenu") {
+      var hit = candidate(event.target, event.altKey);
+      if (hit && targets().indexOf(hit) === -1) select(hit);
+      openContextMenu(event.clientX, event.clientY);
+      return;
+    }
     if (event.type === "pointerdown") dragged = false;
-    if (event.type === "pointerdown" && event.button === 0 && !event.altKey) {
-      if (selected && selected.contains(event.target) && !whyNot(selected)) {
-        press = { x: event.clientX, y: event.clientY, el: selected };
+    if (event.type === "pointerdown" && event.button === 0) {
+      // Alt on the selection is a drag that leaves a copy behind; Alt
+      // anywhere else is still the deep click.
+      if (selected && selected.contains(event.target) && !whyNot(selected) && !event.shiftKey) {
+        press = { x: event.clientX, y: event.clientY, el: selected, copy: event.altKey };
       }
       return;
     }
     if (event.type === "pointerup") {
-      if (press && dragging && freeDrag) finishFree(press.el);
+      if (press && dragging && press.copy && (drop || freeDrag)) {
+        if (freeDrag) {
+          var shown = freeDrag.shown;
+          var source = press.el;
+          var spot = freePlace(source, shown.x, shown.y);
+          quiet(function () {
+            if (freeDrag.before === null) source.style.removeProperty("translate");
+            else source.style.setProperty("translate", freeDrag.before);
+          });
+          showGuides(null);
+          freeDrag = null;
+          pasted = [];
+          runGroup([
+            function (next, stop) {
+              copyTo(source, source, "after", function () {
+                next();
+              }, stop);
+            },
+            function (next, stop) {
+              applyInlineProps(pasted[0], [["left", spot.left + "px"], ["top", spot.top + "px"]], "position", next, stop);
+            },
+          ], "copy of " + label(source), function () {
+            if (pasted[0]) selectMany([pasted[0]]);
+          });
+        } else if (drop.place !== "cell") {
+          pasted = [];
+          runGroup([
+            function (next, stop) {
+              copyTo(press.el, drop.target, drop.place, function () {
+                next();
+              }, stop);
+            },
+          ], "copy of " + label(press.el), function () {
+            if (pasted[0]) selectMany([pasted[0]]);
+          });
+        }
+      } else if (press && dragging && freeDrag) finishFree(press.el);
       else if (press && dragging && drop && drop.place === "cell") {
         styleChange(press.el, [["grid-column", String(drop.cell.col)], ["grid-row", String(drop.cell.row)]], "grid placement");
       } else if (press && dragging && drop) move(press.el, drop.target, drop.place);
@@ -2139,8 +2001,12 @@ ${EDIT_LAYOUT}
         return;
       }
       var el = candidate(event.target, event.altKey);
-      if (!el) {
+      if (event.shiftKey && el) {
+        toggleSelect(el);
+      } else if (!el) {
         selected = null;
+        selection = [];
+        clearState();
         context = null;
         armed = null;
         message = "";
@@ -2158,6 +2024,7 @@ ${EDIT_LAYOUT}
   function onMove(event) {
     if (passthrough) return;
     self.shared.hover = self;
+    measuring = !!event.altKey;
     if (press) {
       event.stopImmediatePropagation();
       if (!dragging && Math.abs(event.clientX - press.x) + Math.abs(event.clientY - press.y) > DRAG_START) {
@@ -2191,6 +2058,12 @@ ${EDIT_LAYOUT}
     // A framed screen holds the selection: its keys, even pressed out here.
     if (!child && !owns() && !plainLetter && self.shared.owner && self.shared.owner.onKey) {
       return self.shared.owner.onKey(event);
+    }
+
+    if (key === "Alt") {
+      measuring = event.type === "keydown";
+      draw();
+      if (!editing) return;
     }
 
     // Typing words: everything goes to the words, nothing to the page.
@@ -2234,6 +2107,13 @@ ${EDIT_LAYOUT}
     if (passthrough) return;
 
     var mod = event.metaKey || event.ctrlKey;
+    // Letters by the key pressed, not the character: Alt changes the character.
+    var letter = /^Key[A-Z]$/.test(event.code || "") ? event.code.slice(3).toLowerCase() : key.toLowerCase();
+    if (event.type === "keydown" && figmaKey(event, mod, letter)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (event.type === "keydown" && mod && !event.altKey) {
       var k = key.toLowerCase();
       if ((k === "z" && event.shiftKey) || (k === "y" && !event.shiftKey && event.ctrlKey && !event.metaKey)) {
@@ -2254,7 +2134,7 @@ ${EDIT_LAYOUT}
       if (lower === "d" && selected) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        duplicate();
+        duplicateAll();
         return;
       }
     }
@@ -2271,6 +2151,15 @@ ${EDIT_LAYOUT}
     }
 
     if (key === "Escape") {
+      if (closeMenus()) {
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (forced) {
+        event.stopImmediatePropagation();
+        if (event.type === "keydown") showState("default");
+        return;
+      }
       // With nothing selected, Esc goes on to the overlay, which leaves the mode.
       if (!selected) return;
       event.stopImmediatePropagation();
@@ -2282,7 +2171,14 @@ ${EDIT_LAYOUT}
     if (event.type !== "keydown" || !selected) return;
     if (key === "Delete" || key === "Backspace") {
       event.preventDefault();
-      remove();
+      removeAll();
+    } else if (key === "Enter" && event.shiftKey) {
+      event.preventDefault();
+      up();
+    } else if (key === "Tab") {
+      event.preventDefault();
+      var sib = stampedSibling(selected, event.shiftKey ? -1 : 1) || (event.shiftKey ? selected.parentElement && selected.parentElement.lastElementChild : selected.parentElement && selected.parentElement.firstElementChild);
+      if (sib && sib !== selected) select(sib);
     } else if (key === "Enter") {
       event.preventDefault();
       if (retypable(selected)) startText();
@@ -2292,8 +2188,8 @@ ${EDIT_LAYOUT}
       }
     } else if (/^Arrow/.test(key) && positioned(selected)) {
       event.preventDefault();
-      message = "It is positioned, so it moves by dragging rather than by reordering.";
-      refresh();
+      var step = event.shiftKey ? 10 : 1;
+      nudgeFree(key === "ArrowLeft" ? -step : key === "ArrowRight" ? step : 0, key === "ArrowUp" ? -step : key === "ArrowDown" ? step : 0);
     } else if (key === "ArrowUp" || key === "ArrowLeft") {
       event.preventDefault();
       nudge(-1);
@@ -2323,6 +2219,24 @@ ${EDIT_LAYOUT}
     return b;
   }
 
+  /* A bar button: an icon and its word. */
+  function barButton(iconName, text, title, action) {
+    var b = el("button", "ed-btn");
+    b.type = "button";
+    b.title = title;
+    b.innerHTML = icon(iconName, 14) + "<span></span>";
+    b.lastChild.textContent = text;
+    b.addEventListener("click", function (event) {
+      event.stopPropagation();
+      action();
+    });
+    return b;
+  }
+
+  function setWord(b, text) {
+    if (b.lastChild) b.lastChild.textContent = text;
+  }
+
   function build() {
     var style = el("style");
     style.textContent = EDIT_CSS;
@@ -2333,9 +2247,11 @@ ${EDIT_LAYOUT}
     var selBox = el("div", "ed-box ed-sel");
     var tag = el("div", "ed-tag");
     selBox.appendChild(tag);
+    var others = el("div", "ed-others");
     var dropLine = el("div", "ed-drop");
     var guideX = el("div", "ed-guide");
     var guideY = el("div", "ed-guide");
+    var measure = el("div", "ed-measure");
     guideX.hidden = true;
     guideY.hidden = true;
     [["e", { w: true }], ["s", { h: true }], ["se", { w: true, h: true }]].forEach(function (handle) {
@@ -2345,86 +2261,78 @@ ${EDIT_LAYOUT}
       });
       selBox.appendChild(grip);
     });
+    layer.appendChild(others);
     layer.appendChild(hoverBox);
     layer.appendChild(selBox);
     layer.appendChild(dropLine);
     layer.appendChild(guideX);
     layer.appendChild(guideY);
+    layer.appendChild(measure);
 
     var bar = el("div", "ed-bar");
-    bar.addEventListener("keydown", function (event) {
-      event.stopPropagation();
+    ["keydown", "keyup", "keypress"].forEach(function (type) {
+      bar.addEventListener(type, function (event) {
+        event.stopPropagation();
+      });
     });
     var crumbs = el("div", "ed-crumbs");
     var status = el("div", "ed-status");
     var actions = el("div", "ed-actions");
-    var textBtn = button("Edit text", "Retype its words (Enter, or double-click)", startText);
-    var copyBtn = button("Duplicate", "Put a copy after it (" + (UNDO_KEY.charAt(0) === "C" ? "Ctrl+D" : "\u2318D") + ")", duplicate);
-    var colourBtn = button("Colour", "Change its colours", toggleColour);
-    var sizeBtn = button("Size", "Width, height, and leaving the layout", function () {
-      togglePanel("size");
-    });
-    var layoutBtn = button("Layout", "How its children are arranged", function () {
-      togglePanel("layout");
-    });
-    var hideBtn = button("Hide", "Hide it: adds display: none to the file", hide);
-    var deleteBtn = button("Delete", "Delete it from the file (Delete)", remove);
+    var textBtn = barButton("text", "Edit text", "Retype its words (Enter, or double-click)", startText);
+    var copyBtn = barButton("copy", "Duplicate", "Put a copy after it (" + (MAC ? "\u2318D" : "Ctrl+D") + ", or Alt-drag)", duplicateAll);
+    var hideBtn = barButton("eyeOff", "Hide", "Hide it: adds display: none to the file (" + (MAC ? "\u21e7\u2318H" : "Shift+Ctrl+H") + ")", hideOrShow);
+    var deleteBtn = barButton("trash", "Delete", "Delete it from the file (Delete)", removeAll);
     deleteBtn.classList.add("ed-danger");
-    var undoBtn = button("Undo", "Undo the last edit (" + UNDO_KEY + ")", undo);
-    var redoBtn = button("Redo", "Redo what was undone (" + REDO_KEY + ")", redo);
-    var reloadBtn = button("Reload", "Reload the page from the file", function () {
+    var insertBtn = barButton("plus", "Insert", "Add a frame, rectangle, text or image", toggleInsert);
+    var undoBtn = barButton("undo", "Undo", "Undo the last edit (" + UNDO_KEY + ")", undo);
+    var redoBtn = barButton("redo", "Redo", "Redo what was undone (" + REDO_KEY + ")", redo);
+    var reloadBtn = barButton("reload", "Reload", "Reload the page from the file", function () {
       location.reload();
+    });
+    [undoBtn, redoBtn].forEach(function (b) {
+      b.classList.add("ed-quiet");
     });
     actions.appendChild(textBtn);
     actions.appendChild(copyBtn);
-    actions.appendChild(colourBtn);
-    actions.appendChild(sizeBtn);
-    actions.appendChild(layoutBtn);
     actions.appendChild(hideBtn);
     actions.appendChild(deleteBtn);
+    actions.appendChild(el("span", "ed-gap"));
+    actions.appendChild(insertBtn);
+    actions.appendChild(el("span", "ed-gap"));
     actions.appendChild(undoBtn);
     actions.appendChild(redoBtn);
     actions.appendChild(reloadBtn);
+    var insertMenu = el("div", "ed-menu ed-insert");
+    insertMenu.hidden = true;
     bar.appendChild(crumbs);
     bar.appendChild(status);
     bar.appendChild(actions);
-    var scope = el("div", "ed-row ed-scope");
-    scope.hidden = true;
-    bar.appendChild(scope);
-    var askBox = el("div", "ed-ask");
-    askBox.hidden = true;
-    bar.appendChild(askBox);
-    var colourPanel = el("div", "ed-colour ed-panel");
-    colourPanel.hidden = true;
-    bar.appendChild(colourPanel);
-    var sizePanel = el("div", "ed-panel");
-    sizePanel.hidden = true;
-    bar.appendChild(sizePanel);
-    var layoutPanel = el("div", "ed-panel");
-    layoutPanel.hidden = true;
-    bar.appendChild(layoutPanel);
+    bar.appendChild(insertMenu);
+    var menu = el("div", "ed-menu ed-context");
+    menu.hidden = true;
+    menu.addEventListener("keydown", function (event) {
+      event.stopPropagation();
+    });
 
     host.wrap.appendChild(layer);
     host.wrap.appendChild(bar);
+    host.wrap.appendChild(menu);
 
-    return {
+    var built = {
       layer: layer,
       hoverBox: hoverBox,
       selBox: selBox,
+      others: others,
       tag: tag,
       dropLine: dropLine,
       guideX: guideX,
       guideY: guideY,
+      measure: measure,
       textBtn: textBtn,
       copyBtn: copyBtn,
-      colourBtn: colourBtn,
-      colourPanel: colourPanel,
-      sizeBtn: sizeBtn,
-      sizePanel: sizePanel,
-      layoutBtn: layoutBtn,
-      layoutPanel: layoutPanel,
-      ask: askBox,
-      scope: scope,
+      insertBtn: insertBtn,
+      insertMenu: insertMenu,
+      menu: menu,
       bar: bar,
       crumbs: crumbs,
       status: status,
@@ -2433,7 +2341,161 @@ ${EDIT_LAYOUT}
       undoBtn: undoBtn,
       redoBtn: redoBtn,
       reloadBtn: reloadBtn,
+      panel: null,
     };
+    if (host.panel && host.panel.slot) {
+      ui = built;
+      built.panel = buildPanel(host.panel.slot);
+    }
+    return built;
+  }
+
+  /* --- menus ----------------------------------------------------------- */
+
+  /* Closes the insert and right-click menus; true if one was open. */
+  function closeMenus() {
+    if (!ui) return false;
+    var was = !ui.menu.hidden || !ui.insertMenu.hidden;
+    ui.menu.hidden = true;
+    ui.insertMenu.hidden = true;
+    ui.insertBtn.removeAttribute("aria-expanded");
+    return was;
+  }
+
+  function menuItem(box, text, keys, run, enabled) {
+    var b = el("button", "ed-menu-item");
+    b.type = "button";
+    b.appendChild(el("span", null, text));
+    if (keys) b.appendChild(el("kbd", null, keys));
+    b.disabled = !enabled;
+    b.addEventListener("click", function (event) {
+      event.stopPropagation();
+      closeMenus();
+      run();
+    });
+    box.appendChild(b);
+  }
+
+  function toggleInsert() {
+    var box = ui.insertMenu;
+    if (!box.hidden) return closeMenus();
+    closeMenus();
+    box.textContent = "";
+    var where = selected && !whyNot(selected) ? (holds(selected) ? "Inside " + label(selected) : "After " + label(selected)) : "At the end of the page";
+    box.appendChild(el("div", "ed-menu-note", where));
+    menuItem(box, "Frame", "", function () {
+      insert("frame");
+    }, true);
+    menuItem(box, "Rectangle", "", function () {
+      insert("rect");
+    }, true);
+    menuItem(box, "Text", "", function () {
+      insert("text");
+    }, true);
+    var imageNote = el("div", "ed-menu-note", "Images in this page's folder\u2026");
+    box.appendChild(imageNote);
+    loadImages(function (list) {
+      imageNote.textContent = list.length ? "Image" : "No images in this page's folder.";
+      list.slice(0, 40).forEach(function (src) {
+        menuItem(box, src, "", function () {
+          insert("image", src);
+        }, true);
+      });
+    });
+    box.hidden = false;
+    ui.insertBtn.setAttribute("aria-expanded", "true");
+  }
+
+  function openContextMenu(x, y) {
+    var box = ui.menu;
+    box.textContent = "";
+    var list = targets();
+    var one = list.length === 1 ? list[0] : null;
+    var can = list.length > 0 && list.every(function (n) {
+      return !whyNot(n);
+    });
+    var k = MAC ? { cmd: "\u2318", alt: "\u2325", shift: "\u21e7" } : { cmd: "Ctrl+", alt: "Alt+", shift: "Shift+" };
+    function sep() {
+      box.appendChild(el("div", "ed-menu-sep"));
+    }
+    menuItem(box, "Copy", k.cmd + "C", copyLayers, can);
+    menuItem(box, "Paste", k.cmd + "V", pasteLayers, clipboard.length > 0);
+    menuItem(box, "Duplicate", k.cmd + "D", duplicateAll, can);
+    menuItem(box, "Delete", MAC ? "\u232b" : "Del", removeAll, can);
+    sep();
+    menuItem(box, "Frame selection", k.alt + k.cmd + "G", frameSelection, can);
+    menuItem(box, "Ungroup", k.shift + k.cmd + "G", ungroup, !!one && can && one.children.length > 0);
+    menuItem(box, "Add auto layout", k.shift + "A", addAutoLayout, list.length > 0);
+    sep();
+    menuItem(box, "Copy properties", k.alt + k.cmd + "C", copyProperties, !!one);
+    menuItem(box, "Paste properties", k.alt + k.cmd + "V", pasteProperties, !!copiedLook && list.length > 0);
+    sep();
+    menuItem(box, "Select matching layers", "", selectMatching, !!one);
+    menuItem(box, "Select all beside it", k.cmd + "A", selectAll, list.length > 0);
+    menuItem(box, "Bring forward", k.cmd + "]", function () {
+      nudge(1);
+    }, !!one && can);
+    menuItem(box, "Send backward", k.cmd + "[", function () {
+      nudge(-1);
+    }, !!one && can);
+    sep();
+    menuItem(box, "Hide or show", k.shift + k.cmd + "H", hideOrShow, list.length > 0);
+    menuItem(box, "Edit text", "\u21b5", startText, !!one && can && retypable(one));
+    box.hidden = false;
+    var at = toHost({ left: x, top: y, width: 0, height: 0 });
+    var w = box.offsetWidth || 220;
+    var h = box.offsetHeight || 420;
+    box.style.left = Math.max(8, Math.min(hostWin.innerWidth - w - 8, at.left)) + "px";
+    box.style.top = Math.max(8, Math.min(hostWin.innerHeight - h - 8, at.top)) + "px";
+  }
+
+  function duplicateAll() {
+    var list = targets();
+    if (list.length < 2) return duplicate();
+    pasted = [];
+    runGroup(inOrder(list).map(function (n) {
+      return function (next, stop) {
+        selected = n;
+        duplicate(next, stop);
+      };
+    }), "duplicate of " + list.length + " layers", function () {
+      selectMany(pasted.slice());
+    });
+  }
+
+  function removeAll() {
+    var list = targets();
+    if (list.length < 2) return remove();
+    runGroup(inOrder(list).map(function (n) {
+      return function (next, stop) {
+        selected = n;
+        remove(next, stop);
+      };
+    }), "delete of " + list.length + " layers", function () {
+      selected = null;
+      selection = [];
+      refresh();
+    });
+  }
+
+  /* Figma's keys; true when the key was one of them. */
+  function figmaKey(event, mod, letter) {
+    var alt = event.altKey;
+    var shift = event.shiftKey;
+    var key = event.key;
+    if (!mod && !alt && shift && letter === "a") return addAutoLayout(), true;
+    if (!mod && !alt && !shift && letter === "i" && selected) return eyedrop(), true;
+    if (mod && alt && !shift && letter === "c" && selected) return copyProperties(), true;
+    if (mod && alt && !shift && letter === "v" && selected) return pasteProperties(), true;
+    if (mod && alt && !shift && letter === "g" && selected) return frameSelection(), true;
+    if (mod && !alt && !shift && letter === "g" && selected) return frameSelection(), true;
+    if (mod && shift && !alt && letter === "g" && selected) return ungroup(), true;
+    if (mod && shift && !alt && letter === "h" && selected) return hideOrShow(), true;
+    if (mod && !alt && !shift && letter === "c" && selected) return copyLayers(), true;
+    if (mod && !alt && !shift && letter === "v" && clipboard.length) return pasteLayers(), true;
+    if (mod && !alt && !shift && letter === "a" && (selected || context)) return selectAll(), true;
+    if (mod && !alt && (key === "]" || key === "[") && selected) return nudge(key === "]" ? 1 : -1), true;
+    return false;
   }
 
   /* --- taking turns with a framed screen ------------------------------- */
@@ -2455,10 +2517,11 @@ ${EDIT_LAYOUT}
   function release() {
     if (editing) commitText();
     selected = null;
+    selection = [];
+    clearState();
     context = null;
     armed = null;
     ask = null;
-    panel = null;
     message = "";
     refresh();
   }
@@ -2489,7 +2552,9 @@ ${EDIT_LAYOUT}
   function draw() {
     if (!ui) return;
     if (selected && !selected.isConnected) selected = null;
-    ui.bar.hidden = !owns();
+    ui.bar.hidden = !owns() || !!device;
+    drawOthers();
+    drawMeasure();
     place(ui.hoverBox, self.shared.hover === self && hovered && hovered !== selected && !dragging ? hovered : null);
     place(ui.selBox, selected);
     if (selected) {
@@ -2502,6 +2567,17 @@ ${EDIT_LAYOUT}
     }
     drawDrop();
     placeBar();
+  }
+
+  /* Boxes round the rest of a selection of many. */
+  function drawOthers() {
+    var list = targets().filter(function (n) {
+      return n !== selected;
+    });
+    var box = ui.others;
+    while (box.children.length > list.length) box.removeChild(box.lastChild);
+    while (box.children.length < list.length) box.appendChild(el("div", "ed-box ed-also"));
+    for (var i = 0; i < list.length; i++) place(box.children[i], list[i]);
   }
 
   /* The line that shows where a drop would put the selection. */
@@ -2593,10 +2669,12 @@ ${EDIT_LAYOUT}
     // A script-made element that can still be styled gets the route it can
     // take, not only the ones it cannot.
     var why = !selected ? unavailable || stale : styleBlocked || (blocked ? generatedHint(selected) : "");
+    var count = targets().length;
     ui.status.textContent =
       message ||
+      (count > 1 ? count + " layers selected. Shift-click to add or take one away." : "") ||
       why ||
-      (selected ? hint(selected) : "Click an element to select it. Double-click to go inside, Esc to go up.");
+      (selected ? hint(selected) : "Click a layer to select it. Double-click to go inside, Esc to go up. Right-click for more.");
     ui.status.toggleAttribute("data-warn", !!(styleBlocked || (!selected && why) || (armed && armed === selected)));
     if (dragging) {
       ui.status.textContent = drop && drop.place === "cell"
@@ -2608,24 +2686,26 @@ ${EDIT_LAYOUT}
           (drop.target.parentElement !== (press && press.el.parentElement) ? ", in " + label(drop.target.parentElement) : "") + "."
         : "Drag over where it should go.";
     }
+    var list = targets();
     var can = !!selected && !blocked && !busy && !editing;
-    ui.textBtn.disabled = !can || !retypable(selected);
-    ui.copyBtn.disabled = !can;
+    var all = list.length > 0 && !busy && !editing && list.every(function (n) {
+      return !whyNot(n);
+    });
+    ui.textBtn.disabled = !can || list.length > 1 || !retypable(selected);
+    ui.copyBtn.disabled = !all;
     var canStyle = !!selected && !styleBlocked && !busy && !editing;
-    ui.colourBtn.disabled = !canStyle;
-    ui.sizeBtn.disabled = !canStyle;
-    ui.layoutBtn.disabled = !canStyle || selected.children.length === 0;
-    ui.hideBtn.disabled = !(can || (canStyle && (narrow || !!blocked)));
-    ui.deleteBtn.disabled = !can;
-    ui.deleteBtn.textContent = armed && armed === selected ? "Delete anyway" : "Delete";
+    ui.hideBtn.disabled = !(all || (canStyle && (narrow || !!blocked)));
+    var hiddenAll = list.length > 0 && list.every(function (n) {
+      return n.style.display === "none";
+    });
+    setWord(ui.hideBtn, hiddenAll ? "Show" : "Hide");
+    ui.deleteBtn.disabled = !all;
+    setWord(ui.deleteBtn, armed && armed === selected ? "Delete anyway" : "Delete");
+    ui.insertBtn.disabled = busy || !!editing || !!unavailable || !!stale;
     ui.undoBtn.disabled = !(log.length || serverHistory.undo) || busy || !!stale;
     ui.redoBtn.disabled = !(redone.length || serverHistory.redo) || busy || !!stale;
     ui.reloadBtn.hidden = !stale;
-    renderScope();
-    renderAsk();
-    renderColour();
-    renderSize();
-    renderLayout();
+    renderPanel();
     draw();
   }
 
@@ -2707,10 +2787,15 @@ ${EDIT_LAYOUT}
       frame = null;
       hovered = null;
       selected = null;
+      selection = [];
+      clearState();
+      if (device) showDevice("full");
       context = null;
       armed = null;
       message = "";
+      measuring = false;
       if (ui) {
+        closeMenus();
         ui.layer.hidden = true;
         ui.bar.hidden = true;
       }
@@ -2734,6 +2819,8 @@ ${EDIT_LAYOUT}
       if (ui) {
         ui.layer.remove();
         ui.bar.remove();
+        ui.menu.remove();
+        if (ui.panel) ui.panel.root.remove();
       }
       if (self.shared.owner === self) self.shared.owner = parentEdit;
       parentEdit.disown(self);
@@ -2761,10 +2848,11 @@ ${EDIT_LAYOUT}
  */
 export const EDIT_CSS = `
 .osp-overlay .ed-layer { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-.osp-overlay .ed-layer[hidden], .osp-overlay .ed-box[hidden], .osp-overlay .ed-bar[hidden] { display: none; }
+.osp-overlay .ed-layer[hidden], .osp-overlay .ed-box[hidden], .osp-overlay .ed-bar[hidden], .osp-overlay .ed-menu[hidden] { display: none; }
 .osp-overlay .ed-box { position: fixed; box-sizing: border-box; pointer-events: none; }
 .osp-overlay .ed-hover { outline: 1px dashed #2f6fed; outline-offset: -1px; }
 .osp-overlay .ed-sel { outline: 2px solid #2f6fed; outline-offset: -1px; background: rgba(47, 111, 237, 0.06); }
+.osp-overlay .ed-also { outline: 2px solid #2f6fed; outline-offset: -1px; background: rgba(47, 111, 237, 0.04); }
 .osp-overlay .ed-sel[data-locked] { outline-color: var(--co-done); background: rgba(107, 112, 118, 0.08); }
 .osp-overlay .ed-tag {
   position: absolute; left: -2px; bottom: 100%; margin-bottom: 2px;
@@ -2774,20 +2862,8 @@ export const EDIT_CSS = `
 }
 .osp-overlay .ed-sel[data-locked] .ed-tag { background: var(--co-done); }
 .osp-overlay .ed-sel[data-made] { outline-style: dashed; }
-.osp-overlay .ed-scope[hidden] { display: none; }
 .osp-overlay .ed-sel[data-typing] { outline-style: dashed; background: transparent; }
 .osp-overlay .ed-sel[data-dragging] { opacity: 0.5; }
-.osp-overlay .ed-panel { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; border-top: 1px solid var(--co-line); }
-.osp-overlay .ed-panel[hidden] { display: none; }
-.osp-overlay .ed-note { color: var(--co-fg-2); font-size: 12px; max-width: 520px; }
-.osp-overlay .ed-row { display: flex; align-items: center; gap: 4px; }
-.osp-overlay .ed-row-label { width: 72px; color: var(--co-fg-2); font-size: 12px; }
-.osp-overlay .ed-seg { padding: 3px 9px; }
-.osp-overlay .ed-num {
-  width: 64px; margin-left: 6px; padding: 3px 6px; border: 1px solid var(--co-line); border-radius: 6px;
-  background: var(--co-bg); color: var(--co-fg); font: 12px/18px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-.osp-overlay .ed-unit { color: var(--co-fg-3); font-size: 12px; }
 .osp-overlay .ed-handle {
   position: absolute; width: 9px; height: 9px; box-sizing: border-box;
   background: #fff; border: 1.5px solid #2f6fed; border-radius: 2px; pointer-events: auto;
@@ -2796,63 +2872,236 @@ export const EDIT_CSS = `
 .osp-overlay .ed-handle-s { bottom: -5px; left: 50%; margin-left: -4px; cursor: ns-resize; }
 .osp-overlay .ed-handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
 .osp-overlay .ed-sel[data-locked] .ed-handle, .osp-overlay .ed-sel[data-typing] .ed-handle { display: none; }
-.osp-overlay .ed-tabs { display: flex; gap: 4px; }
-.osp-overlay .ed-tab {
-  all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 8px; border-radius: 8px; color: var(--co-fg-2);
-  font: 500 12px/18px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-.osp-overlay .ed-tab:hover { background: var(--co-bg-2); }
-.osp-overlay .ed-tab[data-current] { background: var(--co-bg-2); color: var(--co-fg); box-shadow: inset 0 0 0 1px var(--co-line); }
-.osp-overlay .ed-tab:focus-visible, .osp-overlay .ed-swatch:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
-.osp-overlay .ed-chip { width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
-.osp-overlay .ed-chip[data-none] { background: linear-gradient(135deg, transparent 45%, #d4421e 45%, #d4421e 55%, transparent 55%) !important; }
-.osp-overlay .ed-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 520px; }
-.osp-overlay .ed-swatch {
-  all: unset; cursor: pointer; width: 22px; height: 22px; border-radius: 6px;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,.18);
-}
-.osp-overlay .ed-swatch:hover { transform: scale(1.12); }
-.osp-overlay .ed-custom { width: 30px; height: 24px; padding: 0; border: 1px solid var(--co-line); border-radius: 6px; background: none; cursor: pointer; }
-.osp-overlay .ed-ask[hidden] { display: none; }
-.osp-overlay .ed-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.osp-overlay .ed-ask-text { color: var(--co-fg); flex-basis: 100%; }
-.osp-overlay .ed-btn[aria-pressed="true"] { background: var(--co-bg); border-color: var(--co-fg-3); }
 .osp-overlay .ed-drop { position: fixed; background: #2f6fed; border-radius: 2px; pointer-events: none; }
 .osp-overlay .ed-drop[hidden] { display: none; }
 .osp-overlay .ed-drop[data-box] { background: rgba(47, 111, 237, 0.12); outline: 2px dashed #2f6fed; outline-offset: -2px; }
 .osp-overlay .ed-guide { position: fixed; background: #e5398f; pointer-events: none; }
 .osp-overlay .ed-guide[hidden] { display: none; }
+.osp-overlay .ed-measure-line { position: fixed; background: #f24822; pointer-events: none; }
+.osp-overlay .ed-measure-tag {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  padding: 0 5px; border-radius: 4px; background: #f24822; color: #fff; white-space: nowrap;
+  font: 600 11px/17px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums;
+}
+
+/* the bar: what to do to the selection */
 .osp-overlay .ed-bar {
   position: fixed; z-index: 6; box-sizing: border-box;
-  width: max-content; max-width: min(560px, calc(100vw - 16px));
+  width: max-content; max-width: min(640px, calc(100vw - 16px));
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px; border: 1px solid var(--co-line); border-radius: 12px;
   background: var(--co-bg); color: var(--co-fg);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
-  font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  box-shadow: var(--co-shadow);
+  font: 13px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 .osp-overlay .ed-crumbs { display: flex; flex-wrap: wrap; align-items: center; color: var(--co-fg-3); font-size: 12px; }
 .osp-overlay .ed-crumbs:empty { display: none; }
 .osp-overlay .ed-crumb {
-  all: unset; cursor: pointer; padding: 0 3px; border-radius: 4px;
-  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--co-fg-2);
+  all: unset; cursor: pointer; padding: 0 4px; border-radius: 4px;
+  font: 12px/18px Inter, ui-sans-serif, system-ui, sans-serif; color: var(--co-fg-2);
 }
 .osp-overlay .ed-crumb:hover { background: var(--co-bg-2); color: var(--co-fg); }
 .osp-overlay .ed-crumb[data-current] { color: var(--co-fg); font-weight: 600; }
-.osp-overlay .ed-status { color: var(--co-fg-2); max-width: 540px; }
+.osp-overlay .ed-status { color: var(--co-fg-2); max-width: 600px; font-size: 12px; }
 .osp-overlay .ed-status[data-warn] { color: var(--co-ink); }
-.osp-overlay .ed-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.osp-overlay .ed-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.osp-overlay .ed-gap { width: 6px; }
 .osp-overlay .ed-btn {
-  all: unset; cursor: pointer; padding: 4px 10px; border-radius: 8px; white-space: nowrap;
-  border: 1px solid var(--co-line); background: var(--co-bg-2); color: var(--co-fg);
-  font: 500 12px/18px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  all: unset; cursor: pointer; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px; border-radius: 8px; white-space: nowrap;
+  border: 1px solid var(--co-line); background: var(--co-bg); color: var(--co-fg);
+  font: 500 12px/18px Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-.osp-overlay .ed-btn:hover:not(:disabled) { border-color: var(--co-fg-3); }
+.osp-overlay .ed-btn svg { color: var(--co-fg-2); flex: none; }
+.osp-overlay .ed-btn:hover:not(:disabled) { background: var(--co-bg-2); border-color: var(--co-fg-3); }
 .osp-overlay .ed-btn:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
-.osp-overlay .ed-btn:disabled { opacity: 0.45; cursor: default; }
+.osp-overlay .ed-btn:disabled { opacity: 0.4; cursor: default; }
 .osp-overlay .ed-btn[hidden] { display: none; }
-.osp-overlay .ed-danger:not(:disabled) { color: var(--co-danger); }
+.osp-overlay .ed-btn.ed-quiet { border-color: transparent; padding: 0 8px; }
+.osp-overlay .ed-btn.ed-quiet span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.osp-overlay .ed-danger:not(:disabled):hover { color: var(--co-danger); }
+.osp-overlay .ed-danger:not(:disabled):hover svg { color: var(--co-danger); }
+.osp-overlay .ed-btn[aria-expanded] { background: var(--co-bg-2); border-color: var(--co-fg-3); }
+
+/* menus: insert, and the right-click one */
+.osp-overlay .ed-menu {
+  box-sizing: border-box; min-width: 220px; max-height: min(480px, calc(100vh - 32px)); overflow-y: auto;
+  padding: 4px; border: 1px solid var(--co-line); border-radius: 10px;
+  background: var(--co-bg); color: var(--co-fg); box-shadow: var(--co-shadow);
+  font: 12px/16px Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.osp-overlay .ed-insert { position: absolute; left: 0; bottom: calc(100% + 6px); }
+.osp-overlay .ed-context { position: fixed; z-index: 8; }
+.osp-overlay .ed-menu-item {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; height: 28px; padding: 0 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.osp-overlay .ed-menu-item:hover:not(:disabled) { background: #2f6fed; color: #fff; }
+.osp-overlay .ed-menu-item:hover:not(:disabled) kbd { color: rgba(255, 255, 255, 0.8); }
+.osp-overlay .ed-menu-item:disabled { opacity: 0.4; cursor: default; }
+.osp-overlay .ed-menu-item kbd { font: inherit; color: var(--co-fg-3); }
+.osp-overlay .ed-menu-sep { height: 1px; margin: 4px 6px; background: var(--co-line); }
+.osp-overlay .ed-menu-note { padding: 6px 8px 2px; color: var(--co-fg-3); font-size: 11px; }
+
+/* a device's width, over the page */
+.osp-overlay .ed-device {
+  position: fixed; inset: 0; z-index: 0; pointer-events: auto;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(16, 18, 22, 0.55);
+}
+.osp-overlay .ed-device-frame { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 140px); margin-bottom: 72px; }
+.osp-overlay .ed-device-head { display: flex; align-items: center; justify-content: space-between; color: #fff; font: 600 12px/20px Inter, ui-sans-serif, system-ui, sans-serif; }
+.osp-overlay .ed-device-close { all: unset; cursor: pointer; padding: 2px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.16); color: #fff; font-weight: 500; }
+.osp-overlay .ed-device-close:hover { background: rgba(255, 255, 255, 0.28); }
+.osp-overlay .ed-device iframe { height: calc(100vh - 200px); max-width: calc(100vw - 48px); border: 0; border-radius: 12px; background: #fff; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); }
+
+/* the panel */
+.osp-overlay .ep-root { display: flex; flex-direction: column; flex: 1; min-height: 0; font: 12px/16px Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--co-fg); }
+.osp-overlay .ep-root[hidden] { display: none; }
+.osp-overlay .ep-root button { font: inherit; color: inherit; }
+.osp-overlay .ep-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 10px; border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ep-tabs { position: relative; display: flex; flex: 1; padding: 2px; border-radius: 8px; background: var(--co-bg-2); }
+.osp-overlay .ep-tab-slider { position: absolute; top: 2px; left: 2px; width: calc(50% - 2px); height: calc(100% - 4px); border-radius: 6px; background: var(--co-bg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); transition: transform 0.22s var(--co-ease); }
+.osp-overlay .ep-tabs[data-at="1"] .ep-tab-slider { transform: translateX(100%); }
+.osp-overlay .ep-tab { all: unset; position: relative; z-index: 1; flex: 1; height: 26px; text-align: center; cursor: pointer; color: var(--co-fg-2); font-size: 12px; line-height: 26px; }
+.osp-overlay .ep-tab[data-on] { color: var(--co-fg); font-weight: 600; }
+.osp-overlay .ep-tab:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; border-radius: 6px; }
+.osp-overlay .ep-search { display: flex; align-items: center; gap: 6px; margin: 8px 8px 0; padding: 0 8px; height: 28px; border-radius: 6px; background: var(--co-bg-2); color: var(--co-fg-3); }
+.osp-overlay .ep-search[hidden] { display: none; }
+.osp-overlay .ep-search .ep-text { background: transparent; padding: 0; }
+.osp-overlay .ep-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--co-line) transparent; }
+.osp-overlay .ep-top { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ep-title { display: flex; align-items: center; gap: 6px; font-weight: 600; min-width: 0; }
+.osp-overlay .ep-title span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osp-overlay .ep-many { font-weight: 600; }
+.osp-overlay .ep-why { color: var(--co-ink); font-size: 11px; line-height: 15px; }
+.osp-overlay .ep-sec { border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ep-sec-head { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
+.osp-overlay .ep-sec-toggle { all: unset; cursor: pointer; flex: 1; display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 6px 0 12px; font-weight: 600; font-size: 11px; color: var(--co-fg); }
+.osp-overlay .ep-sec-toggle svg { color: var(--co-fg-3); transition: transform 0.15s var(--co-ease); }
+.osp-overlay .ep-sec[data-closed] .ep-sec-toggle svg { transform: rotate(-90deg); }
+.osp-overlay .ep-sec-toggle:focus-visible { outline: 2px solid #2f6fed; outline-offset: -2px; }
+.osp-overlay .ep-sec-body { padding: 0 12px 14px; }
+.osp-overlay .ep-stack { display: flex; flex-direction: column; gap: 8px; }
+.osp-overlay .ep-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: center; }
+.osp-overlay .ep-quad { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; flex: 1; }
+.osp-overlay .ep-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 8px; }
+.osp-overlay .ep-label { color: var(--co-fg-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osp-overlay .ep-hint { color: var(--co-fg-3); font-size: 11px; line-height: 15px; }
+.osp-overlay .ep-pad-hint { padding: 12px; }
+
+.osp-overlay .ep-num { display: flex; align-items: center; height: 28px; min-width: 0; border-radius: 6px; border: 1px solid transparent; background: var(--co-bg-2); }
+.osp-overlay .ep-num:hover { border-color: var(--co-line); }
+.osp-overlay .ep-num:focus-within { border-color: #2f6fed; background: var(--co-bg); }
+.osp-overlay .ep-num[data-off] { opacity: 0.5; }
+.osp-overlay .ep-k { flex: none; min-width: 24px; padding: 0 2px; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--co-fg-3); font-size: 11px; cursor: ew-resize; user-select: none; white-space: nowrap; }
+.osp-overlay .ep-num input { flex: 1; min-width: 0; width: 100%; height: 100%; border: 0; outline: none; background: transparent; color: var(--co-fg); font: 12px/16px Inter, ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; padding: 0 6px 0 0; }
+.osp-overlay .ep-u { flex: none; padding-right: 8px; color: var(--co-fg-3); font-size: 11px; }
+.osp-overlay .ep-select { box-sizing: border-box; width: 100%; min-width: 0; height: 28px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; background: var(--co-bg-2); color: var(--co-fg); font: 12px/16px Inter, ui-sans-serif, system-ui, sans-serif; }
+.osp-overlay .ep-select:hover { border-color: var(--co-line); }
+.osp-overlay .ep-text { box-sizing: border-box; flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 0; outline: none; border-radius: 6px; background: var(--co-bg-2); color: var(--co-fg); font: 12px/16px Inter, ui-sans-serif, system-ui, sans-serif; }
+.osp-overlay .ep-seg { display: flex; gap: 2px; padding: 2px; height: 28px; box-sizing: border-box; border-radius: 6px; background: var(--co-bg-2); min-width: 0; }
+.osp-overlay .ep-seg button { all: unset; cursor: pointer; flex: 1; min-width: 22px; display: flex; align-items: center; justify-content: center; gap: 5px; border-radius: 4px; color: var(--co-fg-2); font-size: 11px; white-space: nowrap; }
+.osp-overlay .ep-seg button:hover { color: var(--co-fg); }
+.osp-overlay .ep-seg button[data-on] { background: var(--co-bg); color: var(--co-fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+.osp-overlay .ep-seg button:focus-visible { outline: 2px solid #2f6fed; outline-offset: -1px; }
+
+/* a button that looks like one: Detach, Add auto layout, Add a fill */
+.osp-overlay .ep-action {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 30px; padding: 0 10px;
+  border: 1px solid var(--co-line); border-radius: 8px; background: var(--co-bg);
+  box-shadow: 0 1px 2px rgba(16, 18, 22, 0.08);
+  color: var(--co-fg); font-weight: 500; font-size: 12px;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
+}
+.osp-overlay .ep-action svg { color: var(--co-fg-2); flex: none; }
+.osp-overlay .ep-action:hover { background: var(--co-bg-2); border-color: var(--co-fg-3); }
+.osp-overlay .ep-action:active { transform: translateY(1px); box-shadow: none; }
+.osp-overlay .ep-action:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+
+.osp-overlay .ep-icon { all: unset; cursor: pointer; flex: none; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--co-fg-2); }
+.osp-overlay .ep-icon:hover { background: var(--co-bg-2); color: var(--co-fg); }
+.osp-overlay .ep-icon[data-on] { background: var(--co-bg-2); color: var(--co-fg); }
+.osp-overlay .ep-icon-small { width: 24px; height: 24px; }
+.osp-overlay .ep-icon:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-pad { display: flex; align-items: center; gap: 6px; }
+.osp-overlay .ep-pad > .ep-pair { flex: 1; }
+.osp-overlay .ep-align-row { display: flex; align-items: flex-start; gap: 8px; }
+.osp-overlay .ep-align-row > .ep-stack { flex: 1; min-width: 0; gap: 6px; }
+.osp-overlay .ep-align { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); width: 64px; height: 64px; box-sizing: border-box; padding: 4px; border-radius: 6px; background: var(--co-bg-2); }
+.osp-overlay .ep-align button { all: unset; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.osp-overlay .ep-align button::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--co-fg-3); opacity: 0.5; }
+.osp-overlay .ep-align button:hover::after { opacity: 1; }
+.osp-overlay .ep-align button[data-on]::after { width: 12px; height: 4px; border-radius: 2px; background: #2f6fed; opacity: 1; }
+.osp-overlay .ep-check { display: flex; align-items: center; gap: 8px; color: var(--co-fg-2); cursor: pointer; }
+.osp-overlay .ep-check input { accent-color: #2f6fed; margin: 0; }
+
+.osp-overlay .ep-colour-wrap { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.osp-overlay .ep-colour { display: flex; align-items: center; gap: 2px; height: 28px; min-width: 0; padding-right: 2px; border-radius: 6px; border: 1px solid transparent; background: var(--co-bg-2); }
+.osp-overlay .ep-colour:hover { border-color: var(--co-line); }
+.osp-overlay .ep-colour:focus-within { border-color: #2f6fed; background: var(--co-bg); }
+.osp-overlay .ep-swatch { all: unset; cursor: pointer; flex: none; width: 16px; height: 16px; margin: 0 4px 0 6px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16); }
+.osp-overlay .ep-swatch[data-mixed] { background: linear-gradient(135deg, #ddd 50%, #999 50%); }
+.osp-overlay .ep-swatch:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-hex, .osp-overlay .ep-alpha { min-width: 0; height: 100%; border: 0; outline: none; background: transparent; color: var(--co-fg); font: 12px/16px Inter, ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.osp-overlay .ep-hex { flex: 1; text-transform: uppercase; }
+.osp-overlay .ep-alpha { width: 44px; flex: none; padding-left: 6px; border-left: 1px solid var(--co-line); height: 16px; }
+.osp-overlay .ep-chips { display: flex; justify-content: flex-end; }
+.osp-overlay .ep-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 20px; padding: 0 7px; border-radius: 10px; background: var(--co-bg-2); color: var(--co-fg-2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.osp-overlay .ep-chip-token { background: rgba(47, 111, 237, 0.1); color: #2f6fed; }
+.osp-overlay .ep-chip-made { background: var(--co-pri-medium-bg); color: var(--co-pri-medium-fg); flex: none; }
+.osp-overlay .ep-palette { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; border: 1px solid var(--co-line); background: var(--co-bg); box-shadow: var(--co-shadow); }
+.osp-overlay .ep-palette-label { color: var(--co-fg-3); font-size: 11px; }
+.osp-overlay .ep-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.osp-overlay .ep-swatch-pick { all: unset; cursor: pointer; width: 20px; height: 20px; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16); }
+.osp-overlay .ep-swatch-pick:hover { transform: scale(1.12); }
+.osp-overlay .ep-swatch-pick:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-palette-tools { display: grid; grid-template-columns: 40px 1fr; gap: 6px; }
+.osp-overlay .ep-palette-tools .ep-action:last-child:nth-child(3) { grid-column: 1 / -1; }
+.osp-overlay .ep-custom { box-sizing: border-box; width: 40px; height: 30px; padding: 2px; border: 1px solid var(--co-line); border-radius: 6px; background: var(--co-bg); cursor: pointer; }
+.osp-overlay .ep-custom-wide { width: 100%; }
+.osp-overlay .ep-name-var { display: flex; gap: 6px; }
+.osp-overlay .ep-name-var .ep-action { width: auto; }
+.osp-overlay .ep-gradient { all: unset; box-sizing: border-box; cursor: pointer; height: 28px; padding: 0 10px; border-radius: 6px; color: #fff; font-size: 11px; font-weight: 600; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.osp-overlay .ep-effect { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px dashed var(--co-line); }
+.osp-overlay .ep-effect-head { display: flex; align-items: center; gap: 4px; }
+.osp-overlay .ep-code { margin: 0; max-height: 220px; overflow: auto; padding: 8px; border-radius: 6px; background: var(--co-bg-2); color: var(--co-fg); font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.osp-overlay .ep-ask { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding: 10px; border-radius: 8px; background: rgba(47, 111, 237, 0.08); }
+.osp-overlay .ep-ask p { margin: 0; font-size: 12px; line-height: 16px; }
+.osp-overlay .ep-ask-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.osp-overlay .ep-ask-row button { all: unset; cursor: pointer; height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--co-line); background: var(--co-bg); font-size: 11px; font-weight: 500; }
+.osp-overlay .ep-ask-row button.ep-ask-main { background: #2f6fed; border-color: transparent; color: #fff; }
+.osp-overlay .ep-ask-row button:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-history { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.osp-overlay .ep-history li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ep-history li:last-child { border-bottom: 0; }
+.osp-overlay .ep-history li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osp-overlay .ep-link { all: unset; cursor: pointer; flex: none; color: #2f6fed; font-size: 11px; }
+.osp-overlay .ep-link:hover { text-decoration: underline; }
+.osp-overlay .ep-latest { flex: none; color: var(--co-fg-3); font-size: 11px; }
+.osp-overlay .ep-keys { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 11px; }
+.osp-overlay .ep-keys dt { color: var(--co-fg-2); }
+.osp-overlay .ep-keys dd { margin: 0; color: var(--co-fg); text-align: right; }
+
+/* layers */
+.osp-overlay .ep-layers { padding: 6px 0; }
+.osp-overlay .ep-layer { display: flex; align-items: center; gap: 4px; height: 28px; padding-right: 6px; cursor: default; position: relative; }
+.osp-overlay .ep-layer:hover { background: var(--co-bg-2); }
+.osp-overlay .ep-layer[data-selected] { background: rgba(47, 111, 237, 0.12); }
+.osp-overlay .ep-layer[data-hidden] .ep-layer-name, .osp-overlay .ep-layer[data-hidden] .ep-kind { opacity: 0.4; }
+.osp-overlay .ep-layer[data-made] .ep-layer-name { font-style: italic; }
+.osp-overlay .ep-layer[data-drop="before"]::before, .osp-overlay .ep-layer[data-drop="after"]::after { content: ""; position: absolute; left: 0; right: 0; height: 2px; background: #2f6fed; }
+.osp-overlay .ep-layer[data-drop="before"]::before { top: 0; }
+.osp-overlay .ep-layer[data-drop="after"]::after { bottom: 0; }
+.osp-overlay .ep-layer[data-drop="inside"] { outline: 2px solid #2f6fed; outline-offset: -2px; }
+.osp-overlay .ep-twist { all: unset; flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; color: var(--co-fg-3); cursor: pointer; }
+.osp-overlay .ep-twist svg { transition: transform 0.15s var(--co-ease); }
+.osp-overlay .ep-twist[data-closed] svg { transform: rotate(-90deg); }
+.osp-overlay .ep-kind { flex: none; display: flex; color: var(--co-fg-3); }
+.osp-overlay .ep-layer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.osp-overlay .ep-eye { width: 24px; height: 24px; visibility: hidden; }
+.osp-overlay .ep-layer:hover .ep-eye, .osp-overlay .ep-layer[data-hidden] .ep-eye { visibility: visible; }
 `;
 
 /** Serializes a value into a `<script>` without letting it close the tag. */

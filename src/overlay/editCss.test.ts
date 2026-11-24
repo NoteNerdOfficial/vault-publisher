@@ -101,6 +101,40 @@ describe("setDeclaration", () => {
   });
 });
 
+describe("taking declarations away", () => {
+  it("takes a declaration out of a style attribute", () => {
+    expect(setInlineDeclaration("color: red; margin: 0", "color", "")).toBe("margin: 0");
+    expect(setInlineDeclaration("margin: 0; color: red", "color", "")).toBe("margin: 0");
+    expect(setInlineDeclaration("color: red", "color", "")).toBe("");
+    expect(setInlineDeclaration("margin: 0", "color", "")).toBe("margin: 0");
+  });
+
+  it("takes a declaration's whole line out of a spaced rule", () => {
+    const css = "h2 {\n  margin: 0;\n  color: red;\n}";
+    const edit = setDeclaration(css, 4, css.length - 1, "margin", "");
+    expect(applyEdits(css, [edit])).toBe("h2 {\n  color: red;\n}");
+  });
+
+  it("takes a declaration out of a one-line rule", () => {
+    const css = ".a { color: red; margin: 0 }";
+    const edit = setDeclaration(css, 4, css.length - 1, "color", "");
+    expect(applyEdits(css, [edit])).toBe(".a { margin: 0 }");
+    const none = setDeclaration(css, 4, css.length - 1, "padding", "");
+    expect(applyEdits(css, [none])).toBe(css);
+  });
+
+  it("removes the style attribute once nothing is left in it, and adds no rule for a removal", () => {
+    const page = '<body><p style="color: red">x</p><style>.b { color: red; }</style></body>';
+    const at = page.indexOf("<p");
+    const result = planOp(page, { op: "inline-style", at, props: [["color", ""]] });
+    if (!result.ok) throw new Error(result.error);
+    expect(applyEdits(page, result.edits)).toBe('<body><p>x</p><style>.b { color: red; }</style></body>');
+    const rule = planOp(page, { op: "add-rule", sheet: null, selector: ".c", props: [["color", ""]] });
+    if (!rule.ok) throw new Error(rule.error);
+    expect(applyEdits(page, rule.edits)).toBe(page);
+  });
+});
+
 describe("inline styles and what may be written", () => {
   it("sets a property in a style attribute", () => {
     expect(setInlineDeclaration("color: red; margin: 0", "color", "blue")).toBe("color: blue; margin: 0");
@@ -112,9 +146,12 @@ describe("inline styles and what may be written", () => {
     expect(isSafeValue("#3a5bd9")).toBe(true);
     expect(isSafeValue("rgb(10, 20, 30)")).toBe(true);
     expect(isSafeValue("var(--accent)")).toBe(true);
-    for (const bad of ["red; display: none", "red}</style><script>", 'url("x")', "", "x".repeat(201)]) {
+    for (const bad of ["red; display: none", "red}</style><script>", 'url("x")', "", "x".repeat(401), '"Inter', "a'b"]) {
       expect(isSafeValue(bad)).toBe(false);
     }
+    expect(isSafeValue('"Inter", system-ui, sans-serif')).toBe(true);
+    expect(isSafeValue("linear-gradient(90deg, #ff0000 0%, rgba(0, 0, 255, 0.5) 100%)")).toBe(true);
+    expect(isSafeValue("0px 4px 12px 0px rgba(0, 0, 0, 0.25), inset 0px 1px 0px 0px #ffffff")).toBe(true);
     expect(isPropertyName("background-color")).toBe(true);
     expect(isPropertyName("--accent")).toBe(true);
     expect(isPropertyName("color:red")).toBe(false);

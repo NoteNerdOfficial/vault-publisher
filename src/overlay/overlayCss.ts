@@ -477,6 +477,13 @@ export const OVERLAY_CSS = `
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* Edit mode's inspector in the same shell: the review list's parts step aside. */
+.osp-overlay .co-edit-slot { display: none; }
+.osp-overlay .co-panel[data-content="edit"] .co-edit-slot { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.osp-overlay .co-panel[data-content="edit"] > .co-panel-head,
+.osp-overlay .co-panel[data-content="edit"] > .co-controls,
+.osp-overlay .co-panel[data-content="edit"] > .co-list { display: none; }
+
 .osp-overlay .co-resizer {
   position: absolute;
   top: 0;

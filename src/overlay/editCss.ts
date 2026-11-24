@@ -231,6 +231,7 @@ export function setDeclaration(
   value: string,
 ): TextEdit {
   const found = declarations(text, start, end).filter((d) => d.name.toLowerCase() === prop.toLowerCase());
+  if (value === "") return removeDeclarations(text, start, end, found);
   const last = found[found.length - 1];
   if (last) return { start: last.valueStart, end: last.valueEnd, text: value };
 
@@ -252,6 +253,40 @@ export function setDeclaration(
     return { start: tail, end: tail, text: `${needsSemicolon ? ";" : ""}\n${indent}${prop}: ${value};` };
   }
   return { start: tail, end: tail, text: `${needsSemicolon ? ";" : ""}${tail > start ? " " : ""}${prop}: ${value};` };
+}
+
+/**
+ * The edit that takes declarations out of a block: each with its `;`, and
+ * with its whole line when it has one to itself, so no gap is left behind.
+ * Nothing to take out is an edit that changes nothing.
+ */
+function removeDeclarations(text: string, start: number, end: number, found: CssDeclaration[]): TextEdit {
+  if (!found.length) return { start, end: start, text: "" };
+  const cuts = found.map((d): [number, number] => {
+    let to = d.end < end && text[d.end] === ";" ? d.end + 1 : d.end;
+    let from = d.nameStart;
+    let lineStart = from;
+    while (lineStart > start && /[ \t]/.test(text[lineStart - 1])) lineStart--;
+    let lineEnd = to;
+    while (lineEnd < end && /[ \t]/.test(text[lineEnd])) lineEnd++;
+    if ((lineStart === start || text[lineStart - 1] === "\n") && text[lineEnd] === "\n" && lineStart > start) {
+      return [lineStart, lineEnd + 1];
+    }
+    // Inline: the space after it goes too, or the space before it at the end.
+    if (lineEnd > to) to = lineEnd;
+    else if (lineStart < from) from = lineStart;
+    return [from, to];
+  });
+  const from = cuts[0][0];
+  const to = cuts[cuts.length - 1][1];
+  let out = "";
+  let at = from;
+  for (const [a, b] of cuts) {
+    out += text.slice(at, a);
+    at = b;
+  }
+  out += text.slice(at, to);
+  return { start: from, end: to, text: out };
 }
 
 /**
@@ -277,6 +312,10 @@ export function setDeclarations(
 /** A style attribute's value with `prop` set to `value`. */
 export function setInlineDeclaration(style: string, prop: string, value: string): string {
   const found = declarations(style, 0, style.length).filter((d) => d.name.toLowerCase() === prop.toLowerCase());
+  if (value === "") {
+    const cut = removeDeclarations(style, 0, style.length, found);
+    return (style.slice(0, cut.start) + cut.text + style.slice(cut.end)).trim().replace(/^;\s*/, "").replace(/;\s*$/, "");
+  }
   const last = found[found.length - 1];
   if (last) return style.slice(0, last.valueStart) + value + style.slice(last.valueEnd);
   const trimmed = style.trim().replace(/;\s*$/, "");
@@ -293,7 +332,17 @@ export function isPropertyName(prop: string): boolean {
  * nothing that could end the declaration, open a block or close the tag.
  */
 export function isSafeValue(value: string): boolean {
-  return value.length > 0 && value.length <= 200 && /^[#\w\s(),.%/+*-]+$/.test(value);
+  if (!(value.length > 0 && value.length <= 400 && /^[#\w\s(),.%/+*'"-]+$/.test(value))) return false;
+  // Nothing that fetches: a value is a look, not a request.
+  if (/\b(url|image-set|expression)\s*\(/i.test(value)) return false;
+  // Quotes only in pairs, as around a font name: an odd one would run on
+  // past the end of the declaration.
+  return (value.split('"').length - 1) % 2 === 0 && (value.split("'").length - 1) % 2 === 0;
+}
+
+/** A value, or "" to take the property away. */
+export function isSafeValueOrRemoval(value: string): boolean {
+  return value === "" || isSafeValue(value);
 }
 
 /** A selector the notch will write into a stylesheet. */
@@ -335,6 +384,8 @@ export function addRule(
 ): TextEdit {
   const css = text.slice(start, end);
   const compact = minified(css);
+  // A removal only ever touches a rule that is already there.
+  const adding = props.filter(([, value]) => value !== "");
   const top = statements(text, start, end);
 
   // Put a new piece of CSS on its own line before the end of the block.
@@ -354,7 +405,8 @@ export function addRule(
   if (!media) {
     const existing = sameRule(top);
     if (existing) return setDeclarations(text, existing.blockStart, existing.blockEnd, props);
-    return append(start, end, ruleText(selector, props, compact));
+    if (!adding.length) return { start: end, end, text: "" };
+    return append(start, end, ruleText(selector, adding, compact));
   }
 
   const block = [...top]
@@ -369,10 +421,12 @@ export function addRule(
   if (block) {
     const existing = sameRule(statements(text, block.blockStart, block.blockEnd));
     if (existing) return setDeclarations(text, existing.blockStart, existing.blockEnd, props);
-    return append(block.blockStart, block.blockEnd, (compact ? "" : "  ") + ruleText(selector, props, compact, compact ? "" : "  "));
+    if (!adding.length) return { start: end, end, text: "" };
+    return append(block.blockStart, block.blockEnd, (compact ? "" : "  ") + ruleText(selector, adding, compact, compact ? "" : "  "));
   }
   const piece = compact
-    ? `@media ${media}{${ruleText(selector, props, true)}}`
-    : `@media ${media} {\n  ${ruleText(selector, props, false, "  ")}\n}`;
+    ? `@media ${media}{${ruleText(selector, adding, true)}}`
+    : `@media ${media} {\n  ${ruleText(selector, adding, false, "  ")}\n}`;
+  if (!adding.length) return { start: end, end, text: "" };
   return append(start, end, piece);
 }

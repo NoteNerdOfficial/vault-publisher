@@ -317,7 +317,7 @@ describe("editRequest", () => {
       { op: "inline-style", at: 3, props: [] },
       { op: "inline-style", at: 3, props: [["color", "red;x:y"]] },
       { op: "inline-style", at: 3, props: [["co lor", "red"]] },
-      { op: "inline-style", at: 3, props: Array.from({ length: 9 }, () => ["color", "red"]) },
+      { op: "inline-style", at: 3, props: Array.from({ length: 33 }, () => ["color", "red"]) },
       { op: "rule-style", sheet: 1, path: [], selector: "a", props: [["color", "red"]] },
       { op: "add-rule", sheet: null, selector: "a{}", props: [["color", "red"]] },
       { op: "add-rule", sheet: null, selector: "a", props: [["color", "red"]], media: "screen" },
@@ -739,5 +739,178 @@ describe("history and linked sheets through the route", () => {
   it("refuses a stylesheet the page does not link", async () => {
     const refused = await call({ hash: hashText(HTML), op: "rule-style", sheet: "q/other.css", path: [0], selector: "h1", props: [["color", "red"]] });
     expect(refused.status).toBe(404);
+  });
+});
+
+/**
+ * Every stamp the page would hold after an edit, worked out the way the
+ * page does it, against the stamps a fresh load of the new file would get.
+ */
+function stampsAgree(source: string, request: EditRequest, keepOriginals = false): string {
+  const plan = planOp(source, request);
+  if (!plan.ok) throw new Error(plan.error);
+  const next = applyEdits(source, plan.edits);
+  const shifts = shiftsOf(plan.edits);
+  const moved = new Map(plan.relocated ?? []);
+  const page: number[] = [];
+  for (const at of stamps(prepareForEditing(source, ""))) {
+    if (moved.has(at)) {
+      page.push(moved.get(at)!);
+      if (keepOriginals) page.push(shiftStamp(at, shifts)!);
+      continue;
+    }
+    const shifted = shiftStamp(at, shifts);
+    if (shifted !== null) page.push(shifted);
+  }
+  if (plan.created !== undefined) page.push(plan.created);
+  expect([...new Set(page)].sort((a, b) => a - b)).toEqual(stamps(prepareForEditing(next, "")).sort((a, b) => a - b));
+  return next;
+}
+
+describe("frame selection, ungroup, insert and paste", () => {
+  it("wraps sibling lines in an auto layout frame, one step in", () => {
+    const next = stampsAgree(LIST, {
+      op: "wrap",
+      at: offsetOf(LIST, "<li>One"),
+      last: offsetOf(LIST, "<li>Two"),
+      props: [["display", "flex"], ["gap", "8px"]],
+    });
+    expect(next).toContain(
+      '  <ul class="a">\n    <div style="display: flex; gap: 8px">\n      <li>One</li>\n      <li>Two <b>bold</b></li>\n    </div>\n    <li>Three</li>',
+    );
+  });
+
+  it("wraps inline siblings in place", () => {
+    const next = stampsAgree(LIST, {
+      op: "wrap",
+      at: offsetOf(LIST, "<span>x"),
+      last: offsetOf(LIST, "<span>y"),
+      props: [["display", "flex"]],
+    });
+    expect(next).toContain('<div class="row"><div style="display: flex"><span>x</span><span>y</span></div></div>');
+  });
+
+  it("will not frame layers from different parents", () => {
+    const plan = planOp(LIST, { op: "wrap", at: offsetOf(LIST, "<li>One"), last: offsetOf(LIST, "<h2>"), props: [] });
+    expect(plan.ok).toBe(false);
+  });
+
+  it("ungroups a frame, its children moving out a step", () => {
+    const next = stampsAgree(LIST, { op: "unwrap", at: offsetOf(LIST, "<ul") });
+    expect(next).toContain("<body>\n  <li>One</li>\n  <li>Two <b>bold</b></li>\n  <li>Three</li>\n  <div class=\"row\">");
+  });
+
+  it("ungroups an inline frame", () => {
+    const next = stampsAgree(LIST, { op: "unwrap", at: offsetOf(LIST, '<div class="row">') });
+    expect(next).toContain("  <span>x</span><span>y</span>\n  <section>");
+  });
+
+  it("inserts a rectangle after a layer, a text inside a frame, and an image at the end of the page", () => {
+    const rect = stampsAgree(LIST, { op: "insert", at: offsetOf(LIST, "<li>Three"), place: "after", kind: "rect" });
+    expect(rect).toContain(
+      '    <li>Three</li>\n    <div style="width: 100px; height: 100px; background-color: #d9d9d9"></div>\n  </ul>',
+    );
+    const text = stampsAgree(LIST, { op: "insert", at: offsetOf(LIST, "<section"), place: "inside", kind: "text" });
+    expect(text).toContain("    <h2>Other</h2>\n    <p>Text</p>\n  </section>");
+    const image = stampsAgree(LIST, { op: "insert", at: null, place: "inside", kind: "image", src: "img/cat.png" });
+    expect(image).toContain('  <img src="img/cat.png" alt="" style="width: 240px; height: auto">\n</body>');
+  });
+
+  it("pastes a copy of a layer into another frame, leaving the original", () => {
+    const next = stampsAgree(
+      LIST,
+      { op: "copy", at: offsetOf(LIST, "<li>Two"), target: offsetOf(LIST, "<h2>"), place: "after" },
+      true,
+    );
+    expect(next).toContain("    <li>Two <b>bold</b></li>\n    <li>Three</li>");
+    expect(next).toContain("    <h2>Other</h2>\n    <li>Two <b>bold</b></li>\n  </section>");
+  });
+});
+
+describe("insert, groups and removals through the route", () => {
+  const TOKEN = "insert-token";
+  const HTML = '<!doctype html><html><head></head><body>\n  <h1 style="color: red">Title</h1>\n  <p>Body</p>\n</body></html>';
+  let server: ReviewServer;
+  let base: string;
+  let vault: Record<string, string>;
+  let preview: Record<string, string>;
+  let copied: string[];
+
+  beforeEach(async () => {
+    vault = { "P/index.html": HTML };
+    preview = { "p/index.html": HTML };
+    copied = [];
+    server = new ReviewServer({
+      token: TOKEN,
+      store: {
+        readComments: async () => null,
+        writeComments: async () => {},
+        readPages: async () => null,
+        readPreview: async (path) => preview[path] ?? null,
+      },
+      edit: {
+        sourceFor: (path) => (path === "p/index.html" ? "P/index.html" : null),
+        readSource: async (path) => vault[path] ?? null,
+        writeSource: async (path, text) => {
+          vault[path] = text;
+        },
+        writePreview: async (path, text) => {
+          preview[path] = text;
+        },
+        backup: async () => {},
+        images: async () => ["P/img/cat.png", "P/notes.md", "Other/dog.png"],
+        copyToPreview: async (from, to) => {
+          copied.push(`${from} -> ${to}`);
+        },
+      },
+    });
+    base = `http://127.0.0.1:${(await server.start()).port}`;
+  });
+
+  afterEach(async () => {
+    await server.stop();
+  });
+
+  const call = async (body: Record<string, unknown>) => {
+    const response = await fetch(`${base}/api/edit`, {
+      method: "POST",
+      headers: { cookie: `osp-review=${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ page: "p/index.html", ...body }),
+    });
+    return { status: response.status, data: (await response.json()) as Record<string, unknown> };
+  };
+
+  it("lists only the page's own images, by path from the page", async () => {
+    const response = await fetch(`${base}/api/images?page=p/index.html`, { headers: { cookie: `osp-review=${TOKEN}` } });
+    expect(await response.json()).toEqual({ images: ["img/cat.png"] });
+  });
+
+  it("inserts one of them and copies it into the preview; refuses any other", async () => {
+    const bad = await call({ hash: hashText(HTML), op: "insert", at: null, place: "inside", kind: "image", src: "dog.png" });
+    expect(bad.status).toBe(404);
+    const good = await call({ hash: hashText(HTML), op: "insert", at: null, place: "inside", kind: "image", src: "img/cat.png" });
+    expect(good.status).toBe(200);
+    expect(vault["P/index.html"]).toContain('<img src="img/cat.png" alt=""');
+    expect(copied).toEqual(["P/img/cat.png -> p/img/cat.png"]);
+    expect(typeof good.data.created).toBe("number");
+  });
+
+  it("takes a declaration away, and the attribute with it", async () => {
+    const result = await call({ hash: hashText(HTML), op: "inline-style", at: HTML.indexOf("<h1"), props: [["color", ""]] });
+    expect(result.status).toBe(200);
+    expect(vault["P/index.html"]).toContain("\n  <h1>Title</h1>");
+  });
+
+  it("undoes a whole group at once after a reload", async () => {
+    let hash = hashText(HTML);
+    const one = await call({ hash, op: "hide", at: HTML.indexOf("<p>"), group: "g1" });
+    hash = one.data.hash as string;
+    const after = vault["P/index.html"];
+    const two = await call({ hash, op: "inline-style", at: after.indexOf("<h1"), props: [["color", "blue"]], group: "g1" });
+    hash = two.data.hash as string;
+    const back = await call({ hash, op: "undo" });
+    expect(back.status).toBe(200);
+    expect(back.data).toMatchObject({ reload: true, undo: 0, redo: 2 });
+    expect(vault["P/index.html"]).toBe(HTML);
   });
 });

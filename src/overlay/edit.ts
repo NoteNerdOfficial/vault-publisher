@@ -66,7 +66,16 @@ export type EditRequest =
   | { op: "texts"; at: number; texts: string[] }
   | { op: "inline-style"; at: number; props: StyleProps }
   | { op: "rule-style"; sheet: number | string; path: number[]; selector: string; props: StyleProps }
-  | { op: "add-rule"; sheet: number | null; selector: string; props: StyleProps; media?: string };
+  | { op: "add-rule"; sheet: number | null; selector: string; props: StyleProps; media?: string }
+  | { op: "copy"; at: number; target: number; place: Place }
+  | { op: "wrap"; at: number; last: number; props: StyleProps }
+  | { op: "unwrap"; at: number }
+  | { op: "insert"; at: number | null; place: Place; kind: InsertKind; src?: string };
+
+export type Place = "before" | "after" | "inside";
+
+/** What Insert can put on a page: Figma's frame, rectangle, text and image. */
+export type InsertKind = "frame" | "rect" | "text" | "image";
 
 /**
  * Declarations to set, in order: a size is several at once (`width` and
@@ -84,7 +93,7 @@ export type StyleProps = Array<[string, string]>;
 export type Relocation = Array<[number, number]>;
 
 export type OpResult =
-  | { ok: true; edits: TextEdit[]; relocated?: Relocation }
+  | { ok: true; edits: TextEdit[]; relocated?: Relocation; created?: number }
   | { ok: false; error: string };
 
 /**
@@ -273,8 +282,15 @@ function inlineStyleEdit(element: Element, source: string, props: StyleProps): T
   );
 
   if (existing && current) {
+    if (!next.trim()) {
+      // Everything in it was taken out: the attribute goes too.
+      let from = existing.startOffset;
+      while (from > tag.startOffset && /\s/.test(source[from - 1])) from--;
+      return { start: from, end: existing.endOffset, text: "" };
+    }
     return { start: existing.startOffset, end: existing.endOffset, text: `style=${quoteAttribute(next)}` };
   }
+  if (!next.trim()) return { start: tag.endOffset, end: tag.endOffset, text: "" };
 
   // No style attribute yet: one goes at the end of the start tag, before
   // its `>` or a self-closing `/>`.
@@ -371,6 +387,119 @@ function relocate(
   return out;
 }
 
+/**
+ * A run of lines with an indentation step added to, or taken off, each
+ * non-blank one, and where any offset in it ends up.
+ */
+function shiftLines(text: string, step: string, add: boolean): { text: string; map: (local: number) => number } {
+  const lines = text.split("\n");
+  const starts: number[] = [];
+  const deltas: number[] = [];
+  let out = "";
+  let at = 0;
+  let delta = 0;
+  lines.forEach((line, i) => {
+    starts.push(at);
+    let next = line;
+    if (add && line.trim()) next = step + line;
+    else if (!add && line.startsWith(step)) next = line.slice(step.length);
+    delta += next.length - line.length;
+    deltas.push(delta);
+    out += next + (i < lines.length - 1 ? "\n" : "");
+    at += line.length + 1;
+  });
+  const map = (local: number): number => {
+    let i = starts.length - 1;
+    while (i > 0 && starts[i] > local) i--;
+    return local + deltas[i];
+  };
+  return { text: out, map };
+}
+
+/** One step of indentation in the file's own style. */
+function stepOf(indent: string): string {
+  return indent.includes("\t") ? "\t" : "  ";
+}
+
+/** A style attribute for new markup, or nothing. */
+function styleAttribute(props: StyleProps): string {
+  const style = props.filter(([, v]) => v !== "").map(([p, v]) => `${p}: ${v}`).join("; ");
+  return style ? ` style=${quoteAttribute(style)}` : "";
+}
+
+/** The markup Insert writes for each kind. */
+function insertMarkup(kind: InsertKind, src?: string): string {
+  switch (kind) {
+    case "frame":
+      return `<div${styleAttribute([
+        ["display", "flex"],
+        ["flex-direction", "column"],
+        ["gap", "8px"],
+        ["padding", "16px"],
+        ["min-height", "80px"],
+        ["background-color", "#ffffff"],
+      ])}></div>`;
+    case "rect":
+      return `<div${styleAttribute([["width", "100px"], ["height", "100px"], ["background-color", "#d9d9d9"]])}></div>`;
+    case "text":
+      return "<p>Text</p>";
+    case "image":
+      return `<img src=${quoteAttribute(src ?? "")} alt=""${styleAttribute([["width", "240px"], ["height", "auto"]])}>`;
+  }
+}
+
+/**
+ * Where new markup goes inside an element: on a line of its own above the
+ * closing tag, one step in, when the element spans lines; just before the
+ * closing tag otherwise. Null for an element nothing can go inside.
+ */
+function insideSpot(source: string, target: Element): { at: number; indent: string | null; newline: string } | null {
+  const close = target.sourceCodeLocation?.endTag;
+  if (!close || RAW_TEXT.has(target.tagName)) return null;
+  let lineStart = close.startOffset;
+  while (lineStart > 0 && /[ \t]/.test(source[lineStart - 1])) lineStart--;
+  const newline = source.includes("\r\n") ? "\r\n" : "\n";
+  const spans =
+    source.slice(target.sourceCodeLocation!.startTag!.endOffset, close.startOffset).includes("\n") &&
+    (lineStart === 0 || source[lineStart - 1] === "\n");
+  if (!spans) return { at: close.startOffset, indent: null, newline };
+  const closeIndent = source.slice(lineStart, close.startOffset);
+  return { at: lineStart, indent: closeIndent + stepOf(closeIndent), newline };
+}
+
+/**
+ * Where a piece of markup goes beside or inside a target: the insertion and
+ * how much comes before the piece's own first character. `text` is the
+ * piece, `fromIndent` the indentation its inner lines have now.
+ */
+function placeBeside(
+  source: string,
+  target: Element,
+  place: Place,
+  text: string,
+  fromIndent: string,
+): { edit: TextEdit; prefix: number; indents: [string, string] } | null {
+  if (place === "inside") {
+    const spot = insideSpot(source, target);
+    if (!spot) return null;
+    if (spot.indent === null) return { edit: { start: spot.at, end: spot.at, text }, prefix: 0, indents: ["", ""] };
+    const indents: [string, string] = fromIndent ? [fromIndent, spot.indent] : ["", ""];
+    return {
+      edit: { start: spot.at, end: spot.at, text: spot.indent + reindent(text, indents[0], indents[1]) + spot.newline },
+      prefix: spot.indent.length,
+      indents,
+    };
+  }
+  const [targetStart, targetEnd] = rangeOf(target, source);
+  const targetLine = ownLine(source, targetStart, targetEnd);
+  const indents: [string, string] = fromIndent && targetLine ? [fromIndent, targetLine.indent] : ["", ""];
+  const at = targetLine
+    ? place === "before" ? targetLine.lineStart : targetLine.lineEnd
+    : place === "before" ? targetStart : targetEnd;
+  const put = placed(source, reindent(text, indents[0], indents[1]), at, targetLine);
+  return { edit: { start: put.at, end: put.at, text: put.text }, prefix: put.prefix, indents };
+}
+
 /** Text as it may be written between tags. */
 export function escapeText(text: string): string {
   return text
@@ -422,6 +551,29 @@ export function planOp(source: string, request: EditRequest): OpResult {
       };
     }
     return { ok: true, edits: [setDeclarations(source, rule.blockStart, rule.blockEnd, request.props)] };
+  }
+
+  if (request.op === "insert") {
+    const markup = insertMarkup(request.kind, request.src);
+    let target: Element | null;
+    let place = request.place;
+    if (request.at === null) {
+      // Nothing selected: at the end of the page's body.
+      const html = childElement(doc, "html");
+      target = html && childElement(html, "body");
+      place = "inside";
+      if (!target?.sourceCodeLocation?.endTag) {
+        const at = source.length;
+        const lead = source.endsWith("\n") ? "" : "\n";
+        return { ok: true, edits: [{ start: at, end: at, text: lead + markup + "\n" }], created: at + lead.length };
+      }
+    } else {
+      target = elementAt(doc, request.at);
+    }
+    if (!target) return { ok: false, error: GONE };
+    const put = placeBeside(source, target, place, markup, "");
+    if (!put) return { ok: false, error: "Nothing can go inside that element." };
+    return { ok: true, edits: [put.edit], created: put.edit.start + put.prefix };
   }
 
   const element = elementAt(doc, request.at);
@@ -513,6 +665,90 @@ export function planOp(source: string, request: EditRequest): OpResult {
         ],
         relocated: relocate(doc, source, start, end, shifted + put.prefix, indents[0], indents[1]),
       };
+    }
+
+    case "copy": {
+      const target = elementAt(doc, request.target);
+      if (!target) return { ok: false, error: GONE };
+      const [targetStart] = rangeOf(target, source);
+      if (request.place === "inside" && targetStart >= start && targetStart < end) {
+        return { ok: false, error: "A layer can't be pasted inside itself." };
+      }
+      const own = ownLine(source, start, end);
+      const put = placeBeside(source, target, request.place, source.slice(start, end), own?.indent ?? "");
+      if (!put) return { ok: false, error: "Nothing can go inside that element." };
+      return {
+        ok: true,
+        edits: [put.edit],
+        relocated: relocate(doc, source, start, end, put.edit.start + put.prefix, put.indents[0], put.indents[1]),
+      };
+    }
+
+    case "wrap": {
+      const last = elementAt(doc, request.last);
+      if (!last) return { ok: false, error: GONE };
+      if (last.parentNode !== element.parentNode || last.sourceCodeLocation!.startOffset < start) {
+        return { ok: false, error: "Only layers side by side in the same frame can be framed together." };
+      }
+      const [, lastEnd] = rangeOf(last, source);
+      const open = `<div${styleAttribute(request.props)}>`;
+      const firstLine = ownLine(source, start, end);
+      const lastLine = ownLine(source, last.sourceCodeLocation!.startOffset, lastEnd);
+      const inside = (at: number) => at >= start && at < lastEnd;
+      if (firstLine && lastLine) {
+        const from = firstLine.lineStart;
+        const to = lastLine.lineEnd;
+        const shifted = shiftLines(source.slice(from, to), stepOf(firstLine.indent), true);
+        const head = firstLine.indent + open + firstLine.newline;
+        const body = shifted.text.endsWith("\n") ? shifted.text : shifted.text + firstLine.newline;
+        const text = head + body + firstLine.indent + "</div>" + (to === source.length && !source.endsWith("\n") ? "" : firstLine.newline);
+        const relocated: Relocation = editableElements(doc)
+          .map((el) => el.sourceCodeLocation!.startTag!.startOffset)
+          .filter(inside)
+          .map((at) => [at, from + head.length + shifted.map(at - from)]);
+        return { ok: true, edits: [{ start: from, end: to, text }], relocated, created: from + firstLine.indent.length };
+      }
+      const relocated: Relocation = editableElements(doc)
+        .map((el) => el.sourceCodeLocation!.startTag!.startOffset)
+        .filter(inside)
+        .map((at) => [at, at + open.length]);
+      return {
+        ok: true,
+        edits: [{ start, end: lastEnd, text: open + source.slice(start, lastEnd) + "</div>" }],
+        relocated,
+        created: start,
+      };
+    }
+
+    case "unwrap": {
+      const location = element.sourceCodeLocation!;
+      if (!location.endTag || RAW_TEXT.has(element.tagName)) {
+        return { ok: false, error: "This layer has nothing inside it to keep." };
+      }
+      const contentStart = location.startTag!.endOffset;
+      const contentEnd = location.endTag.startOffset;
+      const inner = source.slice(contentStart, contentEnd);
+      const own = ownLine(source, start, end);
+      const inside = (at: number) => at >= contentStart && at < contentEnd;
+      const lead = /^[ \t]*\r?\n/.exec(inner);
+      if (own && lead) {
+        const bodyStart = contentStart + lead[0].length;
+        const body = source.slice(bodyStart, contentEnd).replace(/\r?\n[ \t]*$/, "");
+        const firstIndent = /^[ \t]*/.exec(body.split("\n").find((line) => line.trim()) ?? "")![0];
+        const step = firstIndent.startsWith(own.indent) ? firstIndent.slice(own.indent.length) : "";
+        const shifted = step ? shiftLines(body, step, false) : { text: body, map: (n: number) => n };
+        const text = shifted.text.trim() ? shifted.text + own.newline : "";
+        const relocated: Relocation = editableElements(doc)
+          .map((el) => el.sourceCodeLocation!.startTag!.startOffset)
+          .filter(inside)
+          .map((at) => [at, own.lineStart + shifted.map(at - bodyStart)]);
+        return { ok: true, edits: [{ start: own.lineStart, end: own.lineEnd, text }], relocated };
+      }
+      const relocated: Relocation = editableElements(doc)
+        .map((el) => el.sourceCodeLocation!.startTag!.startOffset)
+        .filter(inside)
+        .map((at) => [at, start + at - contentStart]);
+      return { ok: true, edits: [{ start, end, text: inner }], relocated };
     }
 
     case "texts": {

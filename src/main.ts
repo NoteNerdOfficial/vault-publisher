@@ -1257,6 +1257,20 @@ export default class VaultPublisherPlugin extends Plugin {
         const name = `${stamp} ${vaultPath.replace(/\//g, "__")}.bak`;
         await adapter.write(normalizePath(`${dir}/${name}`), text);
       },
+      images: async (vaultPath) => {
+        const dir = vaultPath.includes("/") ? vaultPath.slice(0, vaultPath.lastIndexOf("/") + 1) : "";
+        return this.app.vault
+          .getFiles()
+          .map((file) => file.path)
+          .filter((path) => path.startsWith(dir) && /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(path))
+          .sort();
+      },
+      copyToPreview: async (vaultPath, previewPath) => {
+        const target = normalizePath(`${PREVIEW_FOLDER}/${previewPath}`);
+        const folder = target.slice(0, target.lastIndexOf("/"));
+        if (folder && !(await adapter.exists(folder))) await adapter.mkdir(folder);
+        await adapter.writeBinary(target, await adapter.readBinary(vaultPath));
+      },
     };
   }
 
