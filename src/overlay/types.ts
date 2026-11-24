@@ -256,6 +256,14 @@ export interface OverlayComment {
    */
   opener?: { block: string; text: string };
   /**
+   * The taps that led from the comment's address to the screen it was left
+   * on, oldest first: the controls tapped since the address last changed,
+   * for a prototype that opens screens without changing its address. Made
+   * again, one at a time, when the comment is opened and its block is not
+   * on screen. At most six.
+   */
+  trail?: { block: string; text: string }[];
+  /**
    * Written on a published site that shares comments through GitHub issues,
    * from the moment the reader is sent to GitHub's form until the issue it
    * becomes is read back. Only ever in that reader's browser.

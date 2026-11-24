@@ -714,7 +714,9 @@ export const OVERLAY_SCRIPT = `(function () {
     var doc = docFor(comment);
     if (!doc) return false;
     if (currentViewKey(doc) === comment.fview) return true;
-    return viewPagesShowing(comment.fview, doc);
+    if (viewPagesShowing(comment.fview, doc)) return true;
+    // As for a deck at the top; see \`anchorOnShownPage\`.
+    return anchorOnShownPage(comment);
   }
 
   /* The frame is on the comment's address and on its page. */
@@ -1206,7 +1208,50 @@ export const OVERLAY_SCRIPT = `(function () {
   function onThisView(comment) {
     if (!comment.view) return true;
     if (comment.view === viewKey) return true;
-    return viewPagesShowing(comment.view);
+    if (viewPagesShowing(comment.view)) return true;
+    return anchorOnShownPage(comment);
+  }
+
+  /*
+   * The comment's own block is on screen, inside the page that is showing.
+   *
+   * A view key names the shown member of *every* one-of-many run in the
+   * document, and in an application most of those runs are incidental: a
+   * banner that rotates, an empty state beside its list, a sheet that was
+   * open when the pin went down. Any one of them differing later made the
+   * key differ, and the pin was hidden on the very screen it was left on --
+   * while the card, which is placed off the block, opened beside the spot
+   * where it should have been.
+   *
+   * A block that is showing, inside a page that is showing, is on that
+   * page; that is the whole of what the key was standing in for. Only
+   * inside one: a block outside every page -- a deck's footer, shown on all
+   * of them -- proves nothing about which page it was left on, and keeps
+   * the key's answer.
+   */
+  /*
+   * Whether the comment's own block is on screen: the test of having
+   * arrived, rather than whether a pin is drawn. On an application a pin is
+   * drawn at its stored point when its block is missing (see \`spot\`), so
+   * a pin says nothing about which screen is up.
+   */
+  function reached(comment) {
+    if (comment.block) {
+      var target = anchorFor(comment);
+      return !!target && showing(target);
+    }
+    if (comment.context) return contextOpen(comment);
+    return true;
+  }
+
+  function anchorOnShownPage(comment) {
+    var target = anchorFor(comment);
+    if (!target || !showing(target)) return false;
+    var groups = deckGroups(target.ownerDocument);
+    for (var i = 0; i < groups.length; i++) {
+      if (groups[i].shown.contains(target)) return true;
+    }
+    return false;
   }
 
   /*
@@ -1585,7 +1630,9 @@ export const OVERLAY_SCRIPT = `(function () {
    */
   var taps = [];
   var TAP_MEMORY_MS = 600000;
-  var TAP_LIMIT = 8;
+  // Room for a trail and the taps around it; see \`trailTo\`.
+  var TAP_LIMIT = 16;
+  var TRAIL_LIMIT = 6;
 
   function noteTap(event) {
     if (mode !== "view") return;
@@ -1598,9 +1645,63 @@ export const OVERLAY_SCRIPT = `(function () {
       block: block.getAttribute(BLOCK_ATTR),
       text: clip(block.textContent),
       doc: block.ownerDocument,
+      // Where it was made, read before the tap has had any effect.
+      place: placeOf(block.ownerDocument),
       at: Date.now(),
     });
     if (taps.length > TAP_LIMIT) taps.shift();
+  }
+
+  /*
+   * The address a document is at, as a trail compares it: the page's own
+   * route at the top, the frame and its screen inside one.
+   */
+  function placeOf(doc) {
+    if (doc === document) return String(routeKey(currentRoute()) || "");
+    return (frameKeyOf(doc) || "") + "@" + frameRouteOf(doc);
+  }
+
+  /*
+   * The taps that led from the comment's address to the screen it was left
+   * on: every recent tap made since the address was last what it is now,
+   * oldest first.
+   *
+   * The address is the one way back the overlay has, and it reaches only
+   * what the address names. A prototype that opens a detail screen or a
+   * step without changing its address has screens the address cannot tell
+   * apart, and the only way to one of them is the taps that got there. So
+   * they are kept, and made again when the comment is opened (\`chaseMark\`)
+   * -- only while the comment's block is not yet on screen, so a trail is
+   * never walked for a comment already in sight.
+   *
+   * Left out: taps inside the sheet the pin is in, which were on the sheet
+   * and not on the way to it. The tap that opened the sheet stays in, as
+   * the last step: a "context" is any named ancestor, and one that never
+   * closes -- an app's \`#app\` wrapper -- has the last tap for its opener
+   * when that tap was really the step to this screen. The walk hands over
+   * to the opener only while the context is actually shut.
+   */
+  function trailTo(doc, holder) {
+    var here = placeOf(doc);
+    var now = Date.now();
+    var out = [];
+    for (var i = taps.length - 1; i >= 0; i--) {
+      var tap = taps[i];
+      if (tap.doc !== doc) continue;
+      if (now - tap.at >= TAP_MEMORY_MS) break;
+      // Made at another address: the trail starts after it.
+      if (tap.place !== here) break;
+      if (!tap.block) continue;
+      if (holder && tapInside(tap, holder)) continue;
+      out.unshift({ block: tap.block, text: tap.text });
+    }
+    return out.slice(-TRAIL_LIMIT);
+  }
+
+  function tapInside(tap, holder) {
+    return tap.node.isConnected
+      ? holder.contains(tap.node)
+      : !!holder.querySelector("[" + BLOCK_ATTR + '="' + cssQuote(tap.block) + '"]');
   }
 
   /*
@@ -1621,10 +1722,7 @@ export const OVERLAY_SCRIPT = `(function () {
       var tap = taps[i];
       if (tap.doc !== doc || !tap.block) continue;
       if (now - tap.at >= TAP_MEMORY_MS) break;
-      var inside = tap.node.isConnected
-        ? holder.contains(tap.node)
-        : !!holder.querySelector("[" + BLOCK_ATTR + '="' + cssQuote(tap.block) + '"]');
-      if (!inside) return tap;
+      if (!tapInside(tap, holder)) return tap;
     }
     return null;
   }
@@ -1638,14 +1736,19 @@ export const OVERLAY_SCRIPT = `(function () {
   /* The element a comment's opener names, now, in the comment's document. */
   function openerNode(comment) {
     if (!comment.opener || !comment.opener.block) return null;
+    return tappedNode(comment, comment.opener.block);
+  }
+
+  /* The element a recorded tap landed on, now, in the comment's document. */
+  function tappedNode(comment, id) {
     var doc = docFor(comment);
     if (!doc) return null;
     var map = comment.frame ? blocksFor(comment) : blocks;
-    var direct = map[comment.opener.block];
+    var direct = map[id];
     if (direct) return direct;
     // Renumbered, as a row's buttons are when the list above them changes:
     // the same rule as an anchor, one candidate or none.
-    var base = baseOf(comment.opener.block);
+    var base = baseOf(id);
     var found = null;
     for (var key in map) {
       if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
@@ -1665,7 +1768,10 @@ export const OVERLAY_SCRIPT = `(function () {
 
   /* The opening tap alone, for a caller that is already waiting on the pin. */
   function tapOpener(comment) {
-    var node = openerNode(comment);
+    return tapNode(openerNode(comment));
+  }
+
+  function tapNode(node) {
     if (!node) return false;
     if (typeof node.click === "function") node.click();
     else node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -2044,6 +2150,14 @@ export const OVERLAY_SCRIPT = `(function () {
     if (row.awaitingSignin !== true) delete row.awaitingSignin;
     if (!Array.isArray(row.reveal)) delete row.reveal;
     if (!row.opener || typeof row.opener.block !== "string") delete row.opener;
+    if (Array.isArray(row.trail)) {
+      row.trail = row.trail
+        .filter(function (step) {
+          return step && typeof step.block === "string" && step.block;
+        })
+        .slice(-TRAIL_LIMIT);
+    }
+    if (!Array.isArray(row.trail) || !row.trail.length) delete row.trail;
     row.blockText = typeof row.blockText === "string" ? row.blockText : "";
     row.resolved = row.resolved === true;
     row.priority = priOf(row.priority);
@@ -5095,7 +5209,9 @@ export const OVERLAY_SCRIPT = `(function () {
     }
     glide();
     openPopup(next.id);
-    revealMark(next);
+    // On the address and the page, and still not on the screen: a trail to
+    // walk, a sheet to open, or a screen still drawing.
+    if (!revealMark(next) || !reached(next)) chaseMark(next);
   }
 
   /*
@@ -5153,7 +5269,7 @@ export const OVERLAY_SCRIPT = `(function () {
     redrawForView();
     glide();
     openPopup(next.id);
-    if (!revealMark(next) || !arrived) chaseMark(next);
+    if (!revealMark(next) || !arrived || !reached(next)) chaseMark(next);
   }
 
   function turnToDeckPage(next) {
@@ -5164,7 +5280,7 @@ export const OVERLAY_SCRIPT = `(function () {
     redrawForView();
     glide();
     openPopup(next.id);
-    if (!revealMark(next) || !arrived) chaseMark(next);
+    if (!revealMark(next) || !arrived || !reached(next)) chaseMark(next);
   }
 
   /*
@@ -5316,6 +5432,11 @@ export const OVERLAY_SCRIPT = `(function () {
   function chaseMark(comment, alreadyTapped) {
     var tries = 0;
     var tapped = alreadyTapped === true;
+    // The taps from the address to the screen, made one per look; see
+    // \`trailTo\`. Only when the owner lets the overlay tap at all.
+    var trail = AUTO_REOPEN && comment.trail ? comment.trail : [];
+    var step = 0;
+    var misses = 0;
     (function look() {
       // The reviewer moved on, or the card was closed while the screen was
       // still drawing. Either way nothing here is wanted any more.
@@ -5323,6 +5444,13 @@ export const OVERLAY_SCRIPT = `(function () {
       // A deck mid-transition may only settle on its new page after a frame
       // or two, so which page is up is re-asked on every look.
       checkView();
+      // A screen a tap has just drawn is stamped now, not on the watcher's
+      // next pass, or the next step of the trail cannot be found on it.
+      if (trail.length) {
+        var drawn = docFor(comment);
+        if (drawn && (STAMP_AT_RUNTIME || drawn !== document)) stampBlocks(drawn);
+        frameBlocks = Object.create(null);
+      }
       blocks = blockIndex();
       /*
        * The address reached, and the page under it still another one: an
@@ -5340,6 +5468,36 @@ export const OVERLAY_SCRIPT = `(function () {
        */
       if (comment.frame && comment.fview && onFrameRoute(comment) && !onFrameView(comment)) {
         if (turnToView(comment.fview, docFor(comment))) frameBlocks = Object.create(null);
+      }
+      /*
+       * Not on the comment's screen yet, though on its address: the next
+       * tap of the trail that led there. Stopped as soon as the block is in
+       * sight, or the sheet it is in is shut and the control that opens it
+       * is here -- that tap is the opener's, below, made once. A step not
+       * drawn yet is waited for a little, and a step that never appears
+       * ends the trail rather than the chase.
+       */
+      if (
+        step < trail.length &&
+        (reached(comment) || (contextClosed(comment) && openerNode(comment)))
+      ) {
+        step = trail.length;
+      }
+      if (step < trail.length) {
+        var next = tappedNode(comment, trail[step].block);
+        if (next) {
+          tapNode(next);
+          step++;
+          misses = 0;
+          tries = 0;
+          window.setTimeout(look, 120);
+          return;
+        }
+        if (++misses > 10) step = trail.length;
+        else {
+          window.setTimeout(look, 70);
+          return;
+        }
       }
       // A screen that has just loaded has its sheet to bring back now.
       if (!peek && peekFor(comment)) frameBlocks = Object.create(null);
@@ -5633,6 +5791,7 @@ export const OVERLAY_SCRIPT = `(function () {
         fy: null,
         reveal: null,
         opener: null,
+        trail: null,
       };
 
       /*
@@ -5656,6 +5815,9 @@ export const OVERLAY_SCRIPT = `(function () {
       }
 
       point.context = contextOf(hit);
+      // The taps since the address last changed; replaced below by the
+      // narrower trail for a pin inside a sheet.
+      point.trail = trailTo(hitDoc, null);
       if (point.context) {
         var holder = contextNode(point.context, hitDoc);
         if (holder) {
@@ -5667,6 +5829,7 @@ export const OVERLAY_SCRIPT = `(function () {
            */
           var tap = openerTap(holder, hitDoc);
           if (tap) point.opener = { block: tap.block, text: tap.text };
+          point.trail = trailTo(hitDoc, holder);
           var area = topRect(holder);
           point.cx = area.width ? (clientX - area.left) / area.width : 0;
           point.cy = area.height ? (clientY - area.top) / area.height : 0;
@@ -5765,6 +5928,8 @@ export const OVERLAY_SCRIPT = `(function () {
       // What it takes to bring the context back; see \`peekFor\`.
       reveal: point.reveal || undefined,
       opener: point.opener || undefined,
+      // How to get from the address to the screen; see \`trailTo\`.
+      trail: point.trail && point.trail.length ? point.trail : undefined,
       x: point.x,
       y: point.y,
       rx: point.rx,
@@ -7709,7 +7874,7 @@ export const OVERLAY_SCRIPT = `(function () {
      * once it has; \`chaseMark\` waits for all three, as it does for a step
      * within the page.
      */
-    if (!revealMark(comment)) chaseMark(comment);
+    if (!revealMark(comment) || !reached(comment)) chaseMark(comment);
   }
 
   setMode("view");

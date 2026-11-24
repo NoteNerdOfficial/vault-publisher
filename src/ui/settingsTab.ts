@@ -2360,12 +2360,13 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     new Setting(root)
       .setName("Reopen sheets and popups automatically")
       .setDesc(
-        "When you open a comment that was left in a sheet, popup or " +
-          "notification that is now closed, tap the button that opened it, " +
-          "so the pin comes back without a click. Off, the comment offers " +
-          "a Reopen button instead. The tap runs the prototype's own code, " +
-          "so leave this off for a prototype where a tap can change or " +
-          "delete something. Applies to the preview and the published site.",
+        "When you open a comment whose screen or sheet is not showing, " +
+          "repeat the taps that led there: the taps made at that address " +
+          "before the pin was dropped, then the one that opened its sheet, " +
+          "popup or notification. Off, the comment offers a Reopen button " +
+          "for the sheet instead. The taps run the prototype's own code, so " +
+          "leave this off for a prototype where a tap can change or delete " +
+          "something. Applies to the preview and the published site.",
       )
       .addToggle((toggle) =>
         toggle.setValue(Boolean(overlay.autoReopen)).onChange(async (value) => {

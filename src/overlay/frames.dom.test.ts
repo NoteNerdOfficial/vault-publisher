@@ -750,6 +750,148 @@ describe("bringing back what a comment is about", () => {
   });
 });
 
+describe("a screen reached by taps, at the same address", () => {
+  /*
+   * A prototype that builds its detail screen in script when a row is
+   * tapped, and never changes its address: the taps are the only way back.
+   */
+  function mountList(over: Record<string, unknown> = {}): { clicks: () => number } {
+    document.head.innerHTML = meta(over);
+    document.body.innerHTML =
+      `<main id="app"><button id="row">Order 5</button><p>Your orders.</p></main>`;
+    let count = 0;
+    document.getElementById("row")?.addEventListener("click", () => {
+      count++;
+      (document.getElementById("app") as HTMLElement).innerHTML =
+        `<h2>Order 5</h2><p>Return window: 30 days.</p>`;
+    });
+    return { clicks: () => count };
+  }
+
+  function openRow(shadow: ShadowRoot, text: string): void {
+    click(shadow.querySelector('.co-mode[data-mode="review"]'));
+    const row = Array.from(shadow.querySelectorAll(".co-row")).find((r) =>
+      r.textContent?.includes(text),
+    );
+    click(row ?? null);
+  }
+
+  const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+  function seedDetail(): void {
+    seed([
+      {
+        text: "Say how long.",
+        block: blockId("p", "Return window: 30 days."),
+        blockText: "Return window: 30 days.",
+        trail: [{ block: blockId("button", "Order 5"), text: "Order 5" }],
+        x: 10,
+        y: 10,
+      },
+    ]);
+  }
+
+  it("records the taps that led to the screen", () => {
+    mountList();
+    const shadow = run();
+    click(document.getElementById("row"));
+    document.elementFromPoint = () => document.querySelector("#app p");
+    drop(shadow, 30, 30, "Say how long.");
+
+    expect(stored()[0].trail).toEqual([{ block: blockId("button", "Order 5"), text: "Order 5" }]);
+  });
+
+  it("starts the trail where the address last changed", () => {
+    document.head.innerHTML = meta();
+    document.body.innerHTML =
+      `<button id="tab">Orders</button><button id="row">Order 5</button><p>Detail.</p>`;
+    const shadow = run();
+    click(document.getElementById("tab"));
+    window.history.pushState({}, "", "/proto/phone.html?tab=orders");
+    click(document.getElementById("row"));
+    document.elementFromPoint = () => document.querySelector("p");
+    drop(shadow, 30, 30, "Hm.");
+
+    // The address takes the reviewer to the tab; only the tap after it is kept.
+    expect(stored()[0].trail?.map((step) => step.text)).toEqual(["Order 5"]);
+  });
+
+  it("makes the taps again when the comment is opened", async () => {
+    const page = mountList({ autoReopen: true });
+    seedDetail();
+    const shadow = run();
+    openRow(shadow, "Say how long.");
+    await wait(400);
+
+    expect(page.clicks()).toBe(1);
+    expect(document.querySelector("#app h2")?.textContent).toBe("Order 5");
+  });
+
+  it("makes no tap for a comment already on screen", async () => {
+    const page = mountList({ autoReopen: true });
+    (document.getElementById("app") as HTMLElement).innerHTML =
+      `<h2>Order 5</h2><p>Return window: 30 days.</p>`;
+    seedDetail();
+    const shadow = run();
+    openRow(shadow, "Say how long.");
+    await wait(400);
+
+    expect(page.clicks()).toBe(0);
+  });
+
+  it("walks to the screen, then opens the sheet on it once", async () => {
+    mountList({ autoReopen: true });
+    let opened = 0;
+    document.getElementById("app")?.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).id !== "return") return;
+      opened++;
+      const sheet = document.createElement("div");
+      sheet.className = "sheet";
+      sheet.innerHTML = `<p>Pick a reason.</p>`;
+      document.body.appendChild(sheet);
+    });
+    document.getElementById("row")?.addEventListener("click", () => {
+      (document.getElementById("app") as HTMLElement).insertAdjacentHTML(
+        "beforeend",
+        `<button id="return">Return item</button>`,
+      );
+    });
+    seed([
+      {
+        text: "Add a reason.",
+        context: "~div.sheet",
+        block: blockId("p", "Pick a reason."),
+        blockText: "Pick a reason.",
+        opener: { block: blockId("button", "Return item"), text: "Return item" },
+        trail: [
+          { block: blockId("button", "Order 5"), text: "Order 5" },
+          { block: blockId("button", "Return item"), text: "Return item" },
+        ],
+        x: 10,
+        y: 10,
+        cx: 0.5,
+        cy: 0.5,
+      },
+    ]);
+    const shadow = run();
+    openRow(shadow, "Add a reason.");
+    await wait(600);
+
+    expect(document.querySelectorAll(".sheet")).toHaveLength(1);
+    expect(opened).toBe(1);
+  });
+
+  it("makes no tap when the owner turned tapping off", async () => {
+    const page = mountList();
+    seedDetail();
+    const shadow = run();
+    openRow(shadow, "Say how long.");
+    await wait(400);
+
+    expect(page.clicks()).toBe(0);
+  });
+});
+
 describe("two sheets that share a key", () => {
   /*
    * Every sheet in a prototype is a `section.sheet`. A comment in one is

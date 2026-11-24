@@ -4120,6 +4120,55 @@ describe("a deck that is one file", () => {
     expect(pins[0].getAttribute("data-comment")).toBe("a");
   });
 
+  /*
+   * An application's view key also names whatever incidental thing was one
+   * of many when the pin went down -- here, which banner was up. That
+   * changing later hid the pin on the very page it was left on, while its
+   * card still opened beside the block.
+   */
+  it("draws the pin when its block is on the page showing, whatever else changed", () => {
+    mountDeck(
+      `<section id="cover">` +
+        `<div id="promo-a">Spring sale.</div><div id="promo-b" style="display:none">Free returns.</div>` +
+        `<p>The first slide.</p></section>` +
+        `<section id="middle" style="display:none"><p>The second slide.</p></section>`,
+    );
+    seed([
+      onDeck({
+        id: "kept",
+        // Left while the other banner was up.
+        view: "#cover>#promo-b",
+        block: blockId("p", "The first slide."),
+        blockText: "The first slide.",
+        text: "Shorten this.",
+      }),
+    ]);
+    const shadow = run();
+
+    const pins = shadow.querySelectorAll(".co-pin:not(.co-ghost)");
+    expect(pins).toHaveLength(1);
+    expect(pins[0].getAttribute("data-comment")).toBe("kept");
+  });
+
+  it("still keeps a footer's pin to the page it was left on", () => {
+    mountDeck(
+      `<p id="footer">Confidential draft.</p>` +
+        `<section id="cover"><p>The first slide.</p></section>` +
+        `<section id="middle" style="display:none"><p>The second slide.</p></section>`,
+    );
+    seed([
+      onDeck({
+        id: "footer",
+        view: "#middle",
+        block: blockId("p", "Confidential draft."),
+        blockText: "Confidential draft.",
+        text: "Drop this footer.",
+      }),
+    ]);
+    const shadow = run();
+    expect(shadow.querySelectorAll(".co-pin:not(.co-ghost)")).toHaveLength(0);
+  });
+
   it("moves the pins when the deck turns a page", async () => {
     mountDeck();
     seed([
