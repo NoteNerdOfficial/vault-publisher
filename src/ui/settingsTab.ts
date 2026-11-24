@@ -1,3 +1,4 @@
+import { DEFAULT_EDITOR, EDITORS } from "../overlay/editorLinks";
 import { normalizeSigninUrl } from "../overlay/shared";
 import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
@@ -229,6 +230,8 @@ export interface SettingsHost {
       autoReopen?: boolean;
       reviewer: string;
       reviewFolder: string;
+      codeEditor?: string;
+      codeEditorTemplate?: string;
     };
     sourceLink: SourceLinkSettings;
     relay: {
@@ -2351,6 +2354,49 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await this.host.saveSettings();
           }),
       );
+
+    /*
+     * Edit mode's Code section shows where a layer is in its file, with a
+     * link that opens it there. Which app that link opens is the reader's
+     * own business, so it is a choice with a way out for anything unlisted.
+     */
+    const editor = overlay.codeEditor ?? DEFAULT_EDITOR;
+    new Setting(root)
+      .setName("Open code in")
+      .setDesc(
+        "The app Edit mode's Code section opens a file in, at the line of " +
+          "the layer or rule. Obsidian opens the file without going to the " +
+          "line. Pick Custom for any other app that has a link format.",
+      )
+      .addDropdown((dropdown) => {
+        for (const choice of EDITORS) dropdown.addOption(choice.id, choice.name);
+        dropdown.addOption("custom", "Custom…");
+        dropdown.addOption("none", "Don't show a link");
+        dropdown.setValue(editor).onChange(async (value) => {
+          overlay.codeEditor = value;
+          await this.host.saveSettings();
+          this.display();
+        });
+      });
+    if (editor === "custom") {
+      new Setting(root)
+        .setName("Custom link")
+        .setDesc(
+          "A link with placeholders: {path} is the file on this computer, " +
+            "{file} its path in the vault, {vault} the vault's name, and " +
+            "{line} and {column} where it is. For example " +
+            "myeditor://open?path={path}&line={line}",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("myeditor://open?path={path}&line={line}")
+            .setValue(overlay.codeEditorTemplate ?? "")
+            .onChange(async (value) => {
+              overlay.codeEditorTemplate = value.trim();
+              await this.host.saveSettings();
+            }),
+        );
+    }
 
     /*
      * The one switch here that changes what the overlay does rather than

@@ -577,6 +577,39 @@ describe("the edit mode", () => {
     });
   });
 
+  describe("where it is", () => {
+    it("shows the layer's file and line, and each rule's, in Code, with a link to the editor", async () => {
+      page(".lede { color: red; }", '<p class="lede" data-osp-src="100">a</p>');
+      const where = {
+        layer: { file: "Protos/deck.html", line: 9, column: 3, editor: "cursor://file/vault/Protos/deck.html:9:3", editorName: "Cursor" },
+        rules: [{ file: "Protos/deck.html", line: 4, column: 1, editor: null, editorName: null }],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit = {}) => {
+          if (url === "/api/where") {
+            calls.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+            return new Response(JSON.stringify(where), { status: 200 });
+          }
+          return new Response("{}", { status: 404 });
+        }),
+      );
+      open(document.querySelector("p")!);
+      await settle();
+      // Only in Code, not at the top of the panel; asked for when Code opens.
+      expect(shadow().querySelector(".ep-top .ep-where")).toBeNull();
+      expect(calls).toHaveLength(0);
+      click(section("Code").querySelector(".ep-sec-toggle"));
+      await settle();
+      expect(calls[0].body).toMatchObject({ at: 100, rules: [{ sheet: 10, path: [0], selector: ".lede" }] });
+      const chips = Array.from(section("Code").querySelectorAll(".ep-where-name")).map((c) => c.textContent);
+      expect(chips).toEqual(["deck.html \u00b7 line 9", "deck.html \u00b7 line 4"]);
+      const link = section("Code").querySelector(".ep-where-open")!;
+      expect(link.textContent).toBe("Open in Cursor");
+      expect(link.getAttribute("href")).toBe("cursor://file/vault/Protos/deck.html:9:3");
+    });
+  });
+
   describe("colour", () => {
     it("asks before changing a rule other layers share, then changes the rule", async () => {
       page(

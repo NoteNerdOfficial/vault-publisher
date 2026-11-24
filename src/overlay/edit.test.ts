@@ -9,6 +9,8 @@ import {
   planCssRule,
   hashText,
   invertEdits,
+  lineAt,
+  ruleStart,
   planOp,
   prepareForEditing,
   shiftStamp,
@@ -690,6 +692,29 @@ describe("history and linked sheets through the route", () => {
     return { status: response.status, data: (await response.json()) as Record<string, unknown> };
   };
 
+  it("says where a layer and its rules are, by file and line", async () => {
+    const response = await fetch(`${base}/api/where`, {
+      method: "POST",
+      headers: { cookie: `osp-review=${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        page: "p/index.html",
+        hash: hashText(HTML),
+        at: HTML.indexOf("<p>"),
+        rules: [{ sheet: "p/style.css", path: [0], selector: "h1" }, { sheet: "elsewhere.css", path: [0], selector: "h1" }],
+      }),
+    });
+    expect(await response.json()).toEqual({
+      layer: { file: "P/index.html", line: 3, column: 3, editor: null, editorName: null },
+      rules: [{ file: "P/style.css", line: 1, column: 1, editor: null, editorName: null }, null],
+    });
+    const stale = await fetch(`${base}/api/where`, {
+      method: "POST",
+      headers: { cookie: `osp-review=${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ page: "p/index.html", hash: "old", at: 0 }),
+    });
+    expect(stale.status).toBe(409);
+  });
+
   it("redoes what was undone, and forgets it once something new is done", async () => {
     let hash = hashText(HTML);
     const del = await call({ hash, op: "delete", at: HTML.indexOf("<h1>") });
@@ -912,5 +937,16 @@ describe("insert, groups and removals through the route", () => {
     expect(back.status).toBe(200);
     expect(back.data).toMatchObject({ reload: true, undo: 0, redo: 2 });
     expect(vault["P/index.html"]).toBe(HTML);
+  });
+});
+
+describe("where things are", () => {
+  it("finds a rule in a page's own style block, and its line", () => {
+    const page = "<html><head>\n<style>\na { color: red; }\n\n.b { margin: 0; }\n</style></head><body></body></html>";
+    const sheet = page.indexOf("<style>");
+    const at = ruleStart(page, sheet, [1], ".b");
+    expect(at).toBe(page.indexOf(".b {"));
+    expect(lineAt(page, at!)).toEqual({ line: 5, column: 1 });
+    expect(ruleStart(page, sheet, [1], ".c")).toBeNull();
   });
 });

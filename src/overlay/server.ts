@@ -37,7 +37,10 @@ import {
   StyleProps,
   TextEdit,
   applyEdits,
+  cssRuleStart,
   hashText,
+  lineAt,
+  ruleStart,
   invertEdits,
   linkedStylesheets,
   planCssRule,
@@ -100,6 +103,8 @@ export interface EditStore {
   images?(vaultPath: string): Promise<string[]>;
   /** Copies a vault file into the preview, so a new image shows without a build. */
   copyToPreview?(vaultPath: string, previewPath: string): Promise<void>;
+  /** A link that opens a vault file at a line in the chosen editor, or null for none. */
+  editorLink?(vaultPath: string, line: number, column: number): { url: string; name: string } | null;
 }
 
 /** The images Insert can use: the page's folder and below, by path from the page. */
@@ -532,6 +537,13 @@ export class ReviewServer {
         });
       }
 
+      if (path === "/api/where" && this.options.edit) {
+        if (request.method !== "POST") {
+          return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
+        }
+        return await this.postWhere(request, response, this.options.edit);
+      }
+
       if (path === "/api/edit" && this.options.edit) {
         if (request.method !== "POST") {
           return send(response, 405, "text/plain; charset=utf-8", "Method not allowed.");
@@ -839,6 +851,61 @@ export class ReviewServer {
     this.editQueue = result.catch(() => undefined);
     const [status, answer] = await result;
     send(response, status, MIME.json, JSON.stringify(answer));
+  }
+
+  /**
+   * Where a layer and its rules are in the files: path, line and column,
+   * for the panel's Code section and its "open in editor" link. Read-only.
+   */
+  private async postWhere(request: IncomingMessage, response: ServerResponse, edit: EditStore): Promise<void> {
+    const raw = await readBody(request);
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(raw ?? "") as typeof body;
+    } catch {
+      return send(response, 400, MIME.json, `{"error":"not valid JSON"}`);
+    }
+    const page = typeof body?.page === "string" ? body.page : "";
+    const vaultPath = page && /\.html?$/i.test(page) ? edit.sourceFor(page) : null;
+    if (!vaultPath) return send(response, 404, MIME.json, `{"error":"This page cannot be edited."}`);
+    const source = await edit.readSource(vaultPath);
+    if (source === null) return send(response, 404, MIME.json, `{"error":"gone"}`);
+    if (body.hash !== hashText(source)) return send(response, 409, MIME.json, `{"conflict":true}`);
+
+    const place = (file: string, text: string, offset: number) => {
+      const at = lineAt(text, offset);
+      const link = edit.editorLink?.(file, at.line, at.column) ?? null;
+      return { file, line: at.line, column: at.column, editor: link?.url ?? null, editorName: link?.name ?? null };
+    };
+
+    const answer: { layer: unknown; rules: unknown[] } = { layer: null, rules: [] };
+    if (isOffset(body.at) && body.at < source.length) answer.layer = place(vaultPath, source, body.at);
+    const rules = Array.isArray(body.rules) ? body.rules.slice(0, 40) : [];
+    const sheets = new Map<string, string | null>();
+    for (const item of rules as Array<Record<string, unknown>>) {
+      const path = item?.path;
+      const selector = item?.selector;
+      if (!Array.isArray(path) || !path.every(isOffset) || typeof selector !== "string" || selector.length > 1000) {
+        answer.rules.push(null);
+        continue;
+      }
+      if (isOffset(item.sheet)) {
+        const at = ruleStart(source, item.sheet, path, selector);
+        answer.rules.push(at === null ? null : place(vaultPath, source, at));
+        continue;
+      }
+      const sheet = typeof item.sheet === "string" ? item.sheet : "";
+      const file = sheet.endsWith(".css") && linkedStylesheets(source, page).includes(sheet) ? edit.sourceFor(sheet) : null;
+      if (!file) {
+        answer.rules.push(null);
+        continue;
+      }
+      if (!sheets.has(file)) sheets.set(file, await edit.readSource(file));
+      const css = sheets.get(file);
+      const at = css ? cssRuleStart(css, path, selector) : null;
+      answer.rules.push(css && at !== null ? place(file, css, at) : null);
+    }
+    send(response, 200, MIME.json, JSON.stringify(answer), { "Cache-Control": "no-store" });
   }
 
   private counts(history: PageHistory): { undo: number; redo: number } {

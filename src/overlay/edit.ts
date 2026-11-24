@@ -912,3 +912,34 @@ export function linkedStylesheets(source: string, pagePath: string): string[] {
   walk(doc);
   return out;
 }
+
+/** The 1-based line and column of an offset in a file. */
+export function lineAt(text: string, offset: number): { line: number; column: number } {
+  const before = text.slice(0, Math.max(0, Math.min(offset, text.length)));
+  const lines = before.split("\n");
+  return { line: lines.length, column: lines[lines.length - 1].length + 1 };
+}
+
+/**
+ * Where a rule starts in a page's own <style> block, named the way the page
+ * names it for an edit: the block's stamp, the CSSOM path, the selector.
+ */
+export function ruleStart(source: string, sheet: number, path: number[], selector: string): number | null {
+  const doc = parseSource(source);
+  const style = styleElements(doc).find((s) => s.sourceCodeLocation!.startTag!.startOffset === sheet);
+  if (!style) return null;
+  const rule = findRule(
+    source,
+    style.sourceCodeLocation!.startTag!.endOffset,
+    style.sourceCodeLocation!.endTag!.startOffset,
+    path,
+    selector,
+  );
+  return rule ? rule.preludeStart : null;
+}
+
+/** The same for a rule in a stylesheet file. */
+export function cssRuleStart(css: string, path: number[], selector: string): number | null {
+  const rule = findRule(css, 0, css.length, path, selector);
+  return rule ? rule.preludeStart : null;
+}

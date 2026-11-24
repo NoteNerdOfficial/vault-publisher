@@ -1470,40 +1470,150 @@ export const EDIT_PANEL = String.raw`
     });
   }
 
-  /* The CSS that applies to the layer, from the file: Figma's Dev Mode, roughly. */
-  function codeSection() {
-    var one = targets().length === 1 ? selected : null;
-    if (!one) return null;
-    if (folded.code === undefined) folded.code = true;
-    return section("code", "Code", "The CSS that applies to this layer", function () {
-      var b = stack();
-      var text = cssFor(one);
-      var pre = el("pre", "ep-code", text || "/* No CSS of its own. */");
-      b.appendChild(pre);
-      b.appendChild(actionButton("copy", "Copy CSS", "Copy this CSS", function () {
-        try {
-          hostWin.navigator.clipboard.writeText(text).then(function () {
-            message = "Copied the CSS.";
-            refresh();
-          });
-        } catch (e) {}
-      }));
-      return b;
-    });
-  }
+  /* --- where it is in the files -------------------------------------- */
 
-  function cssFor(target) {
+  /* Answers from the server, by hash and stamp: { layer, rules } or "asking". */
+  var whereCache = {};
+
+  /* The rules that style a layer, each with how the server can find it. */
+  function rulesFor(target) {
     var out = [];
     walkRules(function (rule, path, owner, on) {
       if (!on || (forced && owner === forced.sheet)) return;
       if (matchSpecificity(target, rule.selectorText) < 0) return;
-      out.push(rule.selectorText + " {\n" + Array.prototype.map.call(rule.style, function (p) {
-        return "  " + p + ": " + rule.style.getPropertyValue(p) + ";";
-      }).join("\n") + "\n}");
+      var sheet = owner && owner.tagName === "STYLE" ? stampOf(owner) : sheetPath(owner);
+      out.push({
+        rule: rule,
+        ask: sheet === null || sheet === "" ? null : { sheet: sheet, path: path, selector: rule.selectorText },
+        // cssText keeps shorthands together, closer to how the file has it.
+        text: rule.selectorText + " {\n" + rule.style.cssText.split(/;\s*/).filter(function (d) {
+          return d.trim();
+        }).map(function (d) {
+          return "  " + d.trim() + ";";
+        }).join("\n") + "\n}",
+      });
     });
-    var inline = target.getAttribute("style");
-    if (inline) out.push("/* on the layer */\n" + inline.split(";").filter(function (s) { return s.trim(); }).map(function (s) { return s.trim() + ";"; }).join("\n"));
-    return out.join("\n\n");
+    return out;
+  }
+
+  /*
+   * Where the layer and its rules are: asked once per version of the file,
+   * and drawn when the answer comes. Null until then.
+   */
+  function whereOf(target, rules) {
+    var at = stampOf(target);
+    if (at === null || unavailable || stale) return null;
+    var key = hash + "|" + at;
+    var known = whereCache[key];
+    if (known === "asking") return null;
+    if (known) return known;
+    whereCache[key] = "asking";
+    fetch("/api/where", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page: PAGE,
+        hash: hash,
+        at: at,
+        rules: rules.map(function (r) {
+          return r.ask || { sheet: null, path: [], selector: "" };
+        }),
+      }),
+    })
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (data) {
+        whereCache[key] = data || { layer: null, rules: [] };
+        if (selected === target) refresh();
+      })
+      .catch(function () {
+        delete whereCache[key];
+      });
+    return null;
+  }
+
+  function fileName(path) {
+    return String(path || "").split("/").pop();
+  }
+
+  /* "index.html · line 42", copyable, with a link that opens the editor there. */
+  function placeChip(where, what) {
+    var box = el("div", "ep-where");
+    var copy = el("button", "ep-where-name");
+    copy.type = "button";
+    copy.appendChild(node("span", "ep-where-icon", icon("code", 12)));
+    copy.appendChild(el("span", null, fileName(where.file) + " · line " + where.line));
+    copy.title = where.file + ":" + where.line + " — click to copy";
+    copy.setAttribute("aria-label", "Copy " + where.file + ":" + where.line);
+    copy.addEventListener("click", function (event) {
+      event.stopPropagation();
+      try {
+        hostWin.navigator.clipboard.writeText(where.file + ":" + where.line).then(function () {
+          message = "Copied " + where.file + ":" + where.line + (what ? ", where " + what + " is." : ".");
+          refresh();
+        });
+      } catch (e) {}
+    });
+    box.appendChild(copy);
+    if (where.editor) {
+      var app = where.editorName || "your editor";
+      var open = el("a", "ep-where-open", "Open in " + app);
+      open.href = where.editor;
+      open.title = "Open " + where.file + " at line " + where.line + " in " + app + ". Change the app in the plugin's settings.";
+      open.addEventListener("click", function (event) {
+        event.stopPropagation();
+      });
+      box.appendChild(open);
+    }
+    return box;
+  }
+
+  /* The CSS that applies to the layer, from the file, with where each rule is. */
+  function codeSection() {
+    var one = targets().length === 1 ? selected : null;
+    if (!one) return null;
+    if (folded.code === undefined) folded.code = true;
+    return section("code", "Code", "Where this layer is in the files, and the CSS that applies to it", function () {
+      var b = stack();
+      var rules = rulesFor(one);
+      var where = whereOf(one, rules);
+      if (where && where.layer) {
+        b.appendChild(el("div", "ep-palette-label", "The layer"));
+        b.appendChild(placeChip(where.layer, label(one)));
+      } else if (stampOf(one) === null) {
+        b.appendChild(el("p", "ep-hint", "Made by the page's script, so it is not in the file."));
+      }
+      var all = [];
+      rules.forEach(function (r, i) {
+        var block = stack();
+        var spot = where && where.rules ? where.rules[i] : null;
+        if (spot) block.appendChild(placeChip(spot, r.rule.selectorText));
+        else if (!r.ask) block.appendChild(el("div", "ep-palette-label", sheetName(r.rule.parentStyleSheet && r.rule.parentStyleSheet.ownerNode)));
+        block.appendChild(el("pre", "ep-code", r.text));
+        b.appendChild(block);
+        all.push(r.text);
+      });
+      var inline = one.getAttribute("style");
+      if (inline) {
+        var own = "/* on the layer */\n" + inline.split(";").filter(function (x) { return x.trim(); }).map(function (x) { return x.trim() + ";"; }).join("\n");
+        b.appendChild(el("pre", "ep-code", own));
+        all.push(own);
+      }
+      if (!all.length) b.appendChild(el("p", "ep-hint", "No CSS of its own."));
+      else {
+        b.appendChild(actionButton("copy", "Copy CSS", "Copy all of this CSS", function () {
+          try {
+            hostWin.navigator.clipboard.writeText(all.join("\n\n")).then(function () {
+              message = "Copied the CSS.";
+              refresh();
+            });
+          } catch (e) {}
+        }));
+      }
+      return b;
+    });
   }
 
   /* --- nothing selected: the page -------------------------------------- */

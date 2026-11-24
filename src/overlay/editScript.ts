@@ -3073,6 +3073,13 @@ export const EDIT_CSS = `
 .osp-overlay .ep-ask-row button { all: unset; cursor: pointer; height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--co-line); background: var(--co-bg); font-size: 11px; font-weight: 500; }
 .osp-overlay .ep-ask-row button.ep-ask-main { background: #2f6fed; border-color: transparent; color: #fff; }
 .osp-overlay .ep-ask-row button:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-where { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.osp-overlay .ep-where-name { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-width: 0; height: 22px; padding: 0 8px; border-radius: 11px; background: var(--co-bg-2); color: var(--co-fg-2); font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.osp-overlay .ep-where-name:hover { color: var(--co-fg); box-shadow: inset 0 0 0 1px var(--co-line); }
+.osp-overlay .ep-where-name:focus-visible { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.osp-overlay .ep-where-icon { display: flex; color: var(--co-fg-3); }
+.osp-overlay .ep-where-open { flex: none; color: #2f6fed; font-size: 11px; text-decoration: none; }
+.osp-overlay .ep-where-open:hover { text-decoration: underline; }
 .osp-overlay .ep-history { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
 .osp-overlay .ep-history li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; border-bottom: 1px solid var(--co-line); }
 .osp-overlay .ep-history li:last-child { border-bottom: 0; }

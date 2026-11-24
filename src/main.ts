@@ -1,3 +1,4 @@
+import { DEFAULT_EDITOR, editorChoice, editorLink } from "./overlay/editorLinks";
 import { App, Notice, Plugin, TFile, apiVersion, normalizePath } from "obsidian";
 import { diagnoseRender } from "./render/diagnose";
 import { createRenderHost, renderFile, RenderedNote } from "./render/renderNote";
@@ -227,6 +228,13 @@ interface Settings {
     reviewer: string;
     /** Vault folder the review file is saved in, and imported from. */
     reviewFolder: string;
+    /**
+     * Which editor Edit mode's Code section opens a file in: an id from
+     * `EDITORS`, "custom" for `codeEditorTemplate`, or "none".
+     */
+    codeEditor: string;
+    /** A link template of the owner's own, for "custom". See `editorLinks.ts`. */
+    codeEditorTemplate: string;
   };
   /**
    * A link from the published site to the repository it came from.
@@ -370,6 +378,8 @@ const DEFAULT_SETTINGS: Settings = {
     autoReopen: true,
     reviewer: "",
     reviewFolder: `${OUTPUT_FOLDER}/review`,
+    codeEditor: DEFAULT_EDITOR,
+    codeEditorTemplate: "",
   },
   // Blank, so a build after an upgrade publishes in the clear exactly as the
   // build before it did. A site is only encrypted once somebody has typed a
@@ -1264,6 +1274,21 @@ export default class VaultPublisherPlugin extends Plugin {
           .map((file) => file.path)
           .filter((path) => path.startsWith(dir) && /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(path))
           .sort();
+      },
+      // Read per request, so a change in the settings applies without a restart.
+      editorLink: (vaultPath, line, column) => {
+        const overlay = this.settings.commentOverlay;
+        const choice = editorChoice(overlay.codeEditor, overlay.codeEditorTemplate);
+        if (!choice) return null;
+        const base = (adapter as { getBasePath?: () => string }).getBasePath?.();
+        const url = editorLink(choice.template, {
+          path: base ? `${base.replace(/\\/g, "/").replace(/\/$/, "")}/${vaultPath}` : null,
+          file: vaultPath,
+          vault: this.app.vault.getName(),
+          line,
+          column,
+        });
+        return url ? { url, name: choice.name } : null;
       },
       copyToPreview: async (vaultPath, previewPath) => {
         const target = normalizePath(`${PREVIEW_FOLDER}/${previewPath}`);
