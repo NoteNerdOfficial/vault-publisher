@@ -188,7 +188,7 @@ describe("how the panel is ordered", () => {
       "Appearance",
       "GitHub",
       "Password",
-      "Leave a review",
+      "Comments and editing",
       "Issue tracker (preview builds only)",
       "On startup",
       "Related plugins",
@@ -224,7 +224,7 @@ describe("how the panel is ordered", () => {
     expect(sections(render())).not.toContain("Issue tracker (preview builds only)");
     const on = sections(render({ overlay: { enabled: true } }));
     expect(on.indexOf("Issue tracker (preview builds only)")).toBe(
-      on.indexOf("Leave a review") + 1,
+      on.indexOf("Comments and editing") + 1,
     );
   });
 });
@@ -244,7 +244,7 @@ describe("the review overlay, as a build option", () => {
 
   it("sits with the build button, not in a section of its own", () => {
     const names = rows(render());
-    expect(names.indexOf("Include a review overlay")).toBe(
+    expect(names.indexOf("Include comment and edit tools")).toBe(
       names.indexOf("Build a preview") + 1,
     );
     // And is no longer anywhere near the review settings.
@@ -258,7 +258,7 @@ describe("the review overlay, as a build option", () => {
       "Renders the site into a folder in this vault. Nothing is sent to GitHub.",
     );
     expect(desc(render({ overlay: { enabled: true } }), "Build a preview")).toContain(
-      "with the review overlay on it",
+      "with comment and edit tools on it",
     );
   });
 
@@ -276,14 +276,14 @@ describe("the review overlay, as a build option", () => {
 });
 
 /**
- * Leave a review, in two halves: the preview, where the plugin is behind the
+ * Comments and editing: comments in the preview, where the plugin is behind the
  * page, and the published site, where how a reader's comment reaches you is
  * one choice rather than two settings that each looked like the answer.
  */
-describe("the Leave a review section", () => {
+describe("the Comments and editing section", () => {
   function names(root: HTMLElement): string[] {
     const section = Array.from(root.querySelectorAll("details.osp-section")).find(
-      (node) => node.querySelector("summary .setting-item-name")?.textContent === "Leave a review",
+      (node) => node.querySelector("summary .setting-item-name")?.textContent === "Comments and editing",
     );
     const body = section?.querySelector(".osp-section-body");
     return Array.from(body?.querySelectorAll(".setting-item-name") ?? []).map(
@@ -298,13 +298,23 @@ describe("the Leave a review section", () => {
 
   it("splits the preview from the published site", () => {
     const list = names(render({ overlay: { enabled: true, onPublish: true } }));
-    const preview = list.indexOf("In your preview");
-    const published = list.indexOf("On the published site");
+    const preview = list.indexOf("Comments in your preview");
+    const published = list.indexOf("Comments on the published site");
     expect(preview).toBe(0);
     expect(published).toBeGreaterThan(list.indexOf("Import review comments"));
     expect(list.indexOf("Your name")).toBeLessThan(published);
     expect(list.indexOf("Review folder")).toBeLessThan(published);
     expect(list.indexOf("Let readers write comments")).toBeGreaterThan(published);
+  });
+
+  // Editing changes the page's file rather than reviewing it, so it has a
+  // heading of its own between the two comment halves.
+  it("gives Edit mode its own heading, before the published site", () => {
+    const list = names(render({ overlay: { enabled: true } }));
+    const edit = list.indexOf("Edit mode");
+    expect(edit).toBeGreaterThan(list.indexOf("Import review comments"));
+    expect(list.indexOf("Open code in")).toBe(edit + 1);
+    expect(edit).toBeLessThan(list.indexOf("Comments on the published site"));
   });
 
   it("says the name stays out of the published site", () => {
@@ -1216,7 +1226,7 @@ describe("how the panel collapses", () => {
       "Angular, React and other built apps",
       "Appearance",
       "Password",
-      "Leave a review",
+      "Comments and editing",
       "On startup",
     ]) {
       expect(sectionNode(root, name)?.hasAttribute("open")).toBe(false);

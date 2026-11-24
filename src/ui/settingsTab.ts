@@ -693,8 +693,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       .setDesc(
         why ??
           (overlay.enabled
-            ? "Renders the site into a folder in this vault, with the review " +
-              "overlay on it. Nothing is sent to GitHub."
+            ? "Renders the site into a folder in this vault, with comment and " +
+              "edit tools on it. Nothing is sent to GitHub."
             : "Renders the site into a folder in this vault. Nothing is sent to GitHub."),
       )
       .addButton((button) => {
@@ -726,11 +726,12 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // and that the build row says which of the two builds it will make --
     // neither of which depends on a theme cooperating.
     new Setting(root)
-      .setName("Include a review overlay")
+      .setName("Include comment and edit tools")
       .setDesc(
-        "A comment layer on the build, so you can pin notes to a paragraph " +
-          "while reading it. Never added to a published site, and your " +
-          "readers never see it.",
+        "Adds a layer to the preview where you can pin comments to the page " +
+          "and, on HTML pages published as-is, edit the page itself. Your " +
+          "readers never see it unless you put comments on the published " +
+          "site under Comments and editing. Editing never goes there.",
       )
       .addToggle((toggle) =>
         toggle.setValue(overlay.enabled).onChange(async (value) => {
@@ -2304,7 +2305,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // comes and goes with it instead of standing empty behind one toggle.
     if (!overlay.enabled) return;
 
-    const root = this.section(container, "Leave a review", false);
+    const root = this.section(container, "Comments and editing", false);
 
     /*
      * Two halves, because they are two different places with two different
@@ -2312,8 +2313,9 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
      * lands in the vault the moment it is left. On the published site there
      * is no plugin, so how a reader's comment reaches you is a choice -- and
      * it used to be spread across two settings that looked independent.
+     * Edit mode sits between them, under its own heading.
      */
-    new Setting(root).setName("In your preview").setHeading();
+    new Setting(root).setName("Comments in your preview").setHeading();
 
     this.note(
       root,
@@ -2354,6 +2356,60 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             await this.host.saveSettings();
           }),
       );
+
+    /*
+     * The one switch here that changes what the overlay does rather than
+     * where its comments go, so it applies to the published site as well:
+     * a reader opening a comment there meets the same shut sheet.
+     */
+    new Setting(root)
+      .setName("Reopen sheets and popups automatically")
+      .setDesc(
+        "When you open a comment whose screen or sheet is not showing, " +
+          "repeat the taps that led there: the taps made at that address " +
+          "before the pin was dropped, then the one that opened its sheet, " +
+          "popup or notification. Off, the comment offers a Reopen button " +
+          "for the sheet instead. The taps run the prototype's own code, so " +
+          "leave this off for a prototype where a tap can change or delete " +
+          "something. Applies to the preview and the published site.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(Boolean(overlay.autoReopen)).onChange(async (value) => {
+          overlay.autoReopen = value;
+          await this.host.saveSettings();
+        }),
+      );
+
+    new Setting(root)
+      .setName("Import review comments")
+      .setDesc(
+        "Reads the review folder and writes one note, with a task per " +
+          "comment, linked to the note it is about.",
+      )
+      .addButton((button) =>
+        button.setButtonText("Import").onClick(async () => {
+          button.setDisabled(true);
+          try {
+            await this.host.importReview();
+          } finally {
+            button.setDisabled(false);
+          }
+        }),
+      );
+
+    /*
+     * Edit mode has a heading of its own rather than sitting among the
+     * comment settings: it changes the page's file, not a review of it, and
+     * only on an HTML page published as-is, in the preview.
+     */
+    new Setting(root).setName("Edit mode").setHeading();
+
+    this.note(
+      root,
+      "Edit mode appears in the preview on HTML pages published as-is. " +
+        "Changes are written straight into the page's file, and a copy of " +
+        "the file from before is kept in the review folder.",
+    );
 
     /*
      * Edit mode's Code section shows where a layer is in its file, with a
@@ -2398,46 +2454,6 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         );
     }
 
-    /*
-     * The one switch here that changes what the overlay does rather than
-     * where its comments go, so it applies to the published site as well:
-     * a reader opening a comment there meets the same shut sheet.
-     */
-    new Setting(root)
-      .setName("Reopen sheets and popups automatically")
-      .setDesc(
-        "When you open a comment whose screen or sheet is not showing, " +
-          "repeat the taps that led there: the taps made at that address " +
-          "before the pin was dropped, then the one that opened its sheet, " +
-          "popup or notification. Off, the comment offers a Reopen button " +
-          "for the sheet instead. The taps run the prototype's own code, so " +
-          "leave this off for a prototype where a tap can change or delete " +
-          "something. Applies to the preview and the published site.",
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(Boolean(overlay.autoReopen)).onChange(async (value) => {
-          overlay.autoReopen = value;
-          await this.host.saveSettings();
-        }),
-      );
-
-    new Setting(root)
-      .setName("Import review comments")
-      .setDesc(
-        "Reads the review folder and writes one note, with a task per " +
-          "comment, linked to the note it is about.",
-      )
-      .addButton((button) =>
-        button.setButtonText("Import").onClick(async () => {
-          button.setDisabled(true);
-          try {
-            await this.host.importReview();
-          } finally {
-            button.setDisabled(false);
-          }
-        }),
-      );
-
     this.renderPublishedReview(root);
   }
 
@@ -2449,7 +2465,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
   private renderPublishedReview(root: HTMLElement): void {
     const overlay = this.host.settings.commentOverlay;
 
-    new Setting(root).setName("On the published site").setHeading();
+    new Setting(root).setName("Comments on the published site").setHeading();
 
     new Setting(root)
       .setName("Include in the published site")
