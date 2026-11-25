@@ -322,6 +322,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
    * value speaks for itself, and on a reopen that is what it is read from.
    */
   private folderMode = false;
+  /**
+   * Text on screen that reads a setting edited in a text field elsewhere.
+   *
+   * A text field cannot redraw the panel (the caret goes with it), so a row
+   * whose description depends on the scope, the flag, the exclude list or
+   * the homepage registers here and is updated in place instead. Without
+   * this, typing a folder left "Choose what to publish" unticked and Build
+   * preview refused until the panel was closed and reopened.
+   */
+  private scopeWatchers: Array<() => void> = [];
+
+  /** Brings everything that reads the scope settings up to date. */
+  private refreshScope(): void {
+    this.refreshActions();
+    for (const update of this.scopeWatchers) update();
+  }
 
   /** Which of the three scope states the controls should show. */
   private scopeMode(): "unset" | "vault" | "folder" {
@@ -385,6 +401,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     // toggle in here threw the reader back to the top of the panel.
     const marks = this.scrollMarks();
     containerEl.empty();
+    this.scopeWatchers = [];
 
     this.renderLegacyNotice(containerEl);
     this.renderActions(containerEl);
@@ -1032,6 +1049,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
               const trimmed = value.trim().replace(/^\/+|\/+$/g, "");
               site.folder = trimmed || null;
               await this.host.saveSettings();
+              this.refreshScope();
             });
         });
     }
@@ -1051,12 +1069,13 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             site.requireFrontmatterFlag = value.trim() || null;
             await this.host.saveSettings();
+            this.refreshScope();
           }),
       );
 
     // Placed under the flag rather than with the publishing options, because
     // the flag is what decides whether this does anything at all.
-    new Setting(root)
+    const htmlFiles = new Setting(root)
       .setName("Publish HTML files as-is")
       .setDesc(this.describeHtmlFiles())
       .addToggle((toggle) =>
@@ -1069,12 +1088,12 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           this.display();
         }),
       );
-
+    this.scopeWatchers.push(() => htmlFiles.setDesc(this.describeHtmlFiles()));
 
     // The field is a path, but the useful half is the answer: this says
     // which note the front page is actually going to be, including when the
     // field is empty and the vault's own README is winning.
-    new Setting(root)
+    const homepage = new Setting(root)
       .setName("Homepage")
       .setDesc(this.describeHome())
       .addText((text) =>
@@ -1084,6 +1103,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             site.homeNote = value.trim() || undefined;
             await this.host.saveSettings();
+            this.refreshScope();
           }),
       )
       .addExtraButton((button) =>
@@ -1092,6 +1112,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setTooltip("Check which note this resolves to")
           .onClick(() => this.display()),
       );
+    this.scopeWatchers.push(() => homepage.setDesc(this.describeHome()));
 
     new Setting(root)
       .setName("Date property")
@@ -1269,20 +1290,22 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onChange(async (value: string) => {
             site.excludeFolders = parseExcludeFolders(value);
             await this.host.saveSettings();
+            this.refreshScope();
           });
       });
 
     // The contradiction: "publish this folder, except this folder". The
     // build's honest answer is an empty site, and here is the only place
     // where saying so costs the reader nothing.
-    const swallowed = entries.filter((entry) => swallowsScope(entry, site.folder));
-    if (swallowed.length) {
-      this.warning(
-        root,
-        `"${swallowed[0]}" contains everything you are publishing, so this ` +
-          "build would have no pages in it at all.",
+    this.liveWarning(root, () => {
+      const swallowed = parseExcludeFolders(site.excludeFolders).find((entry) =>
+        swallowsScope(entry, site.folder),
       );
-    }
+      return swallowed
+        ? `"${swallowed}" contains everything you are publishing, so this ` +
+            "build would have no pages in it at all."
+        : null;
+    });
   }
 
   /**
@@ -1432,12 +1455,26 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     if (!entries.length) return;
 
     const counts = this.countWholeFolders(entries);
+    // Filled in under the rows, which are drawn first but call these.
+    const warnings: Array<() => void> = [];
 
     entries.forEach((entry, index) => {
       const row = new Setting(root);
       row.settingEl.addClass("osp-whole-folder");
       row.setName(entry.folder || "A folder with no path yet");
       row.setDesc(this.describeWholeFolder(entry, counts[index]?.count ?? 0));
+      // The row's own name and count, and the warnings under the list,
+      // follow its fields as they are typed into.
+      const redescribe = () => {
+        const now = parseWholeFolders(site.publishWholeFolders)[index];
+        if (now) {
+          row.setName(now.folder || "A folder with no path yet");
+          row.setDesc(
+            this.describeWholeFolder(now, this.countWholeFolders([now])[0]?.count ?? 0),
+          );
+        }
+        for (const update of warnings) update();
+      };
 
       row.addText((text) => {
         text.inputEl.spellcheck = false;
@@ -1446,6 +1483,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setValue(entry.folder)
           .onChange(async (value: string) => {
             await change(index, { folder: tidyPath(value) });
+            redescribe();
           });
       });
 
@@ -1459,6 +1497,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .setValue(entry.at ?? "")
           .onChange(async (value: string) => {
             await change(index, { at: destination(value) });
+            redescribe();
           });
       });
 
@@ -1493,7 +1532,7 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
 
     new Setting(root)
       .setName("")
-      .setDesc("Counts are read when the panel opens.")
+      .setDesc("Counts follow what you type. Refresh after a build adds files.")
       .addExtraButton((button) =>
         button
           .setIcon("refresh-cw")
@@ -1501,52 +1540,65 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
           .onClick(() => this.display()),
       );
 
+    // Each reads the stored list afresh, not `entries`: that is the list as
+    // it was drawn, and these update as the rows above are typed into.
+    const current = () => parseWholeFolders(site.publishWholeFolders);
+
     // A row with no path yet is not a path that matched nothing.
-    const empty = entries.filter(
-      (entry, index) => entry.folder && (counts[index]?.count ?? 0) === 0,
+    warnings.push(
+      this.liveWarning(root, () => {
+        const now = current();
+        const found = this.countWholeFolders(now);
+        const empty = now.find(
+          (entry, index) => entry.folder && (found[index]?.count ?? 0) === 0,
+        );
+        return empty
+          ? `"${empty.folder}" matched no files in the ` +
+              "vault, so it will publish nothing. A folder that has not been " +
+              "built yet looks the same as a path with a typo in it."
+          : null;
+      }),
     );
-    if (empty.length && empty[0]) {
-      this.warning(
-        root,
-        `"${empty[0].folder}" matched no files in the ` +
-          "vault, so it will publish nothing. A folder that has not been " +
-          "built yet looks the same as a path with a typo in it.",
-      );
-    }
 
     // Two folders at one address is a contradiction with no sensible
     // reading, and the build resolves it by publishing neither of the
     // second one's files. Said here, where it is cheap to fix.
-    const taken = new Map<string, string>();
-    for (const entry of entries) {
-      if (entry.at === null) continue;
-      const already = taken.get(entry.at);
-      if (already) {
-        this.warning(
-          root,
-          `"${entry.folder}" and "${already}" are both set to publish at ` +
-            `"${entry.at || "/"}". Two folders cannot be the same place, so ` +
-            `nothing in "${entry.folder}" would be published.`,
-        );
-        break;
-      }
-      taken.set(entry.at, entry.folder);
-    }
+    warnings.push(
+      this.liveWarning(root, () => {
+        const taken = new Map<string, string>();
+        for (const entry of current()) {
+          if (entry.at === null) continue;
+          const already = taken.get(entry.at);
+          if (already) {
+            return (
+              `"${entry.folder}" and "${already}" are both set to publish at ` +
+              `"${entry.at || "/"}". Two folders cannot be the same place, so ` +
+              `nothing in "${entry.folder}" would be published.`
+            );
+          }
+          taken.set(entry.at, entry.folder);
+        }
+        return null;
+      }),
+    );
 
     // The one case where this setting moves something that was already
-    // there. Worth naming the note, because its address changes.
-    const atRoot = entries.find((entry) => entry.at === "");
-    if (atRoot) {
-      const home = resolveHomeNote(selectNotes(this.app, site as SiteConfig), site);
-      this.warning(
-        root,
-        `"${atRoot.folder}" is set to publish at the front page, so its ` +
+    // there. Worth naming the note, because its address changes. Also a
+    // scope watcher, because the homepage and the scope decide that note.
+    warnings.push(
+      this.liveWarning(root, () => {
+        const atRoot = current().find((entry) => entry.at === "");
+        if (!atRoot) return null;
+        const home = resolveHomeNote(selectNotes(this.app, site as SiteConfig), site);
+        return (
+          `"${atRoot.folder}" is set to publish at the front page, so its ` +
           `index.html becomes the site's homepage` +
           (home.path
             ? ` and ${home.path} moves to /index-note.html.`
-            : ` in place of the overview the build would have written.`),
-      );
-    }
+            : ` in place of the overview the build would have written.`)
+        );
+      }),
+    );
   }
 
   /** What one row says about itself, under its fields. */
@@ -3251,6 +3303,27 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
     body.parentElement?.parentElement?.addClass("osp-settings-warning");
     body.addClass("osp-warning-note");
     return body;
+  }
+
+  /**
+   * A warning that follows the settings as they are typed.
+   *
+   * Always drawn, and hidden while `compute` has nothing to say, so a text
+   * field can bring it up or take it down without redrawing the panel and
+   * taking the caret with it. Returns the update, for a field whose edits
+   * the scope watchers do not cover.
+   */
+  private liveWarning(root: HTMLElement, compute: () => string | null): () => void {
+    const body = this.warning(root, "");
+    const item = body.parentElement?.parentElement;
+    const update = () => {
+      const text = compute();
+      body.setText(text ?? "");
+      item?.toggleClass("osp-hidden", !text);
+    };
+    update();
+    this.scopeWatchers.push(update);
+    return update;
   }
 
 

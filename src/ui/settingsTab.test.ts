@@ -780,6 +780,118 @@ describe("the checklist", () => {
   });
 });
 
+/**
+ * A text field cannot redraw the panel, so whatever reads what it holds has
+ * to be brought up to date in place. The folder field did not, and Build
+ * preview stayed refused after a folder was typed until the panel reopened.
+ */
+describe("fields that change what other rows say", () => {
+  function type(root: HTMLElement, name: string, value: string): void {
+    const input = row(root, name)?.querySelector("input, textarea") as
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | null;
+    if (!input) throw new Error(`no field for ${name}`);
+    input.value = value;
+    input.dispatchEvent(new Event("input"));
+  }
+
+  async function panel(over: Parameters<typeof host>[0]) {
+    const target = host(over);
+    const tab = new VaultPublisherSettingsTab(app(), target);
+    tab.display();
+    return { root: tab.containerEl, tab };
+  }
+
+  it("ticks the scope off and allows a preview as soon as a folder is typed", async () => {
+    // No token, so the checklist is still on screen once the scope is done.
+    const { root, tab } = await panel({ site: { folder: null }, github: { token: "" } });
+    // The dropdown's own redraw, as picking "One folder" does.
+    (tab as unknown as { folderMode: boolean }).folderMode = true;
+    tab.display();
+    expect(button(root, "Build a preview")?.disabled).toBe(true);
+
+    type(root, "Folder", "notes");
+    await settle();
+
+    const items = Array.from(root.querySelectorAll("ol li")) as HTMLElement[];
+    const scope = items.find((item) => item.textContent?.startsWith("Choose what to publish"));
+    expect(scope?.classList.contains("osp-done")).toBe(true);
+    expect(button(root, "Build a preview")?.disabled).toBe(false);
+  });
+
+  it("says HTML files publish nothing once a flag is typed", async () => {
+    const { root } = await panel({});
+    expect(desc(root, "Publish HTML files as-is")).not.toContain("publishes nothing");
+    type(root, "Require a frontmatter flag", "publish");
+    await settle();
+    expect(desc(root, "Publish HTML files as-is")).toContain("publishes nothing");
+  });
+
+  /** The two fields of a whole-folder row: the path, then where it lands. */
+  function wholeFolderFields(root: HTMLElement, index: number): HTMLInputElement[] {
+    const rows = root.querySelectorAll(".osp-whole-folder");
+    return Array.from(rows[index]?.querySelectorAll("input") ?? []) as HTMLInputElement[];
+  }
+
+  function typeInto(input: HTMLInputElement | undefined, value: string): void {
+    if (!input) throw new Error("no field");
+    input.value = value;
+    input.dispatchEvent(new Event("input"));
+  }
+
+  async function wholeFolders(entries: Array<{ folder: string; at?: string }>, files: string[]) {
+    const target = host({ site: { folder: "", publishWholeFolders: entries } });
+    const tab = new VaultPublisherSettingsTab(app(files), target);
+    tab.display();
+    return tab.containerEl;
+  }
+
+  it("warns about a whole folder that matches nothing as the path is typed, and stops", async () => {
+    const root = await wholeFolders([{ folder: "app/dist" }], ["app/dist/index.html"]);
+    expect(root.textContent).not.toContain("matched no files");
+
+    typeInto(wholeFolderFields(root, 0)[0], "app/disp");
+    await settle();
+    expect(root.textContent).toContain("matched no files");
+
+    typeInto(wholeFolderFields(root, 0)[0], "app/dist");
+    await settle();
+    expect(root.textContent).not.toContain("matched no files");
+  });
+
+  it("warns as soon as two folders are sent to the same place", async () => {
+    const root = await wholeFolders(
+      [{ folder: "a/dist", at: "app" }, { folder: "b/dist" }],
+      ["a/dist/index.html", "b/dist/index.html"],
+    );
+    expect(root.textContent).not.toContain("Two folders cannot be the same place");
+
+    typeInto(wholeFolderFields(root, 1)[1], "app");
+    await settle();
+    expect(root.textContent).toContain("Two folders cannot be the same place");
+  });
+
+  it("says what publishing at the root does as soon as / is typed", async () => {
+    const root = await wholeFolders([{ folder: "app/dist" }], ["app/dist/index.html"]);
+    expect(root.textContent).not.toContain("becomes the site's homepage");
+
+    typeInto(wholeFolderFields(root, 0)[1], "/");
+    await settle();
+    expect(root.textContent).toContain("becomes the site's homepage");
+  });
+
+  it("warns as soon as an exclude takes out the whole scope, and stops when it does not", async () => {
+    const { root } = await panel({ site: { folder: "notes" } });
+    type(root, "Exclude folders", "notes");
+    await settle();
+    expect(root.textContent).toContain("contains everything you are publishing");
+    type(root, "Exclude folders", "notes/private");
+    await settle();
+    expect(root.textContent).not.toContain("contains everything you are publishing");
+  });
+});
+
 describe("what each action is allowed to do", () => {
   // The whole reason the panel no longer leads with a live Publish button.
   it("offers a preview with no GitHub at all, and says so", () => {

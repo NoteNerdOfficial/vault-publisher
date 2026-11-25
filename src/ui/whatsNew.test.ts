@@ -1,5 +1,13 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Release, compareVersions, latestRelease, releaseToShow } from "./whatsNew";
+import {
+  RELEASES as SHIPPED,
+  Release,
+  compareVersions,
+  latestRelease,
+  releaseToShow,
+} from "./whatsNew";
 
 const notes = (version: string): Release => ({ version, title: version, lede: "", points: [] });
 const RELEASES = [notes("0.2.0"), notes("0.3.0")];
@@ -28,5 +36,15 @@ describe("what's new", () => {
 
   it("finds the latest notes for the command, whatever was seen", () => {
     expect(latestRelease("0.2.0", RELEASES)?.version).toBe("0.2.0");
+  });
+
+  // A release that only fixes things adds no notes of its own, and must not
+  // take the last ones away: the command still has to have something to show.
+  it("has notes for the version being shipped, if only the last release's", () => {
+    const manifest = JSON.parse(readFileSync(join(__dirname, "../../manifest.json"), "utf8")) as {
+      version: string;
+    };
+    const newest = [...SHIPPED].sort((a, b) => compareVersions(b.version, a.version))[0];
+    expect(latestRelease(manifest.version)?.version).toBe(newest?.version);
   });
 });

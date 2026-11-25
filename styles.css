@@ -66,6 +66,11 @@
   display: none;
 }
 
+/* A note with nothing to say yet, kept so a field can fill it without a redraw. */
+.osp-settings-note.osp-hidden {
+  display: none;
+}
+
 .osp-progress-label {
   margin: 0 0 0.5em;
   font-size: 0.9em;
