@@ -29,6 +29,7 @@ export const EDIT_DESCRIBE = String.raw`
 
   function openDescribe() {
     if (!selected || !ui) return;
+    if (assetsOpen) closeAssets();
     if (placing) stopPlacing();
     if (editing) commitText();
     describing = { subject: selected, parts: [], editing: null };

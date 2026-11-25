@@ -175,7 +175,7 @@ export const EDIT_TOOLS = String.raw`
   /* --- copying a layer somewhere else ---------------------------------- */
 
   /* A copy of el put before, after or inside target: paste, and Alt-drag. */
-  function copyTo(el, target, place, then, fail) {
+  function copyTo(el, target, place, then, fail, what) {
     if (!el || !target || whyNot(el) || whyNot(target)) {
       if (fail) fail();
       return;
@@ -183,7 +183,7 @@ export const EDIT_TOOLS = String.raw`
     var copy = null;
     act(
       { op: "copy", at: stampOf(el), target: stampOf(target), place: place },
-      "paste of " + label(el),
+      what || "paste of " + label(el),
       function (data) {
         if (!copy) {
           copy = el.cloneNode(true);
@@ -657,6 +657,7 @@ export const EDIT_TOOLS = String.raw`
 
   /* What the bar says while a tool is out. */
   function placingHint() {
+    if (placing.asset) return assetHint();
     var k = INSERTS[placing.kind];
     if (placePress && placePress.moved && k.sized) return "Release to add the " + k.what + " at this size, " + spotWords(placePress.spot) + ".";
     if (spot) return "Click to add the " + k.what + " " + spotWords(spot) + (k.sized ? ", or drag to give it a size" : "") + ". Esc to stop.";
@@ -690,6 +691,7 @@ export const EDIT_TOOLS = String.raw`
   }
 
   function placingMove(event) {
+    if (placing.drag) return;
     if (placePress) {
       if (!placePress.moved && Math.abs(event.clientX - placePress.x) + Math.abs(event.clientY - placePress.y) > DRAG_START) placePress.moved = true;
       if (placePress.moved && INSERTS[placing.kind].sized && ui && ui.ghost) {

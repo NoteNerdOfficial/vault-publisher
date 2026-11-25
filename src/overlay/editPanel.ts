@@ -80,6 +80,11 @@ export const EDIT_PANEL = String.raw`
     redo: '<path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"/>',
     reload: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+    here: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/>',
+    unlink: '<path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3"/><path d="M2 8h3"/><path d="M16 19v3"/><path d="M19 16h3"/>',
+    ruler: '<path d="M3 16.5 16.5 3 21 7.5 7.5 21z"/><path d="m7.5 12 2 2"/><path d="m10.5 9 2 2"/><path d="m13.5 6 2 2"/>',
+    card: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6"/><path d="M7 13h10"/>',
+    badge: '<rect x="3" y="8" width="18" height="8" rx="4"/>',
     rect: '<rect x="4" y="4" width="16" height="16" rx="1.5"/>',
     heading: '<path d="M6 4v16"/><path d="M18 4v16"/><path d="M6 12h12"/>',
     link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
@@ -194,7 +199,9 @@ export const EDIT_PANEL = String.raw`
     input.disabled = !!o.off;
     wrap.appendChild(k);
     wrap.appendChild(input);
-    if (o.unit) wrap.appendChild(el("span", "ep-u", o.unit));
+    var bound = o.vars && !o.mixed ? varChip(o, input, wrap) : false;
+    if (o.unit && !bound) wrap.appendChild(el("span", "ep-u", o.unit));
+    if (o.vars && !bound) wrap.appendChild(varButton(o));
     function commit(v) {
       if (o.min !== undefined) v = Math.max(o.min, v);
       if (o.max !== undefined) v = Math.min(o.max, v);
@@ -878,6 +885,7 @@ export const EDIT_PANEL = String.raw`
           text: from("autolayout", function (word) {
             if (/^auto$/i.test(word)) setStyles([["justify-content", "space-between"]], "spacing");
           }),
+          vars: { key: grid || isWrap ? "column-gap" : "gap", kind: "size", props: [grid || isWrap ? "column-gap" : "gap"], what: "gap", sec: "autolayout" },
         }));
       }
       if (grid || isWrap) {
@@ -892,6 +900,7 @@ export const EDIT_PANEL = String.raw`
           commit: from("autolayout", function (v) {
             setStyles([["row-gap", v + "px"]], "row gap");
           }),
+          vars: { key: "row-gap", kind: "size", props: ["row-gap"], what: "row gap", sec: "autolayout" },
         }));
       }
       r.appendChild(right);
@@ -992,6 +1001,7 @@ export const EDIT_PANEL = String.raw`
             return [p, v + "px"];
           }), "padding");
         }),
+        vars: { key: props.join(","), kind: "size", props: props, what: "padding", sec: "autolayout" },
       });
     }
     var line = el("div", "ep-pad");
@@ -1121,6 +1131,7 @@ export const EDIT_PANEL = String.raw`
           commit: from("appearance", function (v) {
             setStyles([["border-radius", v + "px"]], "corner radius");
           }),
+          vars: { key: "border-radius", kind: "size", props: ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"], what: "corner radius", sec: "appearance" },
         }),
       ));
       if (perCorner) {
@@ -1193,9 +1204,25 @@ export const EDIT_PANEL = String.raw`
         return [f, fontName(f)];
       });
       if (family && !options.some(function (o) { return o[0] === family; })) options.unshift([family, fontName(family)]);
-      b.appendChild(selectField(options, family, "Font (font-family)", from("text", function (v) {
+      var fontLine = el("div", "ep-var-line");
+      fontLine.appendChild(selectField(options, family, "Font (font-family)", from("text", function (v) {
         setStyles([["font-family", v]], "font");
       }), family === null));
+      var fontVars = { vars: { key: "font-family", kind: "font", props: ["font-family"], what: "font", sec: "text" }, value: "" };
+      fontLine.appendChild(varButton(fontVars));
+      b.appendChild(fontLine);
+      var fontVar = sharedVar(["font-family"]);
+      if (fontVar) {
+        var fchips = el("div", "ep-chips");
+        var fchip = node("span", "ep-chip ep-chip-token", icon("token", 10) + "<span></span>");
+        fchip.lastChild.textContent = fontVar.replace(/^--/, "");
+        fchip.title = "From the variable " + fontVar + ": " + varValue(fontVar);
+        fchips.appendChild(fchip);
+        fchips.appendChild(iconButton("unlink", "Detach variable: keep the font as a plain value", function () {
+          detachVar(fontVars);
+        }, "ep-var-detach"));
+        b.appendChild(fchips);
+      }
       var weight = shared(computed("font-weight"));
       var size = shared(function (t) {
         return String(px(window.getComputedStyle(t).fontSize));
@@ -1212,6 +1239,7 @@ export const EDIT_PANEL = String.raw`
           commit: from("text", function (v) {
             setStyles([["font-size", v + "px"]], "font size");
           }),
+          vars: { key: "font-size", kind: "size", props: ["font-size"], what: "font size", sec: "text" },
         }),
       ));
       var lh = shared(function (t) {
@@ -1233,6 +1261,7 @@ export const EDIT_PANEL = String.raw`
           text: from("text", function (word) {
             if (/^auto$/i.test(word)) setStyles([["line-height", "normal"]], "line height");
           }),
+          vars: { key: "line-height", kind: "size", props: ["line-height"], what: "line height", sec: "text" },
         }),
         numField({
           k: "|A|", title: "Letter spacing (letter-spacing)", value: ls === null ? 0 : ls, mixed: ls === null,
@@ -1242,6 +1271,7 @@ export const EDIT_PANEL = String.raw`
           commit: from("text", function (v) {
             setStyles([["letter-spacing", v + "px"]], "letter spacing");
           }),
+          vars: { key: "letter-spacing", kind: "size", props: ["letter-spacing"], what: "letter spacing", sec: "text" },
         }),
       ));
       var align = shared(function (t) {
@@ -2163,35 +2193,26 @@ export const EDIT_PANEL = String.raw`
       b.appendChild(el("p", "ep-hint", "Click a layer on the page, or in Layers, to change it. Hold Space to use the page."));
       return b;
     }));
-    var colours = tokens();
-    var lengths = lengthTokens();
     out.push(section("variables", "Variables", "custom properties (--name)", function () {
       var b = stack();
-      if (!colours.length && !lengths.length) b.appendChild(el("p", "ep-hint", "No variables yet. Make one from any colour's palette: Create variable."));
-      colours.forEach(function (t) {
-        var input = el("input", "ep-custom ep-custom-wide");
-        input.type = "color";
-        var p = rgbaParts(t.value);
-        input.value = p ? hexOf(p) : /^#[0-9a-f]{6}$/i.test(t.value) ? t.value : "#000000";
-        input.title = t.name + " " + t.value;
-        input.setAttribute("aria-label", t.name);
-        input.addEventListener("change", function () {
-          currentSec = "variables";
-          var def = tokenRule(document.documentElement, t.name);
-          if (def && editableSheet(def.owner)) applyRuleProps(def, [[t.name, input.value]], "the variable " + t.name);
-        });
-        b.appendChild(row(t.name.replace(/^--/, ""), input, t.name));
+      var all = pageVariables();
+      var count = {};
+      all.forEach(function (v) {
+        count[v.kind] = (count[v.kind] || 0) + 1;
       });
-      lengths.forEach(function (t) {
-        b.appendChild(row(t.name.replace(/^--/, ""), numField({
-          k: "◇", title: t.name, value: px(t.value), unit: t.value.replace(/^-?[\d.]+/, ""),
-          commit: function (v) {
-            currentSec = "variables";
-            var def = tokenRule(document.documentElement, t.name);
-            if (def && editableSheet(def.owner)) applyRuleProps(def, [[t.name, v + t.value.replace(/^-?[\d.]+/, "")]], "the variable " + t.name);
-          },
-        }), t.name));
+      var parts = VAR_KINDS.filter(function (k) {
+        return count[k[0]];
+      }).map(function (k) {
+        return count[k[0]] + " " + (count[k[0]] === 1 ? k[1].toLowerCase().replace(/s$/, "") : k[1].toLowerCase());
       });
+      b.appendChild(el("p", "ep-hint", all.length
+        ? "This page has " + parts.join(", ") + ". See, change and drag them onto layers in the Variables tab."
+        : "No variables yet. Make one in the Variables tab, or from a field's \u25c7 or a colour's palette."));
+      b.appendChild(actionButton(all.length ? "token" : "plus", all.length ? "Open Variables" : "New variable", all.length ? "The page's variables, by kind" : "A new variable on :root", function () {
+        tab = "variables";
+        if (!all.length) varMaking = true;
+        refresh();
+      }));
       return b;
     }));
     out.push(section("history", "History", "This session's edits", function () {
@@ -2433,9 +2454,11 @@ export const EDIT_PANEL = String.raw`
       });
     });
     root.addEventListener("click", function () {
-      if (paletteFor || naming) {
+      if (paletteFor || naming || varPick || varMaking) {
         paletteFor = null;
         naming = null;
+        varPick = null;
+        varMaking = false;
         refresh();
       }
     });
@@ -2445,7 +2468,7 @@ export const EDIT_PANEL = String.raw`
     var slider = el("div", "ep-tab-slider");
     tabs.appendChild(slider);
     var tabButtons = {};
-    [["design", "Design"], ["layers", "Layers"]].forEach(function (t) {
+    [["design", "Design"], ["layers", "Layers"], ["variables", "Variables"]].forEach(function (t) {
       var b = el("button", "ep-tab", t[1]);
       b.type = "button";
       b.setAttribute("role", "tab");
@@ -2490,7 +2513,7 @@ export const EDIT_PANEL = String.raw`
     var focused = p.root.getRootNode && p.root.getRootNode().activeElement;
     if (focused && focused.hasAttribute && focused.hasAttribute("data-ep-keep") && p.body.contains(focused)) return;
     var scroll = p.body.scrollTop;
-    p.tabs.setAttribute("data-at", tab === "layers" ? "1" : "0");
+    p.tabs.setAttribute("data-at", tab === "variables" ? "2" : tab === "layers" ? "1" : "0");
     for (var name in p.tabButtons) {
       if (name === tab) p.tabButtons[name].setAttribute("data-on", "");
       else p.tabButtons[name].removeAttribute("data-on");
@@ -2503,6 +2526,11 @@ export const EDIT_PANEL = String.raw`
     p.body.textContent = "";
     if (tab === "layers") {
       p.body.appendChild(layersBody());
+      p.body.scrollTop = scroll;
+      return;
+    }
+    if (tab === "variables") {
+      p.body.appendChild(variablesBody());
       p.body.scrollTop = scroll;
       return;
     }

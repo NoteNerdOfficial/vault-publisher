@@ -556,10 +556,10 @@ change is written straight into the page's file in the vault. There is no
 separate design file to keep in step with the code.
 
 ![Edit mode on a pricing page: the middle plan card is selected, the
-Rectangle tool is out on the bar under the page, a blue line above the
-card's button shows where the rectangle would go, and the Design panel on the
-right shows the card's auto layout, sizing, appearance, fill and
-stroke.](media/edit-mode.png)
+Rectangle tool is out on the bar under the page, a line above the card's
+button shows where the rectangle would go, and the Design panel on the right
+shows the card's auto layout, with its padding and corner radius taken from
+the page's space-6 and radius-l variables.](media/edit-mode.png)
 
 Edit mode needs **Publish HTML files as-is** and **Include comment and edit
 tools**. It exists only in a preview opened from the plugin, because the
@@ -571,24 +571,42 @@ press Esc to go back up. Shift-click adds layers to the selection.
 Right-click opens a menu with the same actions as the bar.
 
 **The bar** under the page has **Edit text**, **Duplicate**, **Hide** and
-**Delete**, then the insert tools, then **Undo**, **Redo** and **History**.
+**Delete**, then the insert tools and **Insert**, then **Describe**, **Undo**,
+**Redo** and **History**.
 Drag a layer to move it, or to reorder it inside its parent. Hold Alt while
 dragging to drag a copy.
 
 **Adding layers.** The tools are **Frame** (F), **Rectangle** (R), **Text**
-(T) and **Image** (Shift+Cmd+K), and **More** has a heading, button, link,
-input, divider and list. Pick one and the page shows where it would land:
+(T) and **Image** (Shift+Cmd+K). Pick one and the page shows where it would land:
 a blue line between two layers, or an outline round an empty frame. Click to
 add it there, drag to give a frame, rectangle or image a size, press Enter
 to put it by the selection instead, or Esc to put the tool down. The new
 layer is selected, text is ready to type, and the panel opens at the section
-you are likely to want next. A button, heading, link or input takes the
-classes of one already on the page, so a new button looks like the page's
-main one rather than a browser default. Images come from the page's own
-folder, shown as thumbnails with a search. R adds a rectangle in Edit mode,
-as in Figma, so Review mode is a click on the notch.
+you are likely to want next. Images come from the page's own folder, shown as
+thumbnails with a search. R adds a rectangle in Edit mode, as in Figma, so
+Review mode is a click on the notch.
 
-**The panel** docks to the left or the right and has two tabs:
+**Insert** opens a palette above the bar of what the page is already made
+of, each shown as a preview in the page's own styles: its text styles (the
+heading like "Pick a plan", the price like "$0") and its components (a plan
+card, a button, a quote, a form field). Nothing has to be set up; they are
+found from the page. It opens on what is used where the selection is, such
+as **In Plan card**, so the usual next thing comes first. Everything else is
+in categories found the same way, Headings, Body and Small text, then
+Buttons, Cards, Lists & content, Forms, Navigation, and Badges & media, with
+the plain **Basics** (a heading, button, link, input, divider or list in the
+page's own classes) last. Search covers the whole page. Click one to add it
+by the selection, where a card goes beside the other cards, or drag it onto
+the page to put it where the line shows. A text style or component is a copy
+of the page's own element, so it keeps the page's classes and follows its
+stylesheet, and text arrives ready to type over.
+
+![Insert open above the bar, with the Team plan's title selected: In Plan
+card lists the badge, title, price, feature list, primary button and note as
+previews in the page's own styles, with the page's other text styles and
+components in categories down the side.](media/insert.png)
+
+**The panel** docks to the left or the right and has three tabs:
 
 - **Design**, for the selected layers: Position, Auto layout (direction,
   wrap or grid, alignment, gap, padding, clip content), Sizing (fixed, hug
@@ -596,10 +614,11 @@ as in Figma, so Review mode is a click on the notch.
   (opacity, corner radius, blend), Text, Fill (colours, gradients, how an
   image fills), Stroke, Effects (shadows and blurs), State and Code. With
   nothing selected, it shows the page: its background, the page at phone and
-  tablet sizes, its colour and size variables, the edit history (also one
-  click away from **History** on the bar), and the shortcuts.
+  tablet sizes, how many variables it has, the edit history (also one click
+  away from **History** on the bar), and the shortcuts.
 - **Layers**, the page as a tree, with search, a toggle to show or hide each
   layer, and drag to reorder.
+- **Variables**, every custom property the page declares, below.
 
 **Several layers at once.** With more than one layer selected, a change in
 the panel applies to all of them. Shift+A adds auto layout. Cmd+G frames the
@@ -608,10 +627,33 @@ properties from one layer to others.
 
 **Where a change goes.** A value set on the layer's own `style` is changed
 there. A value that comes from a stylesheet rule shared by other layers asks
-first whether to change only this layer or every layer the rule styles. A
-colour can be picked from the page's variables and colours, or made into a
-new variable. **State** shows a layer as hovered, pressed or focused, so
-those styles can be edited too.
+first whether to change only this layer or every layer the rule styles.
+**State** shows a layer as hovered, pressed or focused, so those styles can
+be edited too.
+
+**Variables.** The page's own custom properties (`--brand`, `--space-6`) can
+be seen, made and used without opening the CSS:
+
+- **On a field.** Padding, gap, corner radius, font size, line height,
+  letter spacing and Font each have a ◇ that lists the variables that fit
+  that field, and ends with **Create variable from 24px**, which names the
+  current value and uses it there. A field that takes a variable shows its
+  name in place of the number; click it to pick another, or hover it for
+  **Detach variable**, which keeps the value as a plain number. A colour's
+  palette does the same for colours, with **Create variable** under the
+  swatches.
+- **In the Variables tab.** Every variable, by kind (Colours, Sizes, Fonts,
+  Other), with its value, which can be changed in place, and how many rules
+  use it. **New** adds one to `:root`, and shows as you type what kind of
+  field it will fit. Drag a variable onto a layer on the page and it asks
+  where it goes (Fill, Text colour or Border; Padding, Gap, Corner radius or
+  Font size), with the likeliest first; with a layer selected, a click asks
+  the same.
+
+![The Variables tab beside the pricing page: colours, sizes, fonts and a
+shadow, each with its value and how many rules use it. The success colour
+has been dragged onto the Start a trial button, and a menu asks whether it
+is for the fill, the text colour or the border.](media/variables.png)
 
 **Code** shows where the layer starts in its file, and the CSS rules that
 style it, strongest first, each with its file and line. A value that loses to
@@ -673,9 +715,11 @@ each preview session, a copy of the file is kept in the review folder, under
 `edit-backups/`. Every edit in a session can be undone from the bar or from
 History.
 
-Some things it does not do yet. Gap and padding fields do not offer size
-variables. Putting a detached layer back in the flow keeps the fixed width it
-was given. The panel floats over the page rather than pushing it aside.
+Some things it does not do yet. Width and height have no ◇ for variables.
+A text style can be added but not applied to a layer already on the page,
+since that can mean changing its tag. Putting a detached layer back in the
+flow keeps the fixed width it was given. The panel floats over the page
+rather than pushing it aside.
 
 ## Layout
 
@@ -759,6 +803,8 @@ src/overlay/    reviewing a built site, getting the comments back, and
   editTools.ts      multi-select, framing, inserting, states, measuring
   editorLinks.ts    links that open a file at a line in your own editor
   editDescribe.ts   Describe: changes for an AI tool, with each layer's code
+  editAssets.ts     Insert: the page's own text styles and components, by category
+  editVariables.ts  the page's variables: the ◇ on fields and the Variables tab
   changeRequest.ts  a described change request as a note in the vault
   lineDiff.ts       the line diff behind Edit mode's Changes view
 src/tracker/    the trackers a comment can be filed with

@@ -642,6 +642,87 @@ describe("the edit mode", () => {
       expect(calls[0].body).toMatchObject({ op: "rule-style", sheet: 10, path: [0], selector: ".card", props: [["padding", "8px"]] });
     });
 
+    const VARS_CSS = ":root { --brand: #2f5bea; --space-6: 24px; --font-heading: Georgia, serif; } .card { padding: var(--space-6); }";
+
+    function varsTab(): void {
+      click(Array.from(shadow().querySelectorAll(".ep-tab")).find((t) => t.textContent === "Variables")!);
+    }
+
+    it("lists the page's variables by kind in a Variables tab, with their uses", () => {
+      page(VARS_CSS, '<div class="card" data-osp-src="100">a</div>');
+      boot();
+      enter();
+      varsTab();
+      expect(Array.from(shadow().querySelectorAll(".ep-vars-head span")).map((x) => x.textContent)).toEqual(["Colours", "Sizes", "Fonts"]);
+      expect(shadow().querySelector('.ep-var-row[data-var="--space-6"] .ep-var-uses')!.textContent).toBe("1 rule");
+      expect(shadow().querySelector('.ep-var-row[data-var="--brand"] .ep-var-uses')!.textContent).toBe("unused");
+      const search = shadow().querySelector(".ep-vars-search") as HTMLInputElement;
+      search.value = "font";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(Array.from(shadow().querySelectorAll(".ep-var-row")).map((r) => r.getAttribute("data-var"))).toEqual(["--font-heading"]);
+    });
+
+    it("makes a new variable from a pop-up that says what it fits", async () => {
+      page(VARS_CSS, '<div class="card" data-osp-src="100">a</div>');
+      boot();
+      enter();
+      varsTab();
+      click(shadow().querySelector("[data-new-var]"));
+      const pop = shadow().querySelector(".ed-newvar") as HTMLElement;
+      const [name, value] = Array.from(pop.querySelectorAll("input"));
+      const create = pop.querySelector(".ed-nv-create") as HTMLButtonElement;
+      expect(create.disabled).toBe(true);
+      name.value = "space-6";
+      value.value = "20px";
+      value.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(pop.querySelector(".ed-nv-says")!.textContent).toContain("A size");
+      click(create);
+      expect(pop.querySelector(".ed-nv-error")!.textContent).toContain("--space-6 is already on this page");
+      name.value = "Space 8";
+      name.dispatchEvent(new Event("input", { bubbles: true }));
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      click(create);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "add-rule", selector: ":root", props: [["--space-8", "20px"]] });
+      expect(shadow().querySelector(".ed-newvar")).toBeNull();
+    });
+
+    it("shows the variable a field takes in place of its number", () => {
+      page(VARS_CSS + " .card { display: flex; }", '<div class="card" data-osp-src="100">a</div>');
+      open(document.querySelector("div")!);
+      const chips = Array.from(shadow().querySelectorAll(".ep-var-chip")).map((c) => c.textContent);
+      expect(chips).toEqual(["space-6", "space-6"]);
+    });
+
+    it("puts a size variable on a field from its \u25c7, or makes one from the value", async () => {
+      page(VARS_CSS, '<p data-osp-src="100" style="font-size: 18px">a</p>');
+      open(document.querySelector("p")!);
+      click(shadow().querySelector('[data-var-btn="font-size"]'));
+      const items = Array.from(shadow().querySelectorAll(".ed-var-item"));
+      expect(items.map((x) => x.querySelector("span:nth-child(2)")!.textContent)).toEqual(["space-6"]);
+      expect(shadow().querySelector(".ed-var-pop")!.textContent).toContain("Create variable from 18px");
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      click(items[0]);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "inline-style", at: 100, props: [["font-size", "var(--space-6)"]] });
+      expect(shadow().querySelector(".ed-var-pop")!.hasAttribute("hidden")).toBe(true);
+    });
+
+    it("uses a colour variable from the tab on the selected layer, asking where", async () => {
+      page(VARS_CSS, '<div data-osp-src="100" style="border: 1px solid #000"><p data-osp-src="110">a</p></div>');
+      open(document.querySelector("div")!);
+      varsTab();
+      click(shadow().querySelector('.ep-var-row[data-var="--brand"]'));
+      const menu = shadow().querySelector(".ed-context") as HTMLElement;
+      expect(menu.hidden).toBe(false);
+      const labels = Array.from(menu.querySelectorAll(".ed-menu-item span")).map((x) => x.textContent);
+      expect(labels[0]).toBe("Fill");
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [] } });
+      click(Array.from(menu.querySelectorAll(".ed-menu-item")).find((b) => b.textContent!.startsWith("Fill"))!);
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "inline-style", at: 100, props: [["background-color", "var(--brand)"]] });
+    });
+
     it("adds a property to a rule, or to the layer itself", async () => {
       page(".card { color: red; }", '<div class="card" data-osp-src="100">a</div>');
       open(document.querySelector("div")!);
@@ -1179,21 +1260,105 @@ describe("the edit mode", () => {
       expect(document.querySelectorAll("p")[2].isContentEditable || document.querySelectorAll("p")[2].getAttribute("contenteditable")).toBeTruthy();
     });
 
-    it("adds a button in the page's own classes from More", async () => {
+    it("adds a button in the page's own classes from Insert's basics", async () => {
       page("", '<main data-osp-src="100"><button data-osp-src="110" class="btn">a</button><button data-osp-src="140" class="btn btn-primary">b</button></main>');
       boot();
       enter();
-      click(shadow().querySelector('.ed-tool[aria-label="More layers"]'));
-      const item = Array.from(shadow().querySelectorAll(".ed-menu-rich")).find((x) => x.textContent?.startsWith("Button"))!;
+      click(shadow().querySelector('.ed-tool[aria-label="Insert"]'));
+      click(shadow().querySelector('.ed-as-cat[data-cat="basics"]'));
+      const item = Array.from(shadow().querySelectorAll(".ed-as-card")).find((x) => x.querySelector(".ed-as-name")?.textContent === "Button")!;
       expect(item.textContent).toContain("like \u201cb\u201d");
-      click(item);
       answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 200, end: 200, length: 60 }], created: 200 } });
-      key("Enter");
+      click(item);
       await settle();
       expect(calls[0].body).toMatchObject({ op: "insert", at: null, place: "inside", kind: "button", like: { cls: "btn btn-primary" } });
       const made = document.querySelectorAll("button")[2];
       expect(made.className).toBe("btn btn-primary");
       expect(made.getAttribute("type")).toBe("button");
+    });
+
+    const PLANS =
+      '<main data-osp-src="100">' +
+      '<div class="plan" data-osp-src="110"><h2 class="title" data-osp-src="120">Starter</h2><p class="price" data-osp-src="140">$0</p><button class="btn" data-osp-src="160">Go</button></div>' +
+      '<div class="plan" data-osp-src="210"><h2 class="title" data-osp-src="220">Team</h2><p class="price" data-osp-src="240">$24</p><button class="btn" data-osp-src="260">Go</button></div>' +
+      '<p class="lede" data-osp-src="300">Start free.</p>' +
+      "</main>";
+
+    function cats(): string[] {
+      return Array.from(shadow().querySelectorAll(".ed-as-cat")).map((b) => b.getAttribute("data-cat")!);
+    }
+    function cards(): string[] {
+      return Array.from(shadow().querySelectorAll(".ed-as-body [data-key]")).map((b) => b.getAttribute("data-key")!);
+    }
+
+    it("opens Insert on what the selection's card already uses, then the page's categories", () => {
+      page("", PLANS);
+      open(document.querySelectorAll("h2")[1]);
+      click(shadow().querySelector('.ed-tool[aria-label="Insert"]'));
+      expect(shadow().querySelector(".ed-assets")!.hasAttribute("hidden")).toBe(false);
+      const here = shadow().querySelector('.ed-as-cat[data-cat="here"]')!;
+      expect(here.textContent).toContain("In Plan card");
+      expect(here.hasAttribute("data-on")).toBe(true);
+      expect(cards()).toEqual(["h2.title", "p.price", "button.btn"]);
+      expect(cats()).toEqual(["here", "headings", "body", "buttons", "cards", "basics"]);
+      click(shadow().querySelector('.ed-as-cat[data-cat="cards"]'));
+      expect(cards()).toEqual(["div.plan"]);
+      expect(shadow().querySelector(".ed-as-card .ed-as-name")!.textContent).toBe("Plan card");
+      expect(shadow().querySelector(".ed-as-card small")!.textContent).toBe("\u00d72");
+    });
+
+    it("adds a card beside its own kind, as a copy of the page's", async () => {
+      page("", PLANS);
+      open(document.querySelectorAll("h2")[1]);
+      click(shadow().querySelector('.ed-tool[aria-label="Insert"]'));
+      click(shadow().querySelector('.ed-as-cat[data-cat="cards"]'));
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 280, end: 280, length: 90 }], relocated: [[110, 280], [120, 290], [140, 310], [160, 330]] } });
+      click(shadow().querySelector('.ed-as-card[data-key="div.plan"]'));
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "copy", at: 110, target: 210, place: "after" });
+      expect(document.querySelectorAll(".plan")).toHaveLength(3);
+      expect(status()).toContain("Added a plan card like \u201cStarter\u201d after div.plan");
+      // Still open, and it now counts three.
+      expect(shadow().querySelector(".ed-assets")!.hasAttribute("hidden")).toBe(false);
+      expect(shadow().querySelector('.ed-as-card[data-key="div.plan"] small')!.textContent).toBe("\u00d73");
+    });
+
+    it("adds text in a page's style after the selection, ready to type", async () => {
+      page("", PLANS);
+      open(document.querySelector(".lede")!);
+      click(shadow().querySelector('.ed-tool[aria-label="Insert"]'));
+      click(shadow().querySelector('.ed-as-cat[data-cat="headings"]'));
+      expect(shadow().querySelectorAll(".ed-as-row")).toHaveLength(1);
+      answers.push({ status: 200, body: { id: "e1", hash: "h1", edits: [{ start: 330, end: 330, length: 30 }], relocated: [[120, 330]] } });
+      click(shadow().querySelector('.ed-as-row[data-key="h2.title"]'));
+      await settle();
+      expect(calls[0].body).toMatchObject({ op: "copy", at: 120, target: 300, place: "after" });
+      const made = document.querySelector(".lede + h2")!;
+      expect(made.getAttribute("data-osp-src")).toBe("330");
+      expect(made.getAttribute("contenteditable")).toBeTruthy();
+    });
+
+    it("searches the whole page, grouped by category, and closes with Esc", () => {
+      page("", PLANS);
+      open(document.querySelectorAll("h2")[0]);
+      click(shadow().querySelector('.ed-tool[aria-label="Insert"]'));
+      const search = shadow().querySelector(".ed-as-search") as HTMLInputElement;
+      search.value = "price";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(cards()).toEqual(["p.price"]);
+      expect(Array.from(shadow().querySelectorAll(".ed-as-sub")).map((x) => x.textContent)).toEqual(["Body"]);
+      expect(shadow().querySelector(".ed-as-cat[data-on]")).toBeNull();
+      search.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+      expect(shadow().querySelector(".ed-assets")!.hasAttribute("hidden")).toBe(true);
+    });
+
+    it("leaves script-made layers out of Insert", () => {
+      page("", '<main data-osp-src="100"><button class="btn" data-osp-src="110">a</button><button class="made">b</button></main>');
+      boot();
+      enter();
+      click(shadow().querySelector('.ed-tool[aria-label="Insert"]'));
+      click(shadow().querySelector('.ed-as-cat[data-cat="buttons"]'));
+      expect(cards()).toEqual(["button.btn"]);
     });
 
     it("puts a tool down with Esc, without touching the selection", () => {

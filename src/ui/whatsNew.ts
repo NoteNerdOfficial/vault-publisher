@@ -1,7 +1,7 @@
 import { App, Modal } from "obsidian";
 import { openExternal } from "../platform/openExternal";
 import editModeShot from "./whats-new/edit-mode.jpg";
-import describeShot from "./whats-new/describe.jpg";
+import insertShot from "./whats-new/insert.jpg";
 
 /**
  * What's new: a popup shown once after an update that has something worth
@@ -26,32 +26,32 @@ export interface Release {
 export const RELEASES: Release[] = [
   {
     version: "0.3.0",
-    title: "Describe a change, hand it to your AI tool",
+    title: "Build with your page's own pieces",
     lede:
-      "In Edit mode, press / and say what should change. Click layers while you type to point at them, " +
-      "and copy the lot for Claude Code or Cursor, with the code behind every layer.",
+      "Edit mode's Insert offers what your page is already made of: its text styles and components, " +
+      "with what's used where you are first. And its variables are one click from every field.",
     image: {
-      src: describeShot,
+      src: insertShot,
       alt:
-        "Describe on a pricing page: two changes in a stack floating above the bar, each with numbered layer chips, " +
-        "a third being written in the bar, and dashed numbered outlines on every layer the request points at.",
+        "Insert open above the bar on a pricing page: In Plan card lists the badge, title, price, list, button and note " +
+        "as previews in the page's own styles, with the page's other text styles and components in categories down the side.",
     },
     points: [
       {
+        title: "Insert",
+        text: "Click to add a copy by the selection, or drag it onto the page. Headings, buttons, cards and form fields are sorted for you, and search covers the lot.",
+      },
+      {
+        title: "Variables",
+        text: "A ◇ on padding, gap, radius and type lists the variables that fit, or makes one from the value. The new Variables tab shows them all: drag one onto a layer.",
+      },
+      {
         title: "Describe",
-        text: "Changes stack above the bar: click one to edit it, flip to What's copied to see exactly what goes over. Copy for AI (⌘Enter), or Save as note into a Change requests folder.",
+        text: "Press / and say what should change, clicking layers to point at them. Copy for AI (⌘Enter) hands it to Claude Code or Cursor with the code behind every layer.",
       },
       {
         title: "Code you can edit",
-        text: "The Code section lists the rules that style a layer, strongest first. A value that loses is struck out and says to what, and every value is a field that writes to its rule.",
-      },
-      {
-        title: "Attributes and Changes",
-        text: "Edit a link's address, an image's alt text or a field's placeholder, and see this session's edits to each file as a diff, ready to copy.",
-      },
-      {
-        title: "Words the script wrote",
-        text: "Text a page's script puts there can now be retyped where it is written once, in the script or a JSON file it loads. Where it can't, Edit mode says why.",
+        text: "The Code section lists the rules that style a layer, strongest first, each value a field. Attributes edits links, alt text and placeholders, and Changes shows the diff.",
       },
     ],
     link: {
