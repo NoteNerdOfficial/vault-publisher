@@ -107,6 +107,20 @@ export class Setting {
 }
 
 export class Modal {}
+/** Obsidian's suggestion popover under a text field: here it only remembers what it was given. */
+export class AbstractInputSuggest<T> {
+  app: unknown;
+  constructor(app: unknown, readonly inputEl: HTMLInputElement) {
+    this.app = app;
+  }
+  setValue(value: string): void {
+    this.inputEl.value = value;
+  }
+  close(): void {}
+  getSuggestions(_query: string): T[] {
+    return [];
+  }
+}
 export class TFile {}
 export class TFolder {}
 

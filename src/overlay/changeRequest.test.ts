@@ -9,6 +9,8 @@ describe("change request notes", () => {
     const taken = new Set(["pricing 2026-11-24.md", "pricing 2026-11-24 2.md"]);
     expect(noteName("Protos/pricing.html", NOW, (n) => taken.has(n))).toBe("pricing 2026-11-24 3.md");
     expect(noteName("a/what: #1?.html", NOW, () => false)).toBe("what 1 2026-11-24.md");
+    expect(noteName("Protos/pricing/index.html", NOW, () => false)).toBe("pricing 2026-11-24.md");
+    expect(noteName("index.html", NOW, () => false)).toBe("index 2026-11-24.md");
   });
 
   it("hold the request under frontmatter that names the page", () => {

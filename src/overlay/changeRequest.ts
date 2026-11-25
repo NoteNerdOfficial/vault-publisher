@@ -19,11 +19,14 @@ export function noteDate(now: Date): string {
 
 /**
  * The note's name without the folder: the page's name and the day, then
- * " 2", " 3" when that name is taken. Characters a file name can't hold are
- * dropped.
+ * " 2", " 3" when that name is taken. A page called index is named for its
+ * folder, which is the name a person knows it by. Characters a file name
+ * can't hold are dropped.
  */
 export function noteName(pagePath: string, now: Date, taken: (name: string) => boolean): string {
-  const file = pagePath.split("/").pop() ?? "page";
+  const parts = pagePath.split("/");
+  let file = parts.pop() ?? "page";
+  if (/^index\.[^.]+$/i.test(file) && parts.length) file = parts.pop() + ".html";
   const base = (file.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|#^[\]]/g, " ").replace(/\s+/g, " ").trim() || "page") +
     " " + noteDate(now);
   let name = `${base}.md`;

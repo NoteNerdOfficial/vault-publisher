@@ -124,6 +124,8 @@ export interface EditStore {
    * vault, and says where. Given the page's vault path and the request.
    */
   saveChangeRequest?(pageVaultPath: string, request: string): Promise<string>;
+  /** A link that opens a vault note in Obsidian, for the page to offer. */
+  noteLink?(vaultPath: string): string | null;
   /** A link that opens a vault file at a line in the chosen editor, or null for none. */
   editorLink?(vaultPath: string, line: number, column: number): { url: string; name: string } | null;
 }
@@ -998,7 +1000,8 @@ export class ReviewServer {
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text || text.length > 400_000) return send(response, 400, MIME.json, `{"error":"Expected the request."}`);
     const path = await edit.saveChangeRequest!(vaultPath, text);
-    send(response, 200, MIME.json, JSON.stringify({ path }), { "Cache-Control": "no-store" });
+    const open = edit.noteLink?.(path) ?? null;
+    send(response, 200, MIME.json, JSON.stringify(open ? { path, open } : { path }), { "Cache-Control": "no-store" });
   }
 
   /**

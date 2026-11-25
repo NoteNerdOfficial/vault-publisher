@@ -678,7 +678,10 @@ file and line, its HTML as the file has it, and the CSS that wins for it.
 **Copy for AI** (Cmd+Enter) puts that on the clipboard for Claude Code,
 Cursor or the like, and **Save as note** writes it to a note in the vault,
 in **Change requests** by default, to point an AI tool at or keep as a
-record. Nothing about it reaches the page's files or its comments.
+record. The stack says which note it saved, with **Open note** to open it in
+Obsidian, and the same request saved twice stays one note. The folder is
+picked under **Comments and editing → Edit mode**. Nothing about it reaches
+the page's files or its comments.
 
 ![Describe on the same pricing page: two changes in a stack floating above
 the bar, each with numbered layer chips, and a third being written in the

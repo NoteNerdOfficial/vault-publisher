@@ -815,7 +815,7 @@ describe("the edit mode", () => {
         vi.fn(async (url: string, init: RequestInit = {}) => {
           if (url === "/api/describe-note") {
             calls.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
-            return new Response(JSON.stringify({ path: "Change requests/deck 2026-11-24.md" }), { status: 200 });
+            return new Response(JSON.stringify({ path: "Change requests/deck 2026-11-24.md", open: "obsidian://open?vault=V&file=x" }), { status: 200 });
           }
           return new Response("{}", { status: 404 });
         }),
@@ -837,12 +837,25 @@ describe("the edit mode", () => {
       key("Enter", { metaKey: true });
       await new Promise((r) => setTimeout(r, 150));
       expect(copied[0]).toBe(text);
+      // Said in the stack, where the eye is: the bar's message line is the prompt.
+      const footButton = (words: string) => Array.from(shadow().querySelectorAll(".ed-stack-foot button")).find((b) => b.textContent === words);
+      expect(footButton("Copied")!.hasAttribute("data-done")).toBe(true);
+      expect(shadowOf(".ed-stack-hint").textContent).toContain("Copied 1 change.");
 
-      const save = Array.from(shadow().querySelectorAll(".ed-stack-foot button")).find((b) => b.textContent === "Save as note")!;
-      click(save);
+      click(footButton("Save as note")!);
       await new Promise((r) => setTimeout(r, 150));
       expect(calls[0].body).toMatchObject({ text });
-      expect(status()).toContain("Saved to Change requests/deck 2026-11-24.md");
+      expect(footButton("Saved")!.hasAttribute("data-done")).toBe(true);
+      const hint = shadowOf(".ed-stack-hint");
+      expect(hint.getAttribute("role")).toBe("status");
+      expect(hint.textContent).toContain("Saved as Change requests/deck 2026-11-24.md");
+      expect(hint.querySelector("a")!.getAttribute("href")).toBe("obsidian://open?vault=V&file=x");
+
+      // The same request again is not a second note.
+      click(footButton("Saved")!);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(calls).toHaveLength(1);
+      expect(shadowOf(".ed-stack-hint").textContent).toContain("Already saved as Change requests/deck 2026-11-24.md");
     });
   });
 

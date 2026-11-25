@@ -1,5 +1,6 @@
 import { DEFAULT_EDITOR, EDITORS } from "../overlay/editorLinks";
 import { DEFAULT_CHANGE_REQUESTS_FOLDER } from "../overlay/changeRequest";
+import { FolderSuggest } from "./folderSuggest";
 import { normalizeSigninUrl } from "../overlay/shared";
 import { App, Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
 import { THEMES, getTheme } from "../publish/themes";
@@ -1022,7 +1023,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       new Setting(root)
         .setName("Folder")
         .setDesc("Only notes inside this folder are published.")
-        .addText((text) =>
+        .addText((text) => {
+          new FolderSuggest(this.app, text.inputEl);
           text
             .setPlaceholder("notes")
             .setValue(site.folder ?? "")
@@ -1030,8 +1032,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
               const trimmed = value.trim().replace(/^\/+|\/+$/g, "");
               site.folder = trimmed || null;
               await this.host.saveSettings();
-            }),
-        );
+            });
+        });
     }
 
     this.renderExcludes(root);
@@ -2348,7 +2350,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
         "Where comments are saved as you leave them, where a file a reader " +
           "sends you goes, and where the imported review note is written.",
       )
-      .addText((text) =>
+      .addText((text) => {
+        new FolderSuggest(this.app, text.inputEl);
         text
           .setPlaceholder("_vault-publisher/review")
           .setValue(overlay.reviewFolder)
@@ -2356,8 +2359,8 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             overlay.reviewFolder =
               value.trim().replace(/^\/+|\/+$/g, "") || "_vault-publisher/review";
             await this.host.saveSettings();
-          }),
-      );
+          });
+      });
 
     /*
      * The one switch here that changes what the overlay does rather than
@@ -2464,17 +2467,19 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
       .setName("Change requests folder")
       .setDesc(
         "Where Edit mode's Describe saves a change request as a note, to hand " +
-          "to an AI coding tool or keep as a record.",
+          "to an AI coding tool or keep as a record. Pick a folder or type a new " +
+          "one; it is made the first time a request is saved.",
       )
-      .addText((text) =>
+      .addText((text) => {
+        new FolderSuggest(this.app, text.inputEl);
         text
           .setPlaceholder(DEFAULT_CHANGE_REQUESTS_FOLDER)
           .setValue(overlay.changeRequestsFolder ?? DEFAULT_CHANGE_REQUESTS_FOLDER)
           .onChange(async (value) => {
-            overlay.changeRequestsFolder = value.trim() || DEFAULT_CHANGE_REQUESTS_FOLDER;
+            overlay.changeRequestsFolder = value.trim().replace(/^\/+|\/+$/g, "") || DEFAULT_CHANGE_REQUESTS_FOLDER;
             await this.host.saveSettings();
-          }),
-      );
+          });
+      });
 
     this.renderPublishedReview(root);
   }

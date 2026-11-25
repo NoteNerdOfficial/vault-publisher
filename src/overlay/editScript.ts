@@ -3223,6 +3223,14 @@ export const EDIT_CSS = `
 .osp-overlay .ed-stack-copied { margin: 0; border-top: 1px solid var(--co-line); border-bottom: 1px solid var(--co-line); max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: #0f1115; color: #d7dae0; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .osp-overlay .ed-stack-foot { display: flex; align-items: center; gap: 4px; }
 .osp-overlay .ed-stack-hint { flex: 1; color: var(--co-fg-3); font-size: 11px; }
+.osp-overlay .ed-stack-hint[data-note] { color: var(--co-fg-2); animation: ed-note-in 0.24s cubic-bezier(0.16, 1, 0.3, 1); }
+.osp-overlay .ed-stack-hint[data-note="error"] { color: var(--co-danger); }
+.osp-overlay .ed-stack-open { margin-left: 2px; color: #6a3df0; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.osp-overlay .ed-stack-open:focus-visible { outline: 2px solid #7c4dff; outline-offset: 1px; border-radius: 2px; }
+.osp-overlay .ed-btn[data-done] svg { color: inherit; animation: ed-note-pop 0.32s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes ed-note-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes ed-note-pop { 0% { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .osp-overlay .ed-stack-hint[data-note], .osp-overlay .ed-btn[data-done] svg { animation: none; } }
 .osp-overlay .ed-btn.ed-ai { background: #7c4dff; border-color: #7c4dff; color: #fff; }
 .osp-overlay .ed-btn.ed-ai svg { color: #fff; }
 .osp-overlay .ed-btn.ed-ai:hover:not(:disabled) { background: #6a3df0; border-color: #6a3df0; }

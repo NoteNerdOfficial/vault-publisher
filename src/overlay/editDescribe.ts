@@ -325,21 +325,59 @@ export const EDIT_DESCRIBE = String.raw`
     return Promise.all(describedLayers().map(whereReady)).then(requestText);
   }
 
+  /*
+   * What the stack's footer reports about the last Copy or Save: in the
+   * footer, because the bar's message line is the prompt while Describe is
+   * open. The button says it for a moment; the words stay until the
+   * request changes. key ties it to the request it was about.
+   */
+  var stackNote = null;
+  /* The last note saved: { text, path, open }, so the same request is not saved twice. */
+  var lastSaved = null;
+
+  function describedKey() {
+    return described.map(function (d) {
+      return (d.subject ? label(d.subject) : "") + ":" + partsText(d.parts);
+    }).join("|");
+  }
+
+  function noteStack(note) {
+    stackNote = note;
+    clearTimeout(noteStack.timer);
+    if (note.flash) {
+      noteStack.timer = setTimeout(function () {
+        if (stackNote === note) {
+          note.flash = false;
+          renderStack();
+        }
+      }, 2400);
+    }
+    renderStack();
+  }
+
   function copyRequest() {
     if (!described.length) return;
+    var key = describedKey();
+    var n = described.length;
     readyRequest().then(function (text) {
-      try {
-        return hostWin.navigator.clipboard.writeText(text).then(function () {
-          message = "Copied " + described.length + " change" + (described.length === 1 ? "" : "s") + " for an AI tool. Paste it into Claude Code, Cursor or the like.";
-          refresh();
-        });
-      } catch (e) {}
+      return hostWin.navigator.clipboard.writeText(text).then(function () {
+        message = "Copied " + n + " change" + (n === 1 ? "" : "s") + " for an AI tool.";
+        noteStack({ kind: "copied", key: key, flash: true, words: "Copied " + n + " change" + (n === 1 ? "" : "s") + ". Paste them into Claude Code, Cursor or the like." });
+      });
+    }).catch(function () {
+      noteStack({ kind: "error", key: key, words: "Couldn't reach the clipboard. Open What's copied and copy the text from there." });
     });
   }
 
   function saveRequest() {
-    if (!described.length || busy) return;
+    if (!described.length || busy || (stackNote && stackNote.kind === "saving")) return;
+    var key = describedKey();
     readyRequest().then(function (text) {
+      if (lastSaved && lastSaved.text === text) {
+        noteStack({ kind: "saved", key: key, flash: true, words: "Already saved as " + lastSaved.path + ".", open: lastSaved.open });
+        return;
+      }
+      noteStack({ kind: "saving", key: key, words: "Saving the note\u2026" });
       return fetch("/api/describe-note", {
         method: "POST",
         credentials: "same-origin",
@@ -347,15 +385,17 @@ export const EDIT_DESCRIBE = String.raw`
         body: JSON.stringify({ page: PAGE, text: text }),
       }).then(function (r) {
         return r.json().then(function (data) {
-          message = r.ok && data.path
-            ? "Saved to " + data.path + ". Point your AI tool at that note."
-            : (data && data.error) || "Couldn't save the note.";
-          refresh();
+          if (r.ok && data.path) {
+            lastSaved = { text: text, path: data.path, open: data.open || "" };
+            message = "Saved the request as " + data.path + ".";
+            noteStack({ kind: "saved", key: key, flash: true, words: "Saved as " + data.path + ". Point your AI tool at that note.", open: data.open || "" });
+          } else {
+            noteStack({ kind: "error", key: key, words: (data && data.error) || "Couldn't save the note." });
+          }
         });
       });
     }).catch(function () {
-      message = "Couldn't save the note.";
-      refresh();
+      noteStack({ kind: "error", key: key, words: "Couldn't save the note. Is Obsidian still running?" });
     });
   }
 
@@ -429,7 +469,24 @@ export const EDIT_DESCRIBE = String.raw`
       box.appendChild(list);
     }
     var foot = el("div", "ed-stack-foot");
-    foot.appendChild(el("span", "ed-stack-hint", stackView === "copied" ? "Exactly what goes on the clipboard, and into a saved note." : "Click a change to edit it."));
+    if (stackNote && stackNote.key !== describedKey()) stackNote = null;
+    var hint = el("span", "ed-stack-hint", stackView === "copied" ? "Exactly what goes on the clipboard, and into a saved note." : "Click a change to edit it.");
+    if (stackNote) {
+      hint.textContent = stackNote.words;
+      hint.setAttribute("role", "status");
+      hint.setAttribute("data-note", stackNote.kind);
+      if (stackNote.open) {
+        var open = el("a", "ed-stack-open", "Open note");
+        open.href = stackNote.open;
+        open.title = "Open the note in Obsidian";
+        open.addEventListener("click", function (event) {
+          event.stopPropagation();
+        });
+        hint.appendChild(document.createTextNode(" "));
+        hint.appendChild(open);
+      }
+    }
+    foot.appendChild(hint);
     var clear = barButton("trash", "Clear", "Take every change out", function () {
       described = [];
       stackView = "changes";
@@ -440,6 +497,19 @@ export const EDIT_DESCRIBE = String.raw`
     var save = barButton("note", "Save as note", "Save the request as a note in the vault, to point an AI tool at or keep", saveRequest);
     var copy = barButton("copy", "Copy for AI", "Copy the request with each layer's code, for Claude Code, Cursor or the like (" + (MAC ? "⌘" : "Ctrl+") + "Enter)", copyRequest);
     copy.classList.add("ed-ai");
+    // The button answers where it was pressed: Saving…, then Saved or Copied with a check.
+    if (stackNote && stackNote.kind === "saving") {
+      setWord(save, "Saving\u2026");
+      save.disabled = true;
+    }
+    if (stackNote && stackNote.flash && stackNote.kind === "saved") {
+      save.innerHTML = icon("check", 14) + "<span>Saved</span>";
+      save.setAttribute("data-done", "");
+    }
+    if (stackNote && stackNote.flash && stackNote.kind === "copied") {
+      copy.innerHTML = icon("check", 14) + "<span>Copied</span>";
+      copy.setAttribute("data-done", "");
+    }
     foot.appendChild(clear);
     foot.appendChild(save);
     foot.appendChild(copy);

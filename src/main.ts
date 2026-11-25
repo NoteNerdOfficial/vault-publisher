@@ -1352,8 +1352,11 @@ export default class VaultPublisherPlugin extends Plugin {
         const taken = new Set((await adapter.list(folder)).files.map((f) => f.split("/").pop() ?? ""));
         const path = normalizePath(`${folder}/${noteName(pageVaultPath, now, (n) => taken.has(n))}`);
         await this.app.vault.create(path, noteText(pageVaultPath, request, now));
+        new Notice(`Vault Publisher: saved a change request as ${path}`, 6000);
         return path;
       },
+      noteLink: (vaultPath) =>
+        `obsidian://open?vault=${encodeURIComponent(this.app.vault.getName())}&file=${encodeURIComponent(vaultPath)}`,
     };
   }
 

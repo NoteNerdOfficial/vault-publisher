@@ -680,6 +680,7 @@ describe("history and linked sheets through the route", () => {
           vault[`Change requests/${pagePath.split("/").pop()}.md`] = text;
           return `Change requests/${pagePath.split("/").pop()}.md`;
         },
+        noteLink: (path) => `obsidian://open?vault=Test&file=${encodeURIComponent(path)}`,
       },
     });
     base = `http://127.0.0.1:${(await server.start()).port}`;
@@ -886,6 +887,7 @@ describe("history and linked sheets through the route", () => {
     const saved = await postTo("/api/describe-note", { text: "Change this prototype: P/index.html\n\n1. In [1] h1: shorter" });
     expect(saved.status).toBe(200);
     expect(saved.data.path).toBe("Change requests/index.html.md");
+    expect(saved.data.open).toBe("obsidian://open?vault=Test&file=Change%20requests%2Findex.html.md");
     expect(vault["Change requests/index.html.md"]).toContain("1. In [1] h1: shorter");
     expect((await postTo("/api/describe-note", { text: "" })).status).toBe(400);
     expect((await postTo("/api/describe-note", { page: "elsewhere.html", text: "x" })).status).toBe(404);
