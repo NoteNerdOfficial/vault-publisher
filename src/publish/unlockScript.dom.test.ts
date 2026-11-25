@@ -153,6 +153,14 @@ async function unlock(): Promise<void> {
   );
   // The reader is a chain of promises over WebCrypto and two fetches.
   for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 0));
+  // A slow runner may need longer: wait until the page is unlocked or says
+  // why not. setImmediate, since one test fakes setTimeout around this.
+  const settled = () => {
+    const error = document.getElementById("osp-unlock-error");
+    return !document.getElementById("osp-unlock-form") || (!!error && !error.hidden);
+  };
+  const until = Date.now() + 3000;
+  while (!settled() && Date.now() < until) await new Promise((r) => setImmediate(r));
 }
 
 describe("the reader, over a locked as-is page", () => {
@@ -455,7 +463,12 @@ describe("the reader, with the service worker in charge", () => {
     } finally {
       vi.useRealTimers();
     }
-    for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 0));
+    // Decrypting and putting the page back takes a few turns, more on a slow
+    // runner: wait for the stylesheet itself, not a fixed number of turns.
+    const until = Date.now() + 2000;
+    while (!document.querySelector("link[rel=stylesheet]") && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
     const link = document.querySelector("link[rel=stylesheet]") as HTMLLinkElement;
     expect(link.getAttribute("href")).toMatch(/^blob:/);
   });
