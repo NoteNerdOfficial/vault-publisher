@@ -116,7 +116,10 @@ export const EDIT_DESCRIBE = String.raw`
     if (describing.editing !== null) {
       box.appendChild(el("div", "ed-describe-note", "Editing change " + (describing.editing + 1) + ". Click layers to point at them."));
     }
+    // One flowing line: the slash, the subject and the words wrap together,
+    // back to the left edge, with the keys floated at the right of the first.
     var line = el("div", "ed-describe");
+    line.appendChild(el("kbd", "ed-describe-keys", describing.editing !== null ? "Enter saves · Esc keeps it" : "Enter adds · Esc"));
     line.appendChild(el("span", "ed-describe-slash", "/"));
     var subject = el("span", "ed-describe-subject");
     subject.appendChild(layerChip(describing.subject));
@@ -159,19 +162,26 @@ export const EDIT_DESCRIBE = String.raw`
       refresh();
     });
     line.appendChild(ed);
-    line.appendChild(el("kbd", "ed-describe-keys", describing.editing !== null ? "Enter saves · Esc keeps it" : "Enter adds · Esc"));
+    // The words are inline, so a click anywhere in the box puts the caret at their end.
+    line.addEventListener("mousedown", function (event) {
+      if (event.target !== line && !event.target.classList.contains("ed-describe-slash")) return;
+      event.preventDefault();
+      caretToEnd(ed);
+    });
     box.appendChild(line);
-    if (focus) {
-      ed.focus();
-      try {
-        var range = document.createRange();
-        range.selectNodeContents(ed);
-        range.collapse(false);
-        var sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-      } catch (e) {}
-    }
+    if (focus) caretToEnd(ed);
+  }
+
+  function caretToEnd(ed) {
+    ed.focus();
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(ed);
+      range.collapse(false);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {}
   }
 
   /* The editor's words and chips back into parts. */
@@ -248,6 +258,10 @@ export const EDIT_DESCRIBE = String.raw`
     var rules = rulesFor(n);
     var where = whereOf(n, rules);
     var layer = where && where.layer;
+    // A rule for every element on the page says nothing about this one.
+    var telling = rules.filter(function (r) {
+      return r.rule.selectorText.trim() !== "*";
+    });
     var head = number + ". " + label(n) + (layerWords(n) ? " “" + layerWords(n) + "”" : "");
     if (layer) head += " at " + layer.file + ":" + layer.line;
     else if (stampOf(n) === null) {
@@ -259,9 +273,9 @@ export const EDIT_DESCRIBE = String.raw`
     var html = layer && layer.html ? layer.html : cleanMarkup(n);
     if (html.length > 3000) html = html.slice(0, 3000) + "\n<!-- … -->";
     var out = [head, FENCE + "html", html, FENCE];
-    if (rules.length) {
-      out.push("CSS that applies, the rule that wins first:", FENCE + "css", rules.map(function (r, i) {
-        var spot = where && where.rules ? where.rules[i] : null;
+    if (telling.length) {
+      out.push("CSS that applies, the rule that wins first:", FENCE + "css", telling.map(function (r) {
+        var spot = where && where.rules ? where.rules[rules.indexOf(r)] : null;
         return (spot ? "/* " + spot.file + ":" + spot.line + " */\n" : "") + r.text;
       }).join("\n\n"), FENCE);
     }

@@ -2451,7 +2451,6 @@ ${EDIT_DESCRIBE}
     actions.appendChild(reloadBtn);
     var insertMenu = el("div", "ed-menu ed-insert");
     insertMenu.hidden = true;
-    bar.appendChild(stack);
     bar.appendChild(crumbs);
     bar.appendChild(status);
     bar.appendChild(describe);
@@ -2464,6 +2463,7 @@ ${EDIT_DESCRIBE}
     });
 
     host.wrap.appendChild(layer);
+    host.wrap.appendChild(stack);
     host.wrap.appendChild(bar);
     host.wrap.appendChild(menu);
 
@@ -2793,6 +2793,27 @@ ${EDIT_DESCRIBE}
       bar.style.top = "";
       bar.style.bottom = (notch ? hostWin.innerHeight - notch.top : 24) + 8 + "px";
     }
+    placeStack(left, width);
+  }
+
+  /*
+   * Describe's stack floats on its own card, the bar's width, on the far side
+   * of the bar from the notch: above it at the bottom, below it at the top.
+   */
+  function placeStack(left, width) {
+    var stack = ui.stack;
+    if (ui.bar.hidden) stack.hidden = true;
+    if (stack.hidden) return;
+    var r = ui.bar.getBoundingClientRect();
+    stack.style.left = left + "px";
+    stack.style.width = Math.max(width, 420) + "px";
+    if (ui.bar.style.top) {
+      stack.style.top = r.bottom + 8 + "px";
+      stack.style.bottom = "";
+    } else {
+      stack.style.top = "";
+      stack.style.bottom = hostWin.innerHeight - r.top + 8 + "px";
+    }
   }
 
   function crumbsFor(target) {
@@ -3030,7 +3051,10 @@ ${EDIT_DESCRIBE}
  * reviewer's light or dark choice.
  */
 export const EDIT_CSS = `
-.osp-overlay .ed-layer { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+.osp-overlay .ed-layer { position: fixed; inset: 0; pointer-events: none; z-index: 4; }
+/* The panel covers the page, so it covers what is drawn on the page too: the
+   selection, its handles, drop lines and measures go under it, not across it. */
+.osp-overlay .co-panel[data-content="edit"] { z-index: 5; }
 .osp-overlay .ed-layer[hidden], .osp-overlay .ed-box[hidden], .osp-overlay .ed-bar[hidden], .osp-overlay .ed-menu[hidden] { display: none; }
 .osp-overlay .ed-box { position: fixed; box-sizing: border-box; pointer-events: none; }
 .osp-overlay .ed-hover { outline: 1px dashed #2f6fed; outline-offset: -1px; }
@@ -3119,21 +3143,29 @@ export const EDIT_CSS = `
 .osp-overlay .ed-describe-box { display: flex; flex-direction: column; gap: 4px; min-width: min(560px, calc(100vw - 40px)); }
 .osp-overlay .ed-describe-box[hidden] { display: none; }
 .osp-overlay .ed-describe-note { color: #6a3df0; font-size: 12px; font-weight: 600; }
-.osp-overlay .ed-describe { display: flex; align-items: flex-start; gap: 6px; padding: 3px 8px; border: 1.5px solid #7c4dff; border-radius: 8px; }
-.osp-overlay .ed-describe-slash { color: #7c4dff; font-weight: 700; line-height: 24px; }
-.osp-overlay .ed-describe-subject { flex: none; line-height: 24px; }
-.osp-overlay .ed-describe-input { flex: 1; min-width: 0; max-height: 96px; overflow-y: auto; outline: none; line-height: 24px; font-size: 12px; overflow-wrap: anywhere; }
+.osp-overlay .ed-describe {
+  display: block; max-height: 104px; overflow-y: auto; padding: 3px 8px; border: 1.5px solid #7c4dff; border-radius: 8px;
+  line-height: 24px; font-size: 12px; overflow-wrap: anywhere; cursor: text;
+}
+.osp-overlay .ed-describe-slash { margin-right: 6px; color: #7c4dff; font-weight: 700; }
+.osp-overlay .ed-describe-subject { margin-right: 6px; }
+.osp-overlay .ed-describe-input { display: inline; outline: none; }
 .osp-overlay .ed-describe-input:empty::before { content: attr(data-placeholder); color: var(--co-fg-3); }
 .osp-overlay .ed-describe-input .ed-chip { margin: 0 1px; }
-.osp-overlay .ed-describe-keys { flex: none; font: 11px/24px Inter, ui-sans-serif, system-ui, sans-serif; color: var(--co-fg-3); white-space: nowrap; }
-.osp-overlay .ed-stack { display: flex; flex-direction: column; gap: 4px; padding-bottom: 8px; border-bottom: 1px solid var(--co-line); }
+.osp-overlay .ed-describe-keys { float: right; margin-left: 12px; font: 11px/24px Inter, ui-sans-serif, system-ui, sans-serif; color: var(--co-fg-3); white-space: nowrap; }
+.osp-overlay .ed-stack {
+  position: fixed; z-index: 6; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px;
+  max-width: min(860px, calc(100vw - 16px)); padding: 8px 10px; border: 1px solid var(--co-line); border-radius: 12px;
+  background: var(--co-bg); color: var(--co-fg); box-shadow: var(--co-shadow);
+  font: 13px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
 .osp-overlay .ed-stack[hidden] { display: none; }
 .osp-overlay .ed-stack-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .osp-overlay .ed-stack-keys { color: var(--co-fg-3); font-size: 11px; }
 .osp-overlay .ed-seg { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--co-bg-2); }
 .osp-overlay .ed-seg button { all: unset; cursor: pointer; padding: 0 10px; height: 22px; border-radius: 4px; color: var(--co-fg-2); font: 500 12px/22px Inter, ui-sans-serif, system-ui, sans-serif; }
 .osp-overlay .ed-seg button[data-on] { background: var(--co-bg); color: var(--co-fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
-.osp-overlay .ed-stack-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.osp-overlay .ed-stack-list { list-style: none; margin: 0; padding: 4px 0; max-height: 220px; overflow-y: auto; border-top: 1px solid var(--co-line); border-bottom: 1px solid var(--co-line); }
 .osp-overlay .ed-stack-item { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; line-height: 20px; }
 .osp-overlay .ed-stack-item:hover { background: var(--co-bg-2); }
 .osp-overlay .ed-stack-item[data-editing] { background: rgba(124, 77, 255, 0.08); }
@@ -3144,7 +3176,7 @@ export const EDIT_CSS = `
 .osp-overlay .ed-stack-words i { color: #6a3df0; }
 .osp-overlay .ed-stack-act { opacity: 0; flex: none; }
 .osp-overlay .ed-stack-item:hover .ed-stack-act, .osp-overlay .ed-stack-item[data-editing] .ed-stack-act, .osp-overlay .ed-stack-act:focus-visible { opacity: 1; }
-.osp-overlay .ed-stack-copied { margin: 0; max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: #0f1115; color: #d7dae0; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+.osp-overlay .ed-stack-copied { margin: 0; border-top: 1px solid var(--co-line); border-bottom: 1px solid var(--co-line); max-height: 260px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: #0f1115; color: #d7dae0; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .osp-overlay .ed-stack-foot { display: flex; align-items: center; gap: 4px; }
 .osp-overlay .ed-stack-hint { flex: 1; color: var(--co-fg-3); font-size: 11px; }
 .osp-overlay .ed-btn.ed-ai { background: #7c4dff; border-color: #7c4dff; color: #fff; }
@@ -3257,7 +3289,7 @@ export const EDIT_CSS = `
 .osp-overlay .ep-stack { display: flex; flex-direction: column; gap: 8px; }
 .osp-overlay .ep-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: center; }
 .osp-overlay .ep-quad { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; flex: 1; }
-.osp-overlay .ep-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 8px; }
+.osp-overlay .ep-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 8px; }
 .osp-overlay .ep-label { color: var(--co-fg-3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .osp-overlay .ep-hint { color: var(--co-fg-3); font-size: 11px; line-height: 15px; }
 .osp-overlay .ep-pad-hint { padding: 12px; }

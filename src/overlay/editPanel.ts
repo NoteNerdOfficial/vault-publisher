@@ -294,7 +294,10 @@ export const EDIT_PANEL = String.raw`
   function row(labelText, control, title) {
     var r = el("div", "ep-row");
     if (title) r.title = title;
-    r.appendChild(el("span", "ep-label", labelText));
+    var name = el("span", "ep-label", labelText);
+    // Cut short only past the column's width; the whole name is a hover away.
+    if (!title) name.title = labelText;
+    r.appendChild(name);
     r.appendChild(control);
     return r;
   }
@@ -1562,6 +1565,27 @@ export const EDIT_PANEL = String.raw`
         }
       }
     }
+    return foldInheritedFont(out);
+  }
+
+  /*
+   * "font: inherit", which the browser hands back as a dozen font-*
+   * longhands all set to inherit, folded back into the one line it was.
+   */
+  function foldInheritedFont(list) {
+    var inherited = list.filter(function (d) {
+      return /^font-/.test(d.prop) && d.value === "inherit" && !d.important;
+    });
+    if (inherited.length < 4) return list;
+    var out = [];
+    var placed = false;
+    list.forEach(function (d) {
+      if (inherited.indexOf(d) === -1) out.push(d);
+      else if (!placed) {
+        out.push({ prop: "font", value: "inherit", important: false });
+        placed = true;
+      }
+    });
     return out;
   }
 

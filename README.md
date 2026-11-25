@@ -638,6 +638,12 @@ Cursor or the like, and **Save as note** writes it to a note in the vault,
 in **Change requests** by default, to point an AI tool at or keep as a
 record. Nothing about it reaches the page's files or its comments.
 
+![Describe on the same pricing page: two changes in a stack floating above
+the bar, each with numbered layer chips, and a third being written in the
+bar about the heading, pointing at the Team plan's price as number 6. Dashed
+outlines and numbers on the page mark every layer the request points
+at.](media/describe.png)
+
 **Attributes** edits the layer's HTML attributes: a link's `href`, an image's
 `alt`, a field's `placeholder` and `type`, `id`, `class`, `aria-label`, and
 any it already has. Event handlers (`on...`) and `javascript:` addresses are

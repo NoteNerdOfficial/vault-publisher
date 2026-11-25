@@ -1,6 +1,7 @@
 import { App, Modal } from "obsidian";
 import { openExternal } from "../platform/openExternal";
 import editModeShot from "./whats-new/edit-mode.jpg";
+import describeShot from "./whats-new/describe.jpg";
 
 /**
  * What's new: a popup shown once after an update that has something worth
@@ -23,6 +24,41 @@ export interface Release {
 }
 
 export const RELEASES: Release[] = [
+  {
+    version: "0.3.0",
+    title: "Describe a change, hand it to your AI tool",
+    lede:
+      "In Edit mode, press / and say what should change. Click layers while you type to point at them, " +
+      "and copy the lot for Claude Code or Cursor, with the code behind every layer.",
+    image: {
+      src: describeShot,
+      alt:
+        "Describe on a pricing page: two changes in a stack floating above the bar, each with numbered layer chips, " +
+        "a third being written in the bar, and dashed numbered outlines on every layer the request points at.",
+    },
+    points: [
+      {
+        title: "Describe",
+        text: "Changes stack above the bar: click one to edit it, flip to What's copied to see exactly what goes over. Copy for AI (⌘Enter), or Save as note into a Change requests folder.",
+      },
+      {
+        title: "Code you can edit",
+        text: "The Code section lists the rules that style a layer, strongest first. A value that loses is struck out and says to what, and every value is a field that writes to its rule.",
+      },
+      {
+        title: "Attributes and Changes",
+        text: "Edit a link's address, an image's alt text or a field's placeholder, and see this session's edits to each file as a diff, ready to copy.",
+      },
+      {
+        title: "Words the script wrote",
+        text: "Text a page's script puts there can now be retyped where it is written once, in the script or a JSON file it loads. Where it can't, Edit mode says why.",
+      },
+    ],
+    link: {
+      text: "Read how it works",
+      url: "https://github.com/NoteNerdOfficial/vault-publisher#editing-a-prototype-from-its-preview",
+    },
+  },
   {
     version: "0.2.0",
     title: "Edit your prototypes like in Figma",
