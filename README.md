@@ -682,7 +682,7 @@ record. Nothing about it reaches the page's files or its comments.
 
 ![Describe on the same pricing page: two changes in a stack floating above
 the bar, each with numbered layer chips, and a third being written in the
-bar about the heading, pointing at the Team plan's price as number 6. Dashed
+bar about the heading, pointing at the Team plan's price as number 5. Dashed
 outlines and numbers on the page mark every layer the request points
 at.](media/describe.png)
 
