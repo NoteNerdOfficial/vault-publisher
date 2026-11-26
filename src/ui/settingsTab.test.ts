@@ -96,6 +96,8 @@ function host(over: {
     relayOpenComments: async () => {},
     syncWithTracker: async () => {},
     openPreview: async () => {},
+    terminusAvailable: () => false,
+    openPreviewInTerminus: async () => false,
     reviewServerAddress: over.serving
       ? { url: "http://127.0.0.1:7331/?t=abc", port: 7331 }
       : null,

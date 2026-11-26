@@ -1,3 +1,4 @@
+import { callMethod, prop } from "../platform/dynamic";
 import { DEFAULT_EDITOR, EDITORS } from "../overlay/editorLinks";
 import { DEFAULT_CHANGE_REQUESTS_FOLDER } from "../overlay/changeRequest";
 import { FolderSuggest } from "./folderSuggest";
@@ -276,6 +277,10 @@ export interface SettingsHost {
   syncWithTracker(): Promise<void>;
   /** Serves the built preview locally and opens it in the browser. */
   openPreview(): Promise<void>;
+  /** Whether the Terminus plugin's browser is there to open it in instead. */
+  terminusAvailable(): boolean;
+  /** Opens the preview in a Terminus browser tab, inside Obsidian. */
+  openPreviewInTerminus(): Promise<boolean>;
   /** Where the review server is listening, or null while it is not running. */
   readonly reviewServerAddress: { url: string; port: number } | null;
   /** Stops the review server. */
@@ -810,6 +815,34 @@ export class VaultPublisherSettingsTab extends PluginSettingTab {
             }
           }),
       );
+
+    // Only when the Terminus plugin is installed: it has a browser pane
+    // inside Obsidian, and Claude sessions in Terminus can open the preview
+    // there too. Without it, this row is exactly what it always was.
+    if (this.host.terminusAvailable()) {
+      new Setting(root)
+        .setName("Open in Terminus")
+        .setDesc(
+          "Opens the preview in a Terminus browser tab inside Obsidian, where " +
+            "you can leave review notes for a Claude session and it can check " +
+            "its own changes.",
+        )
+        .addButton((button) =>
+          button.setButtonText("Open in Terminus").onClick(async () => {
+            button.setDisabled(true);
+            let opened = false;
+            try {
+              opened = await this.host.openPreviewInTerminus();
+            } finally {
+              button.setDisabled(false);
+              this.display();
+            }
+            // The tab opens in the workspace, behind this window: get out of
+            // its way, as the system browser coming to the front would.
+            if (opened) callMethod(prop(this.app, "setting"), "close");
+          }),
+        );
+    }
 
     if (running) {
       new Setting(root)

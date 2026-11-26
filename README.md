@@ -401,6 +401,30 @@ everyone, no revocation short of republishing, and anyone who has it can pass
 it on. Two consequences worth knowing before turning it on are in
 **Known issues**.
 
+## Opening the preview in Terminus
+
+[Terminus](https://community.obsidian.md/plugins/terminus) is a terminal plugin
+for Obsidian with a browser of its own, which Claude Code sessions running in
+it can use. With Terminus installed, the preview can open there as well as in
+your system browser:
+
+- **Open in Terminus**, under **Open the preview** in the settings, or the
+  **Open preview in Terminus browser** command, opens the preview in a tab
+  inside Obsidian.
+- A Claude session in Terminus can open it too, with
+  `browser open --site vault-publisher-preview`, and read, click and take
+  screenshots of it to check its own changes.
+- In Terminus's review mode you can click any element of the preview and leave
+  a comment for Claude. Each comment tells Claude the vault file the page was
+  built from, so it knows which note or prototype to change.
+
+The preview server only answers requests that carry the token it was started
+with, which is why opening its port by hand, or an agent finding the port,
+gets *Not authorized*. This plugin hands the address to Terminus only when the
+preview is opened there, and Terminus never shows it to an agent. Neither
+plugin needs the other: without Terminus the row and the command are not
+there, and the preview opens in your browser as it always has.
+
 ## Reviewing a built site
 
 `src/overlay/` is a comment layer over a built site: pins anchored to blocks of

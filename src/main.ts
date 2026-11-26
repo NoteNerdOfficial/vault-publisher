@@ -1,6 +1,6 @@
 import { DEFAULT_EDITOR, editorChoice, editorLink } from "./overlay/editorLinks";
 import { DEFAULT_CHANGE_REQUESTS_FOLDER, noteName, noteText } from "./overlay/changeRequest";
-import { App, Notice, Plugin, TFile, apiVersion, normalizePath } from "obsidian";
+import { App, Notice, Plugin, TFile, apiVersion, normalizePath, type Events } from "obsidian";
 import { diagnoseRender } from "./render/diagnose";
 import { createRenderHost, renderFile, RenderedNote } from "./render/renderNote";
 import { findStaticHazards, probeHtml, ProbeResult } from "./render/probe";
@@ -37,6 +37,14 @@ import {
   tokenForStorage,
 } from "./platform/secrets";
 import { openExternal } from "./platform/openExternal";
+import {
+  TERMINUS_READY_EVENT,
+  notePathForPreview,
+  openInTerminus,
+  previewPathOf,
+  registerWithTerminus,
+  terminusBrowserAvailable,
+} from "./platform/terminus";
 import { AutoRunMode, VaultPublisherSettingsTab } from "./ui/settingsTab";
 import {
   ReviewImportError,
@@ -471,6 +479,8 @@ export default class VaultPublisherPlugin extends Plugin {
    * build. Null until read from disk or set by a build.
    */
   private previewSources: Map<string, string> | null = null;
+  /** Withdraws the preview from Terminus's browser; null while not offered. */
+  private terminusUnregister: (() => void) | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -515,6 +525,16 @@ export default class VaultPublisherPlugin extends Plugin {
       callback: () => void this.openPreview(),
     });
     this.addCommand({
+      id: "open-preview-in-terminus",
+      name: "Open preview in Terminus browser",
+      // Only offered when the Terminus plugin is there to open it.
+      checkCallback: (checking) => {
+        if (!terminusBrowserAvailable(this.app)) return false;
+        if (!checking) void this.openPreviewInTerminus();
+        return true;
+      },
+    });
+    this.addCommand({
       id: "relay-review-comments",
       name: "Send open review comments to the tracker",
       callback: () => void this.relayOpenComments(),
@@ -532,7 +552,68 @@ export default class VaultPublisherPlugin extends Plugin {
 
     this.app.workspace.onLayoutReady(() => {
       void this.runAuto();
+      // Every plugin has loaded by now, so Terminus is either here or not.
+      this.offerPreviewToTerminus();
     });
+    // And again whenever Terminus (re)loads after this plugin did.
+    this.registerEvent(
+      // Terminus's own event, so only the plain Events signature knows it.
+      (this.app.workspace as Events).on(TERMINUS_READY_EVENT, () => this.offerPreviewToTerminus()),
+    );
+  }
+
+  /**
+   * Offers the preview to the Terminus browser, if Terminus is installed.
+   *
+   * What it registers is a way to open the preview, not an address: the
+   * server starts only when someone opens it there, and the address with its
+   * token goes straight to Terminus, which never shows it. That is what lets
+   * a Claude session in Terminus open the preview with
+   * `browser open --site vault-publisher-preview` when it could never have
+   * got past the token by finding the port.
+   */
+  private offerPreviewToTerminus(): void {
+    this.terminusUnregister?.();
+    this.terminusUnregister = registerWithTerminus(this.app, {
+      id: "vault-publisher-preview",
+      name: "Vault Publisher preview",
+      description: "The site as last built with Build preview, served from this computer, with comment and edit tools when they are on.",
+      open: async () => {
+        if (!(await this.app.vault.adapter.exists(normalizePath(`${PREVIEW_FOLDER}/index.html`)))) {
+          throw new Error("Build a preview first (Vault Publisher settings → Build preview).");
+        }
+        return (await this.startReviewServer()).url;
+      },
+      // The vault file a page came from, so a review note left on it in
+      // Terminus tells the agent which file to change: the source of an
+      // as-is page, or the note a page was built from.
+      sourceFor: (pageUrl) => {
+        const path = previewPathOf(pageUrl);
+        if (!path) return null;
+        const asIs = this.previewSources?.get(path);
+        if (asIs) return asIs;
+        const note = notePathForPreview(path, this.settings.site.folder);
+        return note && this.app.vault.getAbstractFileByPath(note) instanceof TFile ? note : null;
+      },
+    });
+  }
+
+  /** Whether the Terminus browser is there to open the preview in. */
+  terminusAvailable(): boolean {
+    return terminusBrowserAvailable(this.app);
+  }
+
+  /** Opens the preview in a Terminus browser tab, inside Obsidian. False
+   *  when it could not, having said why. */
+  async openPreviewInTerminus(): Promise<boolean> {
+    try {
+      if (!this.terminusUnregister) this.offerPreviewToTerminus();
+      await openInTerminus(this.app, "vault-publisher-preview");
+      return true;
+    } catch (error) {
+      new Notice(`Vault Publisher: ${error instanceof Error ? error.message : String(error)}`, 10000);
+      return false;
+    }
   }
 
   /**
@@ -545,6 +626,8 @@ export default class VaultPublisherPlugin extends Plugin {
    * exists.
    */
   onunload(): void {
+    this.terminusUnregister?.();
+    this.terminusUnregister = null;
     void this.stopReviewServer();
   }
 

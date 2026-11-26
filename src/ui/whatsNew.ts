@@ -53,6 +53,10 @@ export const RELEASES: Release[] = [
         title: "Code you can edit",
         text: "The Code section lists the rules that style a layer, strongest first, each value a field. Attributes edits links, alt text and placeholders, and Changes shows the diff.",
       },
+      {
+        title: "Open in Terminus",
+        text: "With the Terminus plugin installed, Open in Terminus shows your preview in a tab inside Obsidian, where you can leave comments for Claude and it can open the preview to check its own changes.",
+      },
     ],
     link: {
       text: "Read how it works",
