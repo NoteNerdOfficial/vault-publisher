@@ -3110,6 +3110,25 @@ export const OVERLAY_SCRIPT = `(function () {
     modes.appendChild(modeBtn);
     modeBtns.push(modeBtn);
   }
+  /*
+   * How many comments are still open, on the review button, so a reader in
+   * View or Comment mode can see there is something to step through without
+   * opening the panel. Drawn with the panel's own tallies in renderPanel.
+   */
+  var reviewBtn = modes.querySelector('[data-mode="review"]');
+  var reviewBadge = el("span", "co-mode-badge");
+  reviewBadge.setAttribute("aria-hidden", "true");
+  reviewBadge.hidden = true;
+  if (reviewBtn) reviewBtn.appendChild(reviewBadge);
+  var reviewTitle = reviewBtn ? reviewBtn.getAttribute("title") : "";
+  function showOpenCount(open) {
+    if (!reviewBtn) return;
+    reviewBadge.hidden = open === 0;
+    reviewBadge.textContent = open > 99 ? "99+" : String(open);
+    var label = open ? reviewTitle + " (" + open + " open)" : reviewTitle;
+    reviewBtn.setAttribute("title", label);
+    reviewBtn.setAttribute("aria-label", label);
+  }
   notch.appendChild(modes);
   wrap.appendChild(notch);
 
@@ -4262,6 +4281,7 @@ export const OVERLAY_SCRIPT = `(function () {
     var open_ = 0;
     for (var t = 0; t < rows.length; t++) if (!rows[t].resolved) open_++;
     var tallies = [rows.length, open_, rows.length - open_];
+    showOpenCount(open_);
 
     for (var i = 0; i < filterBtns.length; i++) {
       if (FILTERS[i] === filter) filterBtns[i].setAttribute("data-active", "");

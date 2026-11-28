@@ -2226,6 +2226,14 @@ ${EDIT_ASSETS}
     if (passthrough) return;
 
     var mod = event.metaKey || event.ctrlKey;
+    // Cmd-backslash, as in Figma: the panel, the notch and the bar out of the
+    // way, the selection still drawn and still editable.
+    if (mod && !event.altKey && !event.shiftKey && (event.code === "Backslash" || key.charCodeAt(0) === 92)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type === "keydown" && !event.repeat) setBare(!isBare());
+      return;
+    }
     // Letters by the key pressed, not the character: Alt changes the character.
     var letter = /^Key[A-Z]$/.test(event.code || "") ? event.code.slice(3).toLowerCase() : key.toLowerCase();
     if (event.type === "keydown" && figmaKey(event, mod, letter)) {
@@ -2814,6 +2822,39 @@ ${EDIT_ASSETS}
     return "Drag to move it; " + keys + "." + (retypable(el) ? " Enter edits its words." : " Double-click to go inside, Esc to go up.");
   }
 
+  /*
+   * Bare: Edit mode with nothing of its own on screen but the selection.
+   * Kept as an attribute on the overlay's wrap rather than in a variable, so
+   * a framed screen, which has its own copy of this script, toggles the same
+   * thing and reads it back the same.
+   */
+  var BARE_KEY = MAC ? "\u2318" + String.fromCharCode(92) : "Ctrl+" + String.fromCharCode(92);
+  var bareHint = null;
+  var bareHintTimer = null;
+  function isBare() {
+    return !!(host && host.wrap.hasAttribute("data-bare"));
+  }
+  function setBare(next) {
+    if (!host) return;
+    host.wrap.toggleAttribute("data-bare", next);
+    if (next) closeMenus();
+    if (!bareHint) {
+      bareHint = el("div", "ed-bare-hint");
+      bareHint.setAttribute("role", "status");
+    }
+    if (bareHint.parentNode !== host.wrap) host.wrap.appendChild(bareHint);
+    bareHint.textContent = next ? "Panels hidden \u2014 " + BARE_KEY + " to show them" : "";
+    bareHint.hidden = !next;
+    if (bareHintTimer) clearTimeout(bareHintTimer);
+    bareHintTimer = next
+      ? setTimeout(function () {
+          bareHint.hidden = true;
+        }, 2400)
+      : null;
+    // Measured while hidden, the bar has no width; place it again now.
+    if (!next) refresh();
+  }
+
   function placeBar() {
     var notch = host.notch && host.notch.getBoundingClientRect();
     var bar = ui.bar;
@@ -3047,6 +3088,10 @@ ${EDIT_ASSETS}
         ui.layer.hidden = true;
         ui.bar.hidden = true;
       }
+      if (!child && host) {
+        host.wrap.removeAttribute("data-bare");
+        if (bareHint) bareHint.hidden = true;
+      }
       if (!child) {
         remember(false);
         self.children.forEach(function (screen) {
@@ -3095,6 +3140,28 @@ ${EDIT_ASSETS}
  * reviewer's light or dark choice.
  */
 export const EDIT_CSS = `
+/* Bare (Cmd-backslash): everything but the selection stepped aside. */
+.osp-overlay[data-bare] .co-panel,
+.osp-overlay[data-bare] .co-notch,
+.osp-overlay[data-bare] .ed-bar,
+.osp-overlay[data-bare] .ed-stack,
+.osp-overlay[data-bare] .ed-menu,
+.osp-overlay[data-bare] .ed-assets { display: none !important; }
+.osp-overlay .ed-bare-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--co-fg);
+  color: var(--co-bg);
+  font-size: 12px;
+  pointer-events: none;
+  box-shadow: var(--co-shadow);
+  animation: co-rise 0.16s var(--co-ease);
+}
+.osp-overlay .ed-bare-hint[hidden] { display: none; }
 .osp-overlay .ed-layer { position: fixed; inset: 0; pointer-events: none; z-index: 4; }
 /* The panel covers the page, so it covers what is drawn on the page too: the
    selection, its handles, drop lines and measures go under it, not across it. */

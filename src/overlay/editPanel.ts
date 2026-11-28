@@ -2272,6 +2272,7 @@ export const EDIT_PANEL = String.raw`
         ["Describe a change, for an AI tool", "/"],
         ["Copy the changes described", k.cmd + "Enter"],
         ["Use the page", "Hold Space"],
+        ["Hide the panels", k.cmd + "\\"],
       ];
       var table = el("dl", "ep-keys");
       rows.forEach(function (r) {

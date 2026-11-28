@@ -273,6 +273,29 @@ export const OVERLAY_CSS = `
   transition: color 0.2s;
 }
 .osp-overlay .co-mode[data-active] { color: #fff; }
+/* The open-comment count on the review button. Sits over the button's top
+   right corner, outside the chip, so it reads the same whichever mode is on. */
+.osp-overlay .co-mode-badge {
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--co-pin);
+  border: 1.5px solid var(--co-bg);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.osp-overlay .co-mode-badge[hidden] { display: none; }
+.osp-overlay .co-mode[data-active] .co-mode-badge { background: var(--co-fg); }
 .osp-overlay .co-mode:not([data-active]):hover { background: var(--co-bg); color: var(--co-fg); }
 
 /* --- the notch menu --------------------------------------------------- */
