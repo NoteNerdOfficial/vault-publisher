@@ -417,6 +417,10 @@ your system browser:
 - In Terminus's review mode you can click any element of the preview and leave
   a comment for Claude. Each comment tells Claude the vault file the page was
   built from, so it knows which note or prototype to change.
+- Changes show up without building the preview again. A page published as-is
+  is served from its file in the vault, so when Claude edits the file, or
+  you do, Terminus reloads the page. For a note, **Reload** in Terminus
+  rebuilds the preview first if the note has changed since it was built.
 
 The preview server only answers requests that carry the token it was started
 with, which is why opening its port by hand, or an agent finding the port,
@@ -468,7 +472,9 @@ the centre or the right. It snaps to the nearest one and stays there across
 pages. The review panel keeps clear of it: with the toolbar in a left or
 right corner, the panel opens on the other side, and sending the panel to
 the toolbar's side moves the toolbar across instead. A centred toolbar stays
-centred.
+centred. The review button on the toolbar shows how many comments are still
+open, so you can see there is something to go through without opening the
+panel.
 
 A pin remembers the point it was dropped on twice, in document coordinates
 and as a fraction across the block it landed on, so it survives a rebuild
@@ -643,6 +649,11 @@ components in categories down the side.](media/insert.png)
 - **Layers**, the page as a tree, with search, a toggle to show or hide each
   layer, and drag to reorder.
 - **Variables**, every custom property the page declares, below.
+
+**More room.** Cmd+\\ (Ctrl+\\ on Windows and Linux) hides the panel, the
+toolbar and the bar, and leaves the selection on the page, so you can see the
+whole design while you edit it. Press it again to bring them back. Leaving Edit
+mode brings them back too.
 
 **Several layers at once.** With more than one layer selected, a change in
 the panel applies to all of them. Shift+A adds auto layout. Cmd+G frames the
