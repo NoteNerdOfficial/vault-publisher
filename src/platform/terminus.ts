@@ -29,6 +29,11 @@ export interface TerminusSite {
   description: string;
   open(): Promise<string>;
   sourceFor(pageUrl: string): string | null;
+  /**
+   * Brings a page up to date before Terminus reloads it: on Reload, and
+   * when the file behind the page changes. Older Terminus ignores it.
+   */
+  refresh(pageUrl: string): Promise<void>;
 }
 
 /** Terminus's API, version 1 or later, or null. */

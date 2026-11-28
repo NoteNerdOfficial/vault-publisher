@@ -1143,8 +1143,35 @@ export class ReviewServer {
     const preview = await this.options.store.readPreview(page);
     const text =
       preview === null ? "" : typeof preview === "string" ? preview : new TextDecoder().decode(preview);
-    const appendix = text.startsWith(before) ? text.slice(before.length) : "";
-    await edit.writePreview(page, after + appendix);
+    await edit.writePreview(page, after + appendixOf(text, before));
+  }
+
+  /**
+   * An as-is page, or a stylesheet or script one carries, as the vault file
+   * is now rather than as it was at the last build.
+   *
+   * The preview is a copy, so an edit made to the vault file -- by Claude,
+   * working through review comments, or in any editor -- never reached it,
+   * and a reload showed the page as it was until the next Build preview.
+   * These files are copied as they are, so bringing the copy up to date is
+   * the file plus the appendix the build put after a page; nothing has to be
+   * rendered. The copy on disk is updated as well, so the edit notch, which
+   * works from it, sees the same text.
+   */
+  private async freshen(
+    path: string,
+    file: ArrayBuffer | string,
+  ): Promise<ArrayBuffer | string> {
+    const edit = this.options.edit;
+    const vaultPath = edit?.sourceFor(path) ?? null;
+    if (!edit || !vaultPath) return file;
+    const source = await edit.readSource(vaultPath);
+    if (source === null) return file;
+    const preview = typeof file === "string" ? file : new TextDecoder().decode(file);
+    const next = /\.html?$/i.test(path) ? source + appendixOf(preview, source) : source;
+    if (next === preview) return file;
+    await edit.writePreview(path, next);
+    return next;
   }
 
   private async getFile(url: string, response: ServerResponse): Promise<void> {
@@ -1153,10 +1180,11 @@ export class ReviewServer {
       return send(response, 400, "text/plain; charset=utf-8", "Bad path.");
     }
 
-    const file = await this.options.store.readPreview(path);
-    if (file === null) {
+    const built = await this.options.store.readPreview(path);
+    if (built === null) {
       return send(response, 404, "text/plain; charset=utf-8", "Not found.");
     }
+    const file = await this.freshen(path, built);
 
     const edit = this.options.edit;
     const vaultPath = edit && /\.html?$/i.test(path) ? edit.sourceFor(path) : null;
@@ -1169,6 +1197,29 @@ export class ReviewServer {
     const body = typeof file === "string" ? file : Buffer.from(file);
     send(response, 200, mimeFor(path), body, { "Cache-Control": "no-store" });
   }
+}
+
+/**
+ * Where the build's appendix to an as-is page starts: the review overlay,
+ * and the notice on an app shell, each opening with this comment.
+ */
+const APPENDIX_START = "\n<!-- osp-review:start";
+
+/**
+ * What the build put after the vault file in an as-is page's preview copy.
+ *
+ * Given the file the copy was made from, that is simply the rest; for a
+ * file that has changed since, it is from the first appendix comment on,
+ * which the author's file does not contain. Empty for a page built with
+ * no overlay.
+ */
+export function appendixOf(preview: string, source?: string): string {
+  if (source !== undefined && preview.startsWith(source)) {
+    const rest = preview.slice(source.length);
+    if (rest === "" || rest.startsWith(APPENDIX_START)) return rest;
+  }
+  const at = preview.indexOf(APPENDIX_START);
+  return at === -1 ? "" : preview.slice(at);
 }
 
 /** Largest text the notch will write in one go: a paragraph, not a book. */

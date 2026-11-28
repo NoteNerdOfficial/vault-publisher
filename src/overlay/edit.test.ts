@@ -461,12 +461,44 @@ describe("the edit routes", () => {
     expect(await (await get("/notes/plan.html")).text()).toBe("<h1>Plan</h1>");
   });
 
-  it("serves a page whose file moved on unstamped, saying why", async () => {
-    vault["Protos/deck.html"] = PAGE.replace("Title", "Changed");
+  it("serves a page whose file changed since the build as the file is now, and updates the copy", async () => {
+    const changed = PAGE.replace("Title", "Changed");
+    vault["Protos/deck.html"] = changed;
+    const html = await (await get("/proto/index.html")).text();
+    expect(html).toContain("Changed");
+    expect(html).not.toContain("<h1>Title");
+    expect(html).toContain(hashText(changed));
+    expect(stamps(html).length).toBeGreaterThan(0);
+    expect(html.endsWith(APPENDIX)).toBe(true);
+    expect(preview["proto/index.html"]).toBe(changed + APPENDIX);
+  });
+
+  it("keeps the appendix when the file got shorter", async () => {
+    const shorter = PAGE.slice(0, PAGE.indexOf("</body>"));
+    vault["Protos/deck.html"] = shorter;
+    await get("/proto/index.html");
+    expect(preview["proto/index.html"]).toBe(shorter + APPENDIX);
+  });
+
+  it("serves a stylesheet a page carries as the vault file is now", async () => {
+    const sourceFor = editStore.sourceFor;
+    editStore.sourceFor = (path) => (path === "proto/deck.css" ? "Protos/deck.css" : sourceFor(path));
+    try {
+      vault["Protos/deck.css"] = "h1 { color: teal; }";
+      preview["proto/deck.css"] = "h1 { color: red; }";
+      expect(await (await get("/proto/deck.css")).text()).toBe("h1 { color: teal; }");
+      expect(preview["proto/deck.css"]).toBe("h1 { color: teal; }");
+    } finally {
+      editStore.sourceFor = sourceFor;
+    }
+  });
+
+  it("serves a page whose file is gone as built, saying why", async () => {
+    delete vault["Protos/deck.html"];
     const html = await (await get("/proto/index.html")).text();
     expect(stamps(html)).toHaveLength(0);
     expect(html).toContain('"ok":false');
-    expect(html).toContain("Rebuild the preview");
+    expect(html).toContain("not in the vault any more");
   });
 
   it("deletes from the vault file and the preview, backs up once, and undoes", async () => {

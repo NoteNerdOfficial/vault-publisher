@@ -31,6 +31,7 @@ describe("without Terminus", () => {
         description: "",
         open: async () => "",
         sourceFor: () => null,
+        refresh: async () => {},
       }),
     ).toBeNull();
   });
@@ -50,7 +51,7 @@ describe("with Terminus", () => {
     };
     const app = { plugins: { getPlugin: (id: string) => (id === "terminus" ? { api } : null) } } as unknown as App;
     expect(terminusBrowserAvailable(app)).toBe(true);
-    const off = registerWithTerminus(app, { id: "x", name: "x", description: "", open: async () => "", sourceFor: () => null });
+    const off = registerWithTerminus(app, { id: "x", name: "x", description: "", open: async () => "", sourceFor: () => null, refresh: async () => {} });
     expect(registered).not.toBeNull();
     off?.();
     expect(removed).toBe(true);

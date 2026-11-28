@@ -595,7 +595,32 @@ export default class VaultPublisherPlugin extends Plugin {
         const note = notePathForPreview(path, this.settings.site.folder);
         return note && this.app.vault.getAbstractFileByPath(note) instanceof TFile ? note : null;
       },
+      // An as-is page and what it carries are served from the vault file as
+      // it is now (see `freshen` in the server), so a reload shows an edit
+      // to one by itself. A page rendered from a note is not: it has to be
+      // built again, and is, when the note changed after the page was built.
+      refresh: async (pageUrl) => {
+        const path = previewPathOf(pageUrl);
+        if (!path || this.previewSources?.has(path)) return;
+        const note = notePathForPreview(path, this.settings.site.folder);
+        const file = note ? this.app.vault.getAbstractFileByPath(note) : null;
+        if (!(file instanceof TFile)) return;
+        const built = await this.app.vault.adapter.stat(normalizePath(`${PREVIEW_FOLDER}/${path}`));
+        if (built && built.mtime >= file.stat.mtime) return;
+        await this.rebuildPreview();
+      },
     });
+  }
+
+  /** The preview build running now, so a second refresh waits for it
+   *  rather than starting another over the same folder. */
+  private previewRebuild: Promise<void> | null = null;
+
+  private rebuildPreview(): Promise<void> {
+    this.previewRebuild ??= this.buildToPreview().finally(() => {
+      this.previewRebuild = null;
+    });
+    return this.previewRebuild;
   }
 
   /** Whether the Terminus browser is there to open the preview in. */
